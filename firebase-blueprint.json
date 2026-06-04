@@ -1,0 +1,67 @@
+{
+  "entities": {
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "App staff and administrative users",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique user ID" },
+        "name": { "type": "string", "description": "User display name" },
+        "email": { "type": "string", "format": "email", "description": "User email address" },
+        "role": { "type": "string", "enum": ["Administrator", "Accountant", "Teacher"], "description": "Staff access role" },
+        "assignedClass": { "type": "string", "description": "Assigned class if the user is a Teacher" },
+        "mfaEnabled": { "type": "boolean", "description": "Whether MFA is enabled or not" },
+        "mfaSecret": { "type": "string", "description": "Secret token for MFA" }
+      },
+      "required": ["id", "name", "email", "role", "mfaEnabled"]
+    },
+    "Student": {
+      "title": "Student",
+      "description": "Registered students",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique student ID" },
+        "name": { "type": "string", "description": "Student full name" },
+        "class": { "type": "string", "description": "Assigned class grade" },
+        "category": { "type": "string", "enum": ["Pre-school", "Primary", "JHS"], "description": "School level category" },
+        "rollNumber": { "type": "string", "description": "Official roll code" },
+        "active": { "type": "boolean", "description": "Student active status" },
+        "guardianPhone": { "type": "string", "description": "Guardian phone contact code" },
+        "photoUrl": { "type": "string", "description": "Base64 encoded student photo data or custom avatar url links" }
+      },
+      "required": ["id", "name", "class", "category", "rollNumber", "active", "guardianPhone"]
+    },
+    "PaymentRecord": {
+      "title": "PaymentRecord",
+      "description": "Daily registration payments",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique payment ID" },
+        "studentId": { "type": "string", "description": "Referenced student ID" },
+        "studentName": { "type": "string", "description": "Student name at time of payment" },
+        "class": { "type": "string", "description": "Class grade at payment time" },
+        "category": { "type": "string", "description": "School level category at payment time" },
+        "amount": { "type": "number", "description": "Paid amount in GHC" },
+        "date": { "type": "string", "description": "Payment index date (YYYY-MM-DD)" },
+        "timestamp": { "type": "string", "description": "ISO timestamp of check-in" },
+        "collectedBy": { "type": "string", "description": "Name of collector" },
+        "verified": { "type": "boolean", "description": "Instant verification status" }
+      },
+      "required": ["id", "studentId", "studentName", "class", "category", "amount", "date", "timestamp", "collectedBy", "verified"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserAccount",
+      "description": "Collection of staff profiles"
+    },
+    "/students/{studentId}": {
+      "schema": "Student",
+      "description": "Collection of pupil enrollment registry"
+    },
+    "/payments/{paymentId}": {
+      "schema": "PaymentRecord",
+      "description": "Collection of historical fee check-ins"
+    }
+  }
+}

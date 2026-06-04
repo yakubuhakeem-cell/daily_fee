@@ -1,0 +1,8 @@
+{
+  "name": "Daily School Fee Tracker",
+  "description": "A secure daily school fee tracking and report system for SAAKO HOLY CHILD ACADEMY with multi-role access control, multi-factor authentication, Excel export, and real-time dashboard analytics.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
