@@ -35,8 +35,8 @@ interface AppContextType {
   bulkRecordPayments: (studentIds: string[], verified?: boolean) => void;
   verifyPayment: (paymentId: string) => void;
   deletePayment: (paymentId: string) => void;
-  registerStaff: (name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled?: boolean, passwordEnabled?: boolean, password?: string) => { success: boolean; error?: string };
-  updateStaff: (userId: string, name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled?: boolean, passwordEnabled?: boolean, password?: string) => { success: boolean; error?: string };
+  registerStaff: (name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled?: boolean, passwordEnabled?: boolean, password?: string, assignedClasses?: StudentClass[]) => { success: boolean; error?: string };
+  updateStaff: (userId: string, name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled?: boolean, passwordEnabled?: boolean, password?: string, assignedClasses?: StudentClass[]) => { success: boolean; error?: string };
   deleteStaff: (userId: string) => { success: boolean; error?: string };
   toggleStaffActive: (userId: string) => { success: boolean; error?: string };
   getDailyStats: (date: string) => DailyStats;
@@ -553,18 +553,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const registerStaff = (name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled = false, passwordEnabled = false, password = '') => {
+  const registerStaff = (name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled = false, passwordEnabled = false, password = '', assignedClasses?: StudentClass[]) => {
     const trimmedEmail = email.toLowerCase().trim();
     if (users.some(u => u.email.toLowerCase() === trimmedEmail)) {
       return { success: false, error: 'A staff member with this email is already registered.' };
     }
+
+    const finalClasses = role === 'Teacher' ? (assignedClasses || (assignedClass ? [assignedClass] : [])) : undefined;
+    const finalClass = role === 'Teacher' ? (assignedClass || (finalClasses && finalClasses.length > 0 ? finalClasses[0] : undefined)) : undefined;
 
     const newUser: UserAccount = {
       id: 'staff_' + Date.now(),
       name,
       email: trimmedEmail,
       role,
-      assignedClass: role === 'Teacher' ? assignedClass : undefined,
+      assignedClass: finalClass,
+      assignedClasses: finalClasses,
       mfaEnabled,
       mfaSecret: mfaEnabled ? 'SHA-' + Math.random().toString(36).substring(2, 10).toUpperCase() : undefined,
       passwordEnabled,
@@ -582,7 +586,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
-  const updateStaff = (userId: string, name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled = false, passwordEnabled = false, password = '') => {
+  const updateStaff = (userId: string, name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled = false, passwordEnabled = false, password = '', assignedClasses?: StudentClass[]) => {
     const trimmedEmail = email.toLowerCase().trim();
     if (users.some(u => u.email.toLowerCase() === trimmedEmail && u.id !== userId)) {
       return { success: false, error: 'A staff member with this email is already registered.' };
@@ -591,12 +595,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let updatedUser: UserAccount | null = null;
     const nextUsers = users.map(u => {
       if (u.id === userId) {
+        const finalClasses = role === 'Teacher' ? (assignedClasses || (assignedClass ? [assignedClass] : [])) : undefined;
+        const finalClass = role === 'Teacher' ? (assignedClass || (finalClasses && finalClasses.length > 0 ? finalClasses[0] : undefined)) : undefined;
         updatedUser = {
           ...u,
           name,
           email: trimmedEmail,
           role,
-          assignedClass: role === 'Teacher' ? assignedClass : undefined,
+          assignedClass: finalClass,
+          assignedClasses: finalClasses,
           mfaEnabled,
           mfaSecret: mfaEnabled ? u.mfaSecret || 'SHA-' + Math.random().toString(36).substring(2, 10).toUpperCase() : undefined,
           passwordEnabled,
@@ -622,6 +629,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteStaff = (userId: string) => {
+    if (currentUser?.role !== 'Administrator') {
+      return { success: false, error: 'Access Denied: Only Administrators are permitted to delete staff profiles.' };
+    }
     if (currentUser?.id === userId) {
       return { success: false, error: 'You cannot delete your own account while logged in.' };
     }
@@ -705,6 +715,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteStudent = (studentId: string) => {
+    if (currentUser?.role !== 'Administrator') {
+      alert('Access Denied: Only Administrators are permitted to delete student records completely.');
+      return;
+    }
     const targetStudent = students.find(s => s.id === studentId);
     const nextStudents = students.filter(s => s.id !== studentId);
     const nextPayments = payments.filter(p => p.studentId !== studentId);
@@ -720,6 +734,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const purgeDeactivatedStudents = () => {
+    if (currentUser?.role !== 'Administrator') {
+      alert('Access Denied: Only Administrators are permitted to purge deactivated students completely.');
+      return;
+    }
     const deactivatedStudents = students.filter(s => s.active === false);
     if (deactivatedStudents.length === 0) return;
 
@@ -1181,7 +1199,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const verifiedPaid = paidCls.filter(p => p.verified && !p.isAbsent);
 
       // Link dynamically to assigned teacher users, falling back to known seeded defaults
-      const assignedUser = users.find(u => u.role === 'Teacher' && u.assignedClass === cls && u.active !== false);
+      const assignedUser = users.find(u => u.role === 'Teacher' && (u.assignedClass === cls || u.assignedClasses?.includes(cls)) && u.active !== false);
       let teacherName = '';
 
       if (assignedUser) {

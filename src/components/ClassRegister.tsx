@@ -34,8 +34,13 @@ export const ClassRegister: React.FC = () => {
 
   // Pick initial class based on teacher assignment or default B1
   const initialClass = useMemo(() => {
-    if (currentUser?.role === 'Teacher' && currentUser.assignedClass) {
-      return currentUser.assignedClass;
+    if (currentUser?.role === 'Teacher') {
+      if (currentUser.assignedClasses && currentUser.assignedClasses.length > 0) {
+        return currentUser.assignedClasses[0];
+      }
+      if (currentUser.assignedClass) {
+        return currentUser.assignedClass;
+      }
     }
     return 'B1' as StudentClass;
   }, [currentUser]);
@@ -136,6 +141,23 @@ export const ClassRegister: React.FC = () => {
     }
   };
 
+  // Action/Delete Confirmation Modal State (e.g. for student delete, deactivate, or term delete)
+  const [deleteConf, setDeleteConf] = useState<{
+    isOpen: boolean;
+    type: 'student_delete' | 'student_deactivate' | 'term_delete';
+    targetId: string;
+    targetName: string;
+    userInput: string;
+    onConfirm: () => void;
+  }>({
+    isOpen: false,
+    type: 'student_delete',
+    targetId: '',
+    targetName: '',
+    userInput: '',
+    onConfirm: () => {}
+  });
+
   // Term management UI states
   const [showTermCreator, setShowTermCreator] = useState(false);
   const [newTermName, setNewTermName] = useState('');
@@ -177,6 +199,17 @@ export const ClassRegister: React.FC = () => {
     });
     return totals;
   }, [payments, currentDate]);
+
+  // Calculate total student enrolment per class
+  const classEnrolments = useMemo(() => {
+    const counts: Record<string, number> = {};
+    students.forEach(s => {
+      if (s.active) {
+        counts[s.class] = (counts[s.class] || 0) + 1;
+      }
+    });
+    return counts;
+  }, [students]);
 
   // All active students in selected class
   const classStudents = useMemo(() => {
@@ -548,11 +581,19 @@ export const ClassRegister: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => {
-                              if (confirm(`Remove term "${t.name}"? This deletes its tracking schedule.`)) {
-                                deleteTerm(t.id);
-                              }
+                              setDeleteConf({
+                                isOpen: true,
+                                type: 'term_delete',
+                                targetId: t.id,
+                                targetName: t.name,
+                                userInput: '',
+                                onConfirm: () => {
+                                  deleteTerm(t.id);
+                                  showToast(`School term "${t.name}" was deactivated/purged.`);
+                                }
+                              });
                             }}
-                            className="p-1.5 text-neutral-600 hover:text-red-500 hover:bg-red-500/10 transition-colors"
+                            className="p-1.5 text-neutral-650 hover:text-red-500 hover:bg-red-500/10 transition-colors cursor-pointer"
                             title="Delete Term"
                           >
                             <Trash2 size={13} />
@@ -752,6 +793,13 @@ export const ClassRegister: React.FC = () => {
                     }`}
                   >
                     <span>{cls}</span>
+                    <span className={`text-[9px] px-1.5 py-0.5 font-mono font-bold rounded-xs border ${
+                      selectedClass === cls
+                        ? 'bg-black/10 text-black border-black/20'
+                        : 'bg-neutral-900 border-neutral-800 text-neutral-400'
+                    }`} title="Total Active Enrolment">
+                      Roll: {classEnrolments[cls] || 0}
+                    </span>
                     <span className={`text-[9px] px-1 font-mono font-black border ${
                       selectedClass === cls
                         ? 'bg-black/10 text-black border-black/20'
@@ -779,6 +827,13 @@ export const ClassRegister: React.FC = () => {
                     }`}
                   >
                     <span>{cls}</span>
+                    <span className={`text-[9px] px-1.5 py-0.5 font-mono font-bold rounded-xs border ${
+                      selectedClass === cls
+                        ? 'bg-black/10 text-black border-black/20'
+                        : 'bg-neutral-900 border-neutral-800 text-neutral-400'
+                    }`} title="Total Active Enrolment">
+                      Roll: {classEnrolments[cls] || 0}
+                    </span>
                     <span className={`text-[9px] px-1 font-mono font-black border ${
                       selectedClass === cls
                         ? 'bg-black/10 text-black border-black/20'
@@ -806,6 +861,13 @@ export const ClassRegister: React.FC = () => {
                     }`}
                   >
                     <span>{cls}</span>
+                    <span className={`text-[9px] px-1.5 py-0.5 font-mono font-bold rounded-xs border ${
+                      selectedClass === cls
+                        ? 'bg-black/10 text-black border-black/20'
+                        : 'bg-neutral-900 border-neutral-800 text-neutral-400'
+                    }`} title="Total Active Enrolment">
+                      Roll: {classEnrolments[cls] || 0}
+                    </span>
                     <span className={`text-[9px] px-1 font-mono font-black border ${
                       selectedClass === cls
                         ? 'bg-black/10 text-black border-black/20'
@@ -965,15 +1027,18 @@ export const ClassRegister: React.FC = () => {
                       <span>CATEGORY: <strong className="text-neutral-300 uppercase tracking-wider">{student.category}</strong></span>
                       
                       {(() => {
-                        const classTeacher = users?.find(u => u.role === 'Teacher' && u.assignedClass === student.class);
+                        const classTeacher = users?.find(u => u.role === 'Teacher' && (u.assignedClass === student.class || u.assignedClasses?.includes(student.class)));
                         if (!classTeacher) return null;
+                        const teacherGates = classTeacher.assignedClasses && classTeacher.assignedClasses.length > 0 
+                          ? classTeacher.assignedClasses.join(', ') 
+                          : classTeacher.assignedClass;
                         return (
                           <>
                             <span className="hidden sm:inline w-1 h-1 bg-neutral-700" />
                             <span className="flex items-center gap-1.5">
                               TEACHER: <strong className="text-neutral-300 uppercase">{classTeacher.name}</strong>
                               <span className="text-[9px] font-black font-mono bg-neutral-900 border border-neutral-800 text-amber-400 px-1.5 py-0.5 tracking-wider uppercase rounded-xs">
-                                {classTeacher.assignedClass} ACCESS
+                                {teacherGates} ACCESS
                               </span>
                             </span>
                           </>
@@ -982,7 +1047,9 @@ export const ClassRegister: React.FC = () => {
 
                       {isPaid && (() => {
                         const collector = users?.find(u => u.name === paidInfo.collectedBy);
-                        const accessLevel = collector?.assignedClass || ((collector?.role === 'Administrator' || collector?.role === 'Headmaster') ? 'ALL CORE' : collector?.role === 'Accountant' ? 'ACCOUNT DECK' : 'OFFICE');
+                        const accessLevel = (collector?.assignedClasses && collector.assignedClasses.length > 0) 
+                          ? collector.assignedClasses.join(', ') 
+                          : (collector?.assignedClass || ((collector?.role === 'Administrator' || collector?.role === 'Headmaster') ? 'ALL CORE' : collector?.role === 'Accountant' ? 'ACCOUNT DECK' : 'OFFICE'));
                         return (
                           <>
                             <span className="hidden sm:inline w-1 h-1 bg-neutral-700" />
@@ -998,7 +1065,9 @@ export const ClassRegister: React.FC = () => {
 
                       {isAbsent && (() => {
                         const collector = users?.find(u => u.name === paidInfo.collectedBy);
-                        const accessLevel = collector?.assignedClass || ((collector?.role === 'Administrator' || collector?.role === 'Headmaster') ? 'ALL CORE' : collector?.role === 'Accountant' ? 'ACCOUNT DECK' : 'OFFICE');
+                        const accessLevel = (collector?.assignedClasses && collector.assignedClasses.length > 0) 
+                          ? collector.assignedClasses.join(', ') 
+                          : (collector?.assignedClass || ((collector?.role === 'Administrator' || collector?.role === 'Headmaster') ? 'ALL CORE' : collector?.role === 'Accountant' ? 'ACCOUNT DECK' : 'OFFICE'));
                         return (
                           <>
                             <span className="hidden sm:inline w-1 h-1 bg-neutral-700" />
@@ -1193,17 +1262,35 @@ export const ClassRegister: React.FC = () => {
                                   showToast(`Cleared payment status for ${student.name}.`);
                                 }
                               } else if (action === 'deactivate') {
-                                if (confirm(`Are you sure you want to deactivate ${student.name}? They will not be listed in checkout registers or recorded in the days to come. Past historical records will remain safe.`)) {
-                                  updateStudent({
-                                    ...student,
-                                    active: false
-                                  });
-                                  showToast(`${student.name} is now deactivated and will not be recorded in the days to come.`);
-                                }
+                                setDeleteConf({
+                                  isOpen: true,
+                                  type: 'student_deactivate',
+                                  targetId: student.id,
+                                  targetName: student.name,
+                                  userInput: '',
+                                  onConfirm: () => {
+                                    updateStudent({
+                                      ...student,
+                                      active: false
+                                    });
+                                    showToast(`${student.name} is now deactivated and will not be recorded in school registers.`);
+                                  }
+                                });
                               } else if (action === 'delete') {
-                                if (confirm(`CRITICAL WARNING: Are you sure you want to completely delete ${student.name} from the ledger? This will permanently pull down all registration, unpaid days, and payment history trails!`)) {
-                                  deleteStudent(student.id);
-                                  showToast(`Student ${student.name} was permanently purged.`);
+                                if (currentUser?.role !== 'Administrator') {
+                                  showToast('Access Denied: Only Administrators are permitted to delete student profiles completely from the system.');
+                                } else {
+                                  setDeleteConf({
+                                    isOpen: true,
+                                    type: 'student_delete',
+                                    targetId: student.id,
+                                    targetName: student.name,
+                                    userInput: '',
+                                    onConfirm: () => {
+                                      deleteStudent(student.id);
+                                      showToast(`Student ${student.name} was permanently purged.`);
+                                    }
+                                  });
                                 }
                               }
                               e.target.value = "";
@@ -1253,7 +1340,12 @@ export const ClassRegister: React.FC = () => {
                             )}
                             <optgroup label="STUDENT REGISTER" className="bg-neutral-900 text-neutral-450 font-sans text-[10px] tracking-wider uppercase font-black">
                               <option value="deactivate" className="bg-neutral-950 text-red-400 font-mono text-xs">⚠️ Deactivate / Left School</option>
-                              <option value="delete" className="bg-neutral-950 text-red-600 font-mono text-[11px] font-bold">🗑️ Delete Student / Purge</option>
+                              <option 
+                                value="delete" 
+                                className="bg-neutral-950 text-red-500 font-mono text-[11px] font-bold"
+                              >
+                                🗑️ Delete Student / Purge {currentUser?.role !== 'Administrator' ? '(Admin Only)' : ''}
+                              </option>
                             </optgroup>
                           </select>
                         </div>
@@ -2347,6 +2439,87 @@ export const ClassRegister: React.FC = () => {
                 className="w-full text-xs bg-neutral-950 hover:bg-neutral-900 border-2 border-neutral-800 text-neutral-400 py-3 font-mono font-black tracking-widest uppercase transition-colors cursor-pointer"
               >
                 Close Window
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Dynamic Action/Delete Confirmation Modal Safeguard */}
+      {deleteConf.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-fade-in animate-duration-200">
+          <div className="bg-neutral-950 border-4 border-red-600 max-w-md w-full p-6 space-y-6 shadow-[10px_10px_0px_0px_rgba(220,38,38,0.25)] relative">
+            <div className="flex items-center gap-3 border-b-2 border-neutral-850 pb-4">
+              <Trash2 className="text-red-500 animate-pulse" size={28} />
+              <div>
+                <span className="text-[10px] font-mono tracking-widest text-red-500 uppercase font-black font-bold">CRITICAL DELETION GUARD</span>
+                <h3 className="text-base font-black uppercase tracking-tight text-white font-mono">Confirm Radical Purge Action</h3>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <p className="text-xs text-neutral-300 leading-relaxed font-semibold">
+                You are about to permanently purge or deactivate this item. Once confirmed, this action <strong className="text-red-500">CANNOT BE UNDONE</strong> and will sever all database linkages:
+              </p>
+              
+              <div className="p-3 bg-red-950/20 border-2 border-red-900/60 rounded text-center">
+                <p className="text-[10px] font-mono uppercase text-neutral-400">Target Item Name</p>
+                <p className="text-sm font-black font-mono text-white mt-1 uppercase tracking-wider">
+                  {deleteConf.targetName}
+                </p>
+                <p className="text-[9px] font-mono text-red-400 mt-1 uppercase tracking-widest font-bold">
+                  {deleteConf.type === 'student_delete' 
+                    ? 'Student Profile Purge' 
+                    : deleteConf.type === 'student_deactivate' 
+                      ? 'Deactivate Student Account' 
+                      : 'School Term Schedule'}
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-[10px] font-mono uppercase tracking-widest text-neutral-400">
+                  Type <span className="text-red-500 font-extrabold bg-red-950/40 px-1.5 border border-red-900/40 font-bold font-mono">DELETE</span> to authorize:
+                </label>
+                <input
+                  type="text"
+                  value={deleteConf.userInput}
+                  placeholder="Type DELETE here..."
+                  onChange={(e) => setDeleteConf(prev => ({ ...prev, userInput: e.target.value.toUpperCase().trim() }))}
+                  className="w-full bg-neutral-950 border-2 border-neutral-800 focus:border-red-600 py-2.5 px-3.5 text-xs text-white font-mono font-bold focus:outline-none uppercase tracking-widest"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && deleteConf.userInput.trim().toUpperCase() === 'DELETE') {
+                      deleteConf.onConfirm();
+                      setDeleteConf({ isOpen: false, type: 'student_delete', targetId: '', targetName: '', userInput: '', onConfirm: () => {} });
+                    }
+                  }}
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeleteConf({ isOpen: false, type: 'student_delete', targetId: '', targetName: '', userInput: '', onConfirm: () => {} })}
+                className="w-1/3 py-3 px-4 bg-neutral-900 hover:bg-neutral-850 border border-neutral-800 text-neutral-400 hover:text-white font-bold uppercase text-xs tracking-wider transition-colors cursor-pointer font-mono"
+              >
+                Cancel
+              </button>
+              
+              <button
+                type="button"
+                disabled={deleteConf.userInput.trim().toUpperCase() !== 'DELETE'}
+                onClick={() => {
+                  deleteConf.onConfirm();
+                  setDeleteConf({ isOpen: false, type: 'student_delete', targetId: '', targetName: '', userInput: '', onConfirm: () => {} });
+                }}
+                className={`w-2/3 py-3 px-4 font-black uppercase text-xs tracking-wider font-mono transition-all cursor-pointer ${
+                  deleteConf.userInput.trim().toUpperCase() === 'DELETE'
+                    ? 'bg-red-600 hover:bg-red-500 text-white hover:scale-[1.02] active:scale-[0.98]'
+                    : 'bg-neutral-900 border border-neutral-800 text-neutral-650 cursor-not-allowed opacity-50'
+                }`}
+              >
+                Confirm Delete
               </button>
             </div>
           </div>

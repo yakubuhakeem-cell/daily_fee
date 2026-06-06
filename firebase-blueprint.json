@@ -10,6 +10,7 @@
         "email": { "type": "string", "format": "email", "description": "User email address" },
         "role": { "type": "string", "enum": ["Administrator", "Accountant", "Teacher"], "description": "Staff access role" },
         "assignedClass": { "type": "string", "description": "Assigned class if the user is a Teacher" },
+        "assignedClasses": { "type": "array", "description": "Assigned classes if the user is a Teacher with multiple gates" },
         "mfaEnabled": { "type": "boolean", "description": "Whether MFA is enabled or not" },
         "mfaSecret": { "type": "string", "description": "Secret token for MFA" }
       },

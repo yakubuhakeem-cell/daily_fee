@@ -9,7 +9,7 @@ import { StudentClass, SchoolCategory, PaymentRecord } from '../types';
 import { 
   FileSpreadsheet, Mail, Search, Calendar, ChevronRight, CheckCircle2, 
   HelpCircle, Settings, CheckSquare, PlusSquare, ArrowUpDown, X, Printer,
-  UserCheck, CalendarRange, AlertTriangle, TrendingUp, UserMinus
+  UserCheck, CalendarRange, AlertTriangle, TrendingUp, UserMinus, Eye
 } from 'lucide-react';
 
 export const ReportPanel: React.FC = () => {
@@ -42,6 +42,8 @@ export const ReportPanel: React.FC = () => {
   // Bulk Print states
   const [showPrintModal, setShowPrintModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
+  const [showPreviewModal, setShowPreviewModal] = useState(false);
+  const [previewPage, setPreviewPage] = useState(1);
   const [customMemo, setCustomMemo] = useState('Official statement of student daily schooling fee collections. Please retain this signature receipt for authentication.');
   const [authorizedBy, setAuthorizedBy] = useState('Mrs. Grace Appiah (Headmistress)');
   const [includeUnverified, setIncludeUnverified] = useState(true);
@@ -208,6 +210,14 @@ export const ReportPanel: React.FC = () => {
       pendingVal
     };
   }, [filteredPayments]);
+
+  // Pagination for pre-export preview table
+  const PREVIEW_ITEMS_PER_PAGE = 10;
+  const totalPreviewPages = Math.ceil(filteredPayments.length / PREVIEW_ITEMS_PER_PAGE) || 1;
+  const paginatedPayments = useMemo(() => {
+    const start = (previewPage - 1) * PREVIEW_ITEMS_PER_PAGE;
+    return filteredPayments.slice(start, start + PREVIEW_ITEMS_PER_PAGE);
+  }, [filteredPayments, previewPage]);
 
   // 1. Extract all months having school days in activeTerm
   const termMonths = useMemo(() => {
@@ -444,6 +454,17 @@ export const ReportPanel: React.FC = () => {
             className="flex-1 sm:flex-initial text-[10px] font-black bg-neutral-950 hover:bg-neutral-850 hover:text-white text-amber-400 py-3.5 px-4 transition-all border-2 border-neutral-800 hover:border-amber-400 uppercase tracking-widest cursor-pointer flex items-center justify-center gap-1.5"
           >
             <Printer size={14} /> Bulk Print
+          </button>
+
+          {/* Preview Report button */}
+          <button
+            onClick={() => {
+              setPreviewPage(1);
+              setShowPreviewModal(true);
+            }}
+            className="flex-1 sm:flex-initial text-[10px] font-black bg-neutral-950 hover:bg-neutral-850 hover:text-white text-emerald-400 py-3.5 px-4 transition-all border-2 border-neutral-800 hover:border-emerald-400 uppercase tracking-widest cursor-pointer flex items-center justify-center gap-1.5"
+          >
+            <Eye size={14} /> Preview Report
           </button>
 
           {/* Download CSV audit core */}
@@ -1668,6 +1689,175 @@ B7 to B9: GHC [SUM]`}
                 className="w-full sm:w-5/12 py-4 bg-neutral-950 hover:bg-neutral-850 text-neutral-400 hover:text-white text-[11px] font-black uppercase tracking-widest text-center cursor-pointer transition-all border border-neutral-800"
               >
                 Abort Export
+              </button>
+            </div>
+
+            {/* Helper Table Link */}
+            <div className="text-center pt-1 border-t border-neutral-850">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowExportModal(false);
+                  setPreviewPage(1);
+                  setShowPreviewModal(true);
+                }}
+                className="text-[10px] font-mono font-bold uppercase tracking-wider text-emerald-400 hover:text-emerald-300 underline cursor-pointer transition-colors"
+              >
+                🔍 Live Row-by-Row Table Preview
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* LEDGER REPORT DATA PREVIEW MODAL */}
+      {showPreviewModal && (
+        <div 
+          id="report-preview-modal" 
+          className="fixed inset-0 z-50 bg-neutral-950/85 backdrop-blur-sm flex items-center justify-center p-4 font-sans"
+        >
+          <div className="relative w-full max-w-4xl bg-neutral-900 border-4 border-emerald-400 p-6 md:p-8 space-y-6 shadow-[8px_8px_0px_0px_rgba(16,185,129,0.15)] text-white flex flex-col max-h-[90vh]">
+            
+            {/* Modal Header */}
+            <div className="flex justify-between items-start border-b border-neutral-800 pb-4 shrink-0">
+              <div className="flex items-start gap-3">
+                <div className="p-2.5 bg-emerald-400/10 border border-emerald-400 text-emerald-400 shrink-0">
+                  <Eye size={20} />
+                </div>
+                <div>
+                  <span className="text-[9px] text-emerald-400 font-mono tracking-widest font-black uppercase block">Ledger Verification Desk</span>
+                  <h3 className="text-base font-black uppercase tracking-tight">Current Report Data Live Preview</h3>
+                  <p className="text-[11px] text-neutral-450 mt-1">
+                    Showing filtered entries from the current query view. Verify all name registers and receipt amounts below.
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setShowPreviewModal(false)}
+                className="p-1 cursor-pointer text-neutral-450 hover:text-white transition-colors"
+                title="Close"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Quick stats ribbon */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 bg-neutral-950/60 p-3.5 border border-neutral-850 shrink-0 font-mono text-[10px]">
+              <div>
+                <span className="text-neutral-500 block text-[8px] uppercase">Matching Records</span>
+                <span className="text-white font-extrabold">{filteredPayments.length} rows</span>
+              </div>
+              <div>
+                <span className="text-neutral-500 block text-[8px] uppercase">Report Valuation</span>
+                <span className="text-amber-400 font-extrabold">GHC {totalsInfo.totalCollected.toFixed(2)}</span>
+              </div>
+              <div>
+                <span className="text-neutral-500 block text-[8px] uppercase">Active Grade Filter</span>
+                <span className="text-white font-extrabold">{classFilter === 'ALL' ? 'ALL GRADES' : classFilter}</span>
+              </div>
+              <div>
+                <span className="text-neutral-500 block text-[8px] uppercase">Demographic Bounds</span>
+                <span className="text-white font-extrabold">{categoryFilter === 'ALL' ? 'ALL COHORTS' : categoryFilter}</span>
+              </div>
+            </div>
+
+            {/* Preview Table Container (with vertical scrolling if many) */}
+            <div className="flex-1 overflow-y-auto border border-neutral-850 bg-neutral-950/40">
+              <div className="min-w-[600px]">
+                <table className="w-full text-left text-xs text-neutral-300">
+                  <thead className="bg-neutral-950 sticky top-0 border-b border-neutral-850 font-mono text-[9px] uppercase tracking-widest text-neutral-450">
+                    <tr>
+                      <th className="p-3">Date Check</th>
+                      <th className="p-3">Student Name</th>
+                      <th className="p-3 text-center">Class</th>
+                      <th className="p-3">Group</th>
+                      <th className="p-3 text-right">Fee (GHC)</th>
+                      <th className="p-3 font-mono">Collected By</th>
+                      <th className="p-3 text-center font-mono">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-900 leading-relaxed font-sans">
+                    {paginatedPayments.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="text-center py-10 text-neutral-500 font-bold uppercase tracking-widest text-xs font-mono">
+                          No matching ledger entries for preview.
+                        </td>
+                      </tr>
+                    ) : (
+                      paginatedPayments.map((p) => (
+                        <tr key={p.id} className="hover:bg-neutral-900/40">
+                          <td className="p-3 font-mono text-neutral-500">{p.date}</td>
+                          <td className="p-3 font-extrabold text-white uppercase text-[11px] tracking-wide">{p.studentName}</td>
+                          <td className="p-3 font-mono font-black text-amber-400 text-center">{p.class}</td>
+                          <td className="p-3 text-neutral-450 text-[10px] uppercase font-black tracking-wider">{p.category}</td>
+                          <td className="p-3 text-right font-black font-mono text-white">GHC {p.amount.toFixed(2)}</td>
+                          <td className="p-3 text-neutral-400 text-[10.5px] font-bold uppercase max-w-[120px] truncate">{p.collectedBy}</td>
+                          <td className="p-3 text-center">
+                            {p.verified ? (
+                              <span className="inline-block px-2 py-0.5 bg-emerald-950/40 text-emerald-400 border border-emerald-900 text-[8.5px] uppercase font-black font-mono tracking-widest">
+                                Approved
+                              </span>
+                            ) : (
+                              <span className="inline-block px-2 py-0.5 bg-amber-950/40 text-amber-400 border border-amber-900 text-[8.5px] uppercase font-black font-mono tracking-widest">
+                                Pending
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Pagination Controls Footer */}
+            {totalPreviewPages > 1 && (
+              <div className="flex justify-between items-center bg-neutral-950 border border-neutral-850 p-3 shrink-0 font-mono text-[10px]">
+                <div className="text-neutral-450 font-semibold">
+                  Showing <span className="text-white font-extrabold">{(previewPage - 1) * PREVIEW_ITEMS_PER_PAGE + 1}</span> - <span className="text-white font-extrabold">{Math.min(previewPage * PREVIEW_ITEMS_PER_PAGE, filteredPayments.length)}</span> of <span className="text-emerald-400 font-extrabold">{filteredPayments.length}</span> results
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setPreviewPage(prev => Math.max(1, prev - 1))}
+                    disabled={previewPage === 1}
+                    className="px-3 py-1.5 bg-neutral-900 border border-neutral-800 text-neutral-300 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-neutral-800 hover:text-white transition-all cursor-pointer font-bold rounded-xs"
+                  >
+                    PREV
+                  </button>
+                  <span className="text-neutral-400 font-bold px-1 select-none">
+                    Page <strong className="text-white">{previewPage}</strong> of {totalPreviewPages}
+                  </span>
+                  <button
+                    onClick={() => setPreviewPage(prev => Math.min(totalPreviewPages, prev + 1))}
+                    disabled={previewPage === totalPreviewPages}
+                    className="px-3 py-1.5 bg-neutral-900 border border-neutral-800 text-neutral-300 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-neutral-800 hover:text-white transition-all cursor-pointer font-bold rounded-xs"
+                  >
+                    NEXT
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Modal Actions */}
+            <div className="flex flex-col sm:flex-row gap-3 pt-4 border-t border-neutral-800 shrink-0 font-mono">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowPreviewModal(false);
+                  triggerExcelExport();
+                }}
+                disabled={filteredPayments.length === 0}
+                className="w-full sm:w-7/12 py-4 bg-emerald-400 hover:bg-emerald-300 hover:text-black text-neutral-950 text-xs font-black uppercase tracking-widest text-center cursor-pointer transition-all border border-transparent shadow-[4px_4px_0px_0px_rgba(16,185,129,0.2)] flex items-center justify-center gap-1.5 font-bold"
+              >
+                <FileSpreadsheet size={14} /> Download Excel Spreadsheet
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowPreviewModal(false)}
+                className="w-full sm:w-5/12 py-4 bg-neutral-950 hover:bg-neutral-850 text-neutral-400 hover:text-white text-[11px] font-black uppercase tracking-widest text-center cursor-pointer transition-all border border-neutral-800"
+              >
+                Close Preview
               </button>
             </div>
           </div>

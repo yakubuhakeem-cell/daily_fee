@@ -570,7 +570,7 @@ export const LoginMFA: React.FC = () => {
                     <p className={`text-[10px] font-mono mt-1 font-bold ${
                       isSelected ? 'text-neutral-900' : 'text-neutral-500'
                     }`}>
-                      {acc.role} {acc.assignedClass ? `• ${acc.assignedClass}` : ''}
+                      {acc.role} {acc.role === 'Teacher' ? (acc.assignedClasses && acc.assignedClasses.length > 0 ? `• Gates: ${acc.assignedClasses.join(', ')}` : (acc.assignedClass ? `• Gate: ${acc.assignedClass}` : '• No Gates')) : ''}
                     </p>
                     {acc.mfaEnabled && (
                       <span className={`inline-block text-[8px] font-black mt-2 px-1.5 py-0.5 uppercase tracking-widest ${

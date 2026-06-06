@@ -45,6 +45,7 @@ export interface UserAccount {
   email: string;
   role: UserRole;
   assignedClass?: StudentClass; // For teachers
+  assignedClasses?: StudentClass[]; // For teachers overseeing multiple gates
   mfaEnabled: boolean;
   mfaSecret?: string; // QR code / setup value
   passwordEnabled?: boolean;

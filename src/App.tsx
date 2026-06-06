@@ -46,7 +46,7 @@ function NavigationWrapper() {
     if (!students || !users) return 0;
     const activeStudents = students.filter(s => s.active);
     return activeStudents.filter(s => {
-      const hasTeacher = users.some(u => u.role === 'Teacher' && u.assignedClass === s.class && u.active !== false);
+      const hasTeacher = users.some(u => u.role === 'Teacher' && (u.assignedClass === s.class || u.assignedClasses?.includes(s.class)) && u.active !== false);
       return !hasTeacher;
     }).length;
   }, [students, users]);

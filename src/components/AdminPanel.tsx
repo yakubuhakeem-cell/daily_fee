@@ -64,6 +64,22 @@ export const AdminPanel: React.FC = () => {
   const [isSendingSms, setIsSendingSms] = useState(false);
   const [smsSuccess, setSmsSuccess] = useState(false);
 
+  // Delete Confirmation Modal state
+  const [deleteConf, setDeleteConf] = useState<{
+    isOpen: boolean;
+    type: 'student' | 'purge_inactive' | 'staff';
+    targetId?: string;
+    targetName: string;
+    userInput: string;
+    onConfirm: () => void;
+  }>({
+    isOpen: false,
+    type: 'student',
+    targetName: '',
+    userInput: '',
+    onConfirm: () => {}
+  });
+
   // Find all school days up to currentDate
   const validSchoolDays = useMemo(() => {
     if (!activeTerm || !activeTerm.schoolDays) return [];
@@ -109,7 +125,9 @@ export const AdminPanel: React.FC = () => {
     return students.filter(s => {
       if (!s.active) return false;
       const hasTeacher = users.some(
-        u => u.role === 'Teacher' && u.assignedClass === s.class && u.active !== false
+        u => u.role === 'Teacher' && 
+        (u.assignedClass === s.class || u.assignedClasses?.includes(s.class)) && 
+        u.active !== false
       );
       return !hasTeacher;
     });
@@ -143,6 +161,7 @@ export const AdminPanel: React.FC = () => {
   const [adminRegEmail, setAdminRegEmail] = useState('');
   const [adminRegRole, setAdminRegRole] = useState<UserRole>('Teacher');
   const [adminRegClass, setAdminRegClass] = useState<StudentClass>('B1');
+  const [adminRegClasses, setAdminRegClasses] = useState<StudentClass[]>(['B1']);
   const [adminRegMfa, setAdminRegMfa] = useState(false);
   const [adminRegPasswordEnabled, setAdminRegPasswordEnabled] = useState(false);
   const [adminRegPassword, setAdminRegPassword] = useState('');
@@ -156,10 +175,11 @@ export const AdminPanel: React.FC = () => {
       adminRegName.trim(),
       adminRegEmail.trim(),
       adminRegRole,
-      adminRegRole === 'Teacher' ? adminRegClass : undefined,
+      adminRegRole === 'Teacher' ? (adminRegClasses[0] || 'B1') : undefined,
       adminRegMfa,
       adminRegPasswordEnabled,
-      adminRegPassword.trim()
+      adminRegPassword.trim(),
+      adminRegRole === 'Teacher' ? adminRegClasses : undefined
     );
 
     if (result.success) {
@@ -168,6 +188,7 @@ export const AdminPanel: React.FC = () => {
       setAdminRegMfa(false);
       setAdminRegPasswordEnabled(false);
       setAdminRegPassword('');
+      setAdminRegClasses(['B1']);
       showToast('Staff register updated with new entry.');
     } else {
       showToast(result.error || 'Check administrator database permissions & connection.');
@@ -186,7 +207,8 @@ export const AdminPanel: React.FC = () => {
       editStaffObj.assignedClass,
       !!editStaffObj.mfaEnabled,
       !!editStaffObj.passwordEnabled,
-      editStaffObj.password || ''
+      editStaffObj.password || '',
+      editStaffObj.role === 'Teacher' ? (editStaffObj.assignedClasses || (editStaffObj.assignedClass ? [editStaffObj.assignedClass] : [])) : undefined
     );
 
     if (result.success) {
@@ -198,20 +220,40 @@ export const AdminPanel: React.FC = () => {
   };
 
   const handleAssignGateTeacher = (cls: StudentClass, teacherId: string) => {
-    // 1. Clear any teachers currently assigned to this classroom gate checkpoint
+    // 1. For all other teachers currently assigned to this classroom gate checkpoint, remove 'cls' from their assignments
     users.forEach(u => {
-      if (u.role === 'Teacher' && u.assignedClass === cls && u.id !== teacherId) {
-        updateStaff(u.id, u.name, u.email, u.role, undefined, !!u.mfaEnabled);
+      if (u.role === 'Teacher' && u.id !== teacherId) {
+        const hasSingle = u.assignedClass === cls;
+        const hasMulti = u.assignedClasses?.includes(cls);
+        if (hasSingle || hasMulti) {
+          const currentMulti = u.assignedClasses || (u.assignedClass ? [u.assignedClass] : []);
+          const newMulti = currentMulti.filter(c => c !== cls);
+          const newSingle = newMulti[0];
+          updateStaff(u.id, u.name, u.email, u.role, newSingle, !!u.mfaEnabled, !!u.passwordEnabled, u.password || '', newMulti);
+        }
       }
     });
 
-    // 2. Assign the newly selected teacher if one was picked
+    // 2. Assign the newly selected teacher to this gate (and append to their existing assigned gates)
     if (teacherId) {
       const selectedT = users.find(u => u.id === teacherId);
       if (selectedT) {
-        const result = updateStaff(selectedT.id, selectedT.name, selectedT.email, selectedT.role, cls, !!selectedT.mfaEnabled);
+        const currentMulti = selectedT.assignedClasses || (selectedT.assignedClass ? [selectedT.assignedClass] : []);
+        const newMulti = currentMulti.includes(cls) ? currentMulti : [...currentMulti, cls];
+        const newSingle = newMulti[0] || cls;
+        const result = updateStaff(
+          selectedT.id,
+          selectedT.name,
+          selectedT.email,
+          selectedT.role,
+          newSingle,
+          !!selectedT.mfaEnabled,
+          !!selectedT.passwordEnabled,
+          selectedT.password || '',
+          newMulti
+        );
         if (result.success) {
-          showToast(`Successfully assigned ${selectedT.name} as Gate Teacher for ${cls}.`);
+          showToast(`Successfully assigned ${selectedT.name} to oversee ${cls} Gate Checkpoint.`);
         } else {
           showToast(result.error || `Failed to assign ${selectedT.name} to ${cls}.`);
         }
@@ -382,6 +424,83 @@ export const AdminPanel: React.FC = () => {
                 className="w-full py-3.5 px-4 bg-transparent hover:bg-neutral-900 border border-neutral-800 text-neutral-500 hover:text-neutral-300 text-xs uppercase font-bold tracking-wider transition-colors cursor-pointer font-mono text-left"
               >
                 ✕ Cancel and Stay in Local Ledger Mode
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Safeguard Modal */}
+      {deleteConf.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-fade-in animate-duration-200">
+          <div className="bg-neutral-950 border-4 border-red-600 max-w-md w-full p-6 space-y-6 shadow-[10px_10px_0px_0px_rgba(220,38,38,0.25)] relative">
+            <div className="flex items-center gap-3 border-b-2 border-neutral-850 pb-4">
+              <Trash2 className="text-red-500 animate-pulse" size={28} />
+              <div>
+                <span className="text-[10px] font-mono tracking-widest text-red-500 uppercase font-black">CRITICAL DELETION GUARD</span>
+                <h3 className="text-base font-black uppercase tracking-tight text-white font-mono">Confirm Radical Purge Action</h3>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <p className="text-xs text-neutral-300 leading-relaxed font-semibold">
+                You are about to permanently purge the following entry from the records. Once done, this action <strong className="text-red-500">CANNOT BE UNDONE</strong> and will sever all database linkages:
+              </p>
+              
+              <div className="p-3 bg-red-950/20 border-2 border-red-900/60 rounded text-center">
+                <p className="text-[10px] font-mono uppercase text-neutral-400">Target Record Name</p>
+                <p className="text-sm font-black font-mono text-white mt-1 uppercase tracking-wider">
+                  {deleteConf.targetName}
+                </p>
+                <p className="text-[9px] font-mono text-red-400 mt-1 uppercase tracking-widest font-bold">
+                  {deleteConf.type === 'student' ? 'Student Record' : deleteConf.type === 'purge_inactive' ? 'Deactivated Pupils Purge' : 'Staff/Teacher Account'}
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-[10px] font-mono uppercase tracking-widest text-neutral-400">
+                  Type <span className="text-red-500 font-extrabold bg-red-950/40 px-1.5 border border-red-900/40 font-bold font-mono">DELETE</span> to authorize:
+                </label>
+                <input
+                  type="text"
+                  value={deleteConf.userInput}
+                  placeholder="Type DELETE here..."
+                  onChange={(e) => setDeleteConf(prev => ({ ...prev, userInput: e.target.value }))}
+                  className="w-full bg-neutral-950 border-2 border-neutral-800 focus:border-red-600 py-2.5 px-3.5 text-xs text-white font-mono font-bold focus:outline-none uppercase tracking-widest"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && deleteConf.userInput.trim().toUpperCase() === 'DELETE') {
+                      deleteConf.onConfirm();
+                      setDeleteConf(prev => ({ ...prev, isOpen: false }));
+                    }
+                  }}
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeleteConf({ isOpen: false, type: 'student', targetName: '', userInput: '', onConfirm: () => {} })}
+                className="w-1/3 py-3 px-4 bg-neutral-900 hover:bg-neutral-850 border border-neutral-800 text-neutral-400 hover:text-white font-bold uppercase text-xs tracking-wider transition-colors cursor-pointer font-mono"
+              >
+                Cancel
+              </button>
+              
+              <button
+                type="button"
+                disabled={deleteConf.userInput.trim().toUpperCase() !== 'DELETE'}
+                onClick={() => {
+                  deleteConf.onConfirm();
+                  setDeleteConf({ isOpen: false, type: 'student', targetName: '', userInput: '', onConfirm: () => {} });
+                }}
+                className={`w-2/3 py-3 px-4 font-black uppercase text-xs tracking-wider font-mono transition-all cursor-pointer ${
+                  deleteConf.userInput.trim().toUpperCase() === 'DELETE'
+                    ? 'bg-red-600 hover:bg-red-500 text-white hover:scale-[1.02] active:scale-[0.98]'
+                    : 'bg-neutral-900 border border-neutral-800 text-neutral-650 cursor-not-allowed opacity-50'
+                }`}
+              >
+                Permanent Delete
               </button>
             </div>
           </div>
@@ -975,17 +1094,31 @@ export const AdminPanel: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => {
-                      const count = students.filter(s => !s.active).length;
-                      if (confirm(`CRITICAL SYSTEM PURGE: Are you sure you want to permanently delete all ${count} deactivated student(s) and erase all of their registered files, ledger accounts, and historical payment books forever? This action is irreversible.`)) {
-                        purgeDeactivatedStudents();
-                        showToast(`Successfully purged ${count} deactivated pupil files and clean-wiped all transaction roots.`);
+                      if (currentUser?.role !== 'Administrator') {
+                        alert('Access Denied: Only Administrators are permitted to purge deactivated students completely.');
+                        return;
                       }
+                      const count = students.filter(s => !s.active).length;
+                      setDeleteConf({
+                        isOpen: true,
+                        type: 'purge_inactive',
+                        targetName: `ALL ${count} DEACTIVATED STUDENTS`,
+                        userInput: '',
+                        onConfirm: () => {
+                          purgeDeactivatedStudents();
+                          showToast(`Successfully purged ${count} deactivated pupil files and clean-wiped all transaction roots.`);
+                        }
+                      });
                     }}
-                    className="mt-1 px-3 py-1 bg-red-600 hover:bg-red-500 text-white border-2 border-red-700 text-[9px] font-mono font-black uppercase tracking-widest cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex items-center gap-1.5 shadow-[2px_2px_0px_0px_rgba(220,38,38,0.2)] animate-pulse"
-                    title="Permanently erase all deactivated students and their past records"
+                    className={`mt-1 px-3 py-1 text-[9px] font-mono font-black uppercase tracking-widest cursor-pointer transition-all flex items-center gap-1.5 border-2 ${
+                      currentUser?.role === 'Administrator'
+                        ? 'bg-red-600 hover:bg-red-500 text-white border-red-700 shadow-[2px_2px_0px_0px_rgba(220,38,38,0.2)] animate-pulse hover:scale-[1.02] active:scale-[0.98]'
+                        : 'bg-neutral-950 border-neutral-850 text-neutral-600 cursor-not-allowed opacity-50'
+                    }`}
+                    title={currentUser?.role !== 'Administrator' ? 'Administrator Only (Access Denied)' : 'Permanently erase all deactivated students and their past records'}
                   >
                     <Trash2 size={11} className="stroke-[3]" />
-                    <span>Purge Inactive ({students.filter(s => !s.active).length})</span>
+                    <span>Purge Inactive ({students.filter(s => !s.active).length}){currentUser?.role !== 'Administrator' ? ' (Admin only)' : ''}</span>
                   </button>
                 )}
               </div>
@@ -1096,12 +1229,28 @@ export const AdminPanel: React.FC = () => {
                     {/* Delete trigger */}
                     <button
                       onClick={() => {
-                        if (confirm(`Do you wish to delete student ${st.name} from ledger? Historical payment trails will vanish.`)) {
-                          deleteStudent(st.id);
-                          showToast('Pupil record purged.');
+                        if (currentUser?.role !== 'Administrator') {
+                          alert('Access Denied: Only Administrators are permitted to delete student records completely from the system.');
+                          return;
                         }
+                        setDeleteConf({
+                          isOpen: true,
+                          type: 'student',
+                          targetId: st.id,
+                          targetName: st.name,
+                          userInput: '',
+                          onConfirm: () => {
+                            deleteStudent(st.id);
+                            showToast('Pupil record purged.');
+                          }
+                        });
                       }}
-                      className="p-2 border-2 border-red-900 bg-neutral-950 text-red-500 hover:bg-red-950/30 transition-colors cursor-pointer"
+                      className={`p-2 border-2 transition-colors cursor-pointer ${
+                        currentUser?.role === 'Administrator'
+                          ? 'border-red-900 bg-neutral-950 text-red-500 hover:bg-red-950/30'
+                          : 'border-neutral-855 bg-neutral-950 text-neutral-600 cursor-not-allowed opacity-50'
+                      }`}
+                      title={currentUser?.role !== 'Administrator' ? 'Administrator Only (Access Denied)' : 'Delete Student / Purge'}
                     >
                       <Trash2 size={13} />
                     </button>
@@ -1161,45 +1310,66 @@ export const AdminPanel: React.FC = () => {
                     />
                   </div>
 
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
-                        Administrative Role
-                      </label>
-                      <select
-                        value={editStaffObj.role}
-                        onChange={(e) => setEditStaffObj({ ...editStaffObj, role: e.target.value as UserRole, assignedClass: e.target.value === 'Teacher' ? editStaffObj.assignedClass || 'B1' : undefined })}
-                        className="w-full bg-neutral-950 border-2 border-neutral-800 py-3 px-4 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 cursor-pointer"
-                      >
-                        <option value="Teacher">Teacher</option>
-                        <option value="Accountant">Accountant</option>
-                        <option value="Administrator">Administrator</option>
-                        <option value="Headmaster">Headmaster</option>
-                      </select>
-                    </div>
-
-                    {editStaffObj.role === 'Teacher' ? (
-                      <div>
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className={editStaffObj.role === 'Teacher' ? 'col-span-2 sm:col-span-1' : 'col-span-2'}>
                         <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
-                          Assigned Class
+                          Administrative Role
                         </label>
                         <select
-                          value={editStaffObj.assignedClass || 'B1'}
-                          onChange={(e) => setEditStaffObj({ ...editStaffObj, assignedClass: e.target.value as StudentClass })}
+                          value={editStaffObj.role}
+                          onChange={(e) => setEditStaffObj({ ...editStaffObj, role: e.target.value as UserRole, assignedClass: e.target.value === 'Teacher' ? editStaffObj.assignedClass || 'B1' : undefined })}
                           className="w-full bg-neutral-950 border-2 border-neutral-800 py-3 px-4 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 cursor-pointer"
                         >
-                          {classes.map(cls => (
-                            <option key={cls} value={cls}>{cls}</option>
-                          ))}
+                          <option value="Teacher">Teacher</option>
+                          <option value="Accountant">Accountant</option>
+                          <option value="Administrator">Administrator</option>
+                          <option value="Headmaster">Headmaster</option>
                         </select>
                       </div>
-                    ) : (
-                      <div>
-                        <label className="block text-[10px] font-black text-neutral-555 uppercase tracking-widest mb-1.5 font-mono">
-                          Scope Level
+
+                      {editStaffObj.role !== 'Teacher' && (
+                        <div>
+                          <label className="block text-[10px] font-black text-neutral-555 uppercase tracking-widest mb-1.5 font-mono">
+                            Scope Level
+                          </label>
+                          <div className="bg-neutral-950 border-2 border-neutral-850 py-3 px-4 text-xs text-neutral-500 font-extrabold font-mono uppercase tracking-wider">
+                            {editStaffObj.role === 'Administrator' || editStaffObj.role === 'Headmaster' ? 'All Areas' : 'Accounting Desk'}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {editStaffObj.role === 'Teacher' && (
+                      <div className="space-y-2">
+                        <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest font-mono">
+                          Assigned Gate Checkpoints (Multi-Select)
                         </label>
-                        <div className="bg-neutral-950 border-2 border-neutral-850 py-3 px-4 text-xs text-neutral-500 font-extrabold font-mono uppercase tracking-wider">
-                          {editStaffObj.role === 'Administrator' || editStaffObj.role === 'Headmaster' ? 'All Areas' : 'Accounting Desk'}
+                        <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 bg-neutral-950/60 p-3.5 border border-neutral-850 rounded">
+                          {classes.map(cls => {
+                            const currentClasses = editStaffObj.assignedClasses || (editStaffObj.assignedClass ? [editStaffObj.assignedClass] : []);
+                            const isChecked = currentClasses.includes(cls);
+                            return (
+                              <label key={cls} className="flex items-center gap-2 text-xs font-bold text-neutral-300 hover:text-white cursor-pointer select-none py-1.5 px-2 hover:bg-neutral-900/50 rounded transition-colors">
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={() => {
+                                    const nextClasses = isChecked
+                                      ? currentClasses.filter(c => c !== cls)
+                                      : [...currentClasses, cls];
+                                    setEditStaffObj({
+                                      ...editStaffObj,
+                                      assignedClasses: nextClasses,
+                                      assignedClass: nextClasses[0] || undefined
+                                    });
+                                  }}
+                                  className="w-4 h-4 accent-amber-400 cursor-pointer"
+                                />
+                                <span className="font-mono">{cls}</span>
+                              </label>
+                            );
+                          })}
                         </div>
                       </div>
                     )}
@@ -1302,45 +1472,61 @@ export const AdminPanel: React.FC = () => {
                     />
                   </div>
 
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
-                        Administrative Role
-                      </label>
-                      <select
-                        value={adminRegRole}
-                        onChange={(e) => setAdminRegRole(e.target.value as UserRole)}
-                        className="w-full bg-neutral-950 border-2 border-neutral-800 py-3 px-4 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 cursor-pointer"
-                      >
-                        <option value="Teacher">Teacher</option>
-                        <option value="Accountant">Accountant</option>
-                        <option value="Administrator">Administrator</option>
-                        <option value="Headmaster">Headmaster</option>
-                      </select>
-                    </div>
-
-                    {adminRegRole === 'Teacher' ? (
-                      <div>
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className={adminRegRole === 'Teacher' ? 'col-span-2 sm:col-span-1' : 'col-span-2'}>
                         <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
-                          Assigned Class
+                          Administrative Role
                         </label>
                         <select
-                          value={adminRegClass}
-                          onChange={(e) => setAdminRegClass(e.target.value as StudentClass)}
+                          value={adminRegRole}
+                          onChange={(e) => setAdminRegRole(e.target.value as UserRole)}
                           className="w-full bg-neutral-950 border-2 border-neutral-800 py-3 px-4 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 cursor-pointer"
                         >
-                          {classes.map(cls => (
-                            <option key={cls} value={cls}>{cls}</option>
-                          ))}
+                          <option value="Teacher">Teacher</option>
+                          <option value="Accountant">Accountant</option>
+                          <option value="Administrator">Administrator</option>
+                          <option value="Headmaster">Headmaster</option>
                         </select>
                       </div>
-                    ) : (
-                      <div>
-                        <label className="block text-[10px] font-black text-neutral-555 uppercase tracking-widest mb-1.5 font-mono">
-                          Scope Level
+
+                      {adminRegRole !== 'Teacher' && (
+                        <div>
+                          <label className="block text-[10px] font-black text-neutral-555 uppercase tracking-widest mb-1.5 font-mono">
+                            Scope Level
+                          </label>
+                          <div className="bg-neutral-950 border-2 border-neutral-850 py-3 px-4 text-xs text-neutral-500 font-extrabold font-mono uppercase tracking-wider">
+                            {adminRegRole === 'Administrator' || adminRegRole === 'Headmaster' ? 'All Areas' : 'Accounting Desk'}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {adminRegRole === 'Teacher' && (
+                      <div className="space-y-2">
+                        <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest font-mono">
+                          Assigned Gate Checkpoints (Multi-Select)
                         </label>
-                        <div className="bg-neutral-950 border-2 border-neutral-850 py-3 px-4 text-xs text-neutral-500 font-extrabold font-mono uppercase tracking-wider">
-                          {adminRegRole === 'Administrator' || adminRegRole === 'Headmaster' ? 'All Areas' : 'Accounting Desk'}
+                        <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 bg-neutral-950/60 p-3.5 border border-neutral-850 rounded">
+                          {classes.map(cls => {
+                            const isChecked = adminRegClasses.includes(cls);
+                            return (
+                              <label key={cls} className="flex items-center gap-2 text-xs font-bold text-neutral-300 hover:text-white cursor-pointer select-none py-1.5 px-2 hover:bg-neutral-900/50 rounded transition-colors">
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={() => {
+                                    const nextClasses = isChecked
+                                      ? adminRegClasses.filter(c => c !== cls)
+                                      : [...adminRegClasses, cls];
+                                    setAdminRegClasses(nextClasses);
+                                  }}
+                                  className="w-4 h-4 accent-amber-400 cursor-pointer"
+                                />
+                                <span className="font-mono">{cls}</span>
+                              </label>
+                            );
+                          })}
                         </div>
                       </div>
                     )}
@@ -1423,7 +1609,13 @@ export const AdminPanel: React.FC = () => {
                        <div className="flex flex-wrap items-center gap-2.5">
                         <p className={`text-base font-black uppercase tracking-tight ${!isUserActive ? 'line-through text-neutral-500' : 'text-white'}`}>{u.name}</p>
                         <span className="text-[10px] font-black text-amber-400 bg-neutral-900 border border-neutral-800 px-2.5 py-0.5 tracking-widest uppercase font-mono">
-                          {u.role} {u.assignedClass ? `(${u.assignedClass})` : '[All Core]'}
+                          {u.role} {u.role === 'Teacher' ? (
+                            u.assignedClasses && u.assignedClasses.length > 0 
+                              ? `(Gates: ${u.assignedClasses.join(', ')})`
+                              : u.assignedClass 
+                                ? `(Gate: ${u.assignedClass})` 
+                                : '[No Gates Assigned]'
+                          ) : '[All Core]'}
                         </span>
                         {matchesCurrentUser && (
                           <span className="text-[10px] bg-white text-black font-mono font-black px-2.5 py-0.5 uppercase tracking-widest">YOU</span>
@@ -1461,22 +1653,41 @@ export const AdminPanel: React.FC = () => {
                       {/* Delete */}
                       <button
                         onClick={() => {
-                          if (matchesCurrentUser) {
-                            showToast("You cannot delete your own profile while logged in.");
+                          if (currentUser?.role !== 'Administrator') {
+                            alert("Access Denied: Only Administrators are permitted to delete staff profiles completely. (Your current role is: " + (currentUser?.role || "Guest") + ")");
                             return;
                           }
-                          if (confirm(`Are you sure you want to remove ${u.name} from staff users?`)) {
-                            const result = deleteStaff(u.id);
-                            if (result.success) {
-                              showToast(`Staff profile for ${u.name} has been deleted.`);
-                            } else {
-                              showToast(result.error || "Failed to delete staff member.");
-                            }
+                          if (matchesCurrentUser) {
+                            alert("Access Denied: You cannot delete your own profile while logged in.");
+                            return;
                           }
+                          setDeleteConf({
+                            isOpen: true,
+                            type: 'staff',
+                            targetId: u.id,
+                            targetName: u.name,
+                            userInput: '',
+                            onConfirm: () => {
+                              const result = deleteStaff(u.id);
+                              if (result.success) {
+                                showToast(`Staff profile for ${u.name} has been deleted.`);
+                              } else {
+                                showToast(result.error || "Failed to delete staff member.");
+                              }
+                            }
+                          });
                         }}
                         disabled={matchesCurrentUser}
-                        title={matchesCurrentUser ? "Cannot delete yourself" : `Delete ${u.name}'s profile`}
-                        className={`p-2 border-2 ${matchesCurrentUser ? 'border-neutral-900 bg-neutral-900/30 text-neutral-700 cursor-not-allowed' : 'border-neutral-800 hover:border-red-650 bg-neutral-950 text-neutral-400 hover:text-red-500 transition-colors cursor-pointer'}`}
+                        title={
+                          matchesCurrentUser 
+                            ? "Cannot delete yourself" 
+                            : `Delete ${u.name}'s profile`
+                        }
+                        className={`p-2 border-2 ${
+                          matchesCurrentUser
+                            ? 'border-neutral-900 bg-neutral-900/30 text-neutral-700 cursor-not-allowed'
+                            : 'border-neutral-800 hover:border-red-650 bg-neutral-950 text-neutral-400 hover:text-red-500 transition-colors cursor-pointer'
+                        }`}
                       >
                         <Trash2 size={13} />
                       </button>
@@ -1558,7 +1769,7 @@ export const AdminPanel: React.FC = () => {
                 <div className="bg-neutral-950 px-4 py-2.5 border border-neutral-850">
                   <span className="text-neutral-500 mr-2">Assigned:</span>
                   <span className="text-amber-400 font-extrabold font-mono">
-                    {users.filter(u => u.role === 'Teacher' && u.assignedClass && u.active !== false).length}
+                    {users.filter(u => u.role === 'Teacher' && (u.assignedClass || (u.assignedClasses && u.assignedClasses.length > 0)) && u.active !== false).length}
                   </span>
                 </div>
               </div>
@@ -1567,7 +1778,7 @@ export const AdminPanel: React.FC = () => {
             {/* Grid of checkpoint assignments */}
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
               {classes.map((cls) => {
-                const assignedTeacher = users.find(u => u.role === 'Teacher' && u.assignedClass === cls && u.active !== false);
+                const assignedTeacher = users.find(u => u.role === 'Teacher' && (u.assignedClass === cls || u.assignedClasses?.includes(cls)) && u.active !== false);
                 const category = getClassCategory(cls);
 
                 // Default fallbacks for display labels matching AppContext
@@ -1585,6 +1796,8 @@ export const AdminPanel: React.FC = () => {
                 else if (cls === 'B8') defaultName = 'Madam Faustina Asare';
                 else if (cls === 'B9') defaultName = 'Mr. Philip Ansah';
 
+                const activeCount = students.filter(s => s.class === cls && s.active).length;
+
                 return (
                   <div key={cls} className="bg-neutral-950 border-2 border-neutral-850 p-6 flex flex-col justify-between gap-5 hover:border-neutral-700 transition">
                     <div className="flex justify-between items-start">
@@ -1593,6 +1806,9 @@ export const AdminPanel: React.FC = () => {
                           {category} LEVEL
                         </span>
                         <h4 className="text-2xl font-black text-white font-mono leading-none pt-2">{cls} Checkpoint</h4>
+                        <div className="text-[10px] font-bold text-neutral-450 uppercase tracking-widest font-mono">
+                          Enrolment: <span className="text-amber-400 font-extrabold">{activeCount} Pupils</span>
+                        </div>
                       </div>
                       
                       {assignedTeacher ? (
