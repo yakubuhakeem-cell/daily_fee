@@ -6,7 +6,7 @@
 import React, { useState, useMemo } from 'react';
 import { useApp, PendingAlert } from '../context/AppContext';
 import { StudentClass, Student, SchoolCategory } from '../types';
-import { Check, X, Search, Landmark, BellRing, ChevronRight, CheckSquare, Users, MessageSquareCode, CalendarDays, CalendarPlus, Plus, ChevronDown, Trash2, Coins, History, Printer, Camera, Upload, Copy } from 'lucide-react';
+import { Check, X, Search, Landmark, BellRing, ChevronRight, ChevronLeft, CheckSquare, Users, MessageSquareCode, CalendarDays, CalendarPlus, CalendarX, Plus, ChevronDown, Trash2, Coins, History, Printer, Camera, Upload, Copy, Pencil } from 'lucide-react';
 import { motion } from 'motion/react';
 
 export const ClassRegister: React.FC = () => {
@@ -25,8 +25,11 @@ export const ClassRegister: React.FC = () => {
     terms,
     activeTerm,
     addTerm,
+    editTerm,
     setActiveTerm,
     deleteTerm,
+    addPublicHoliday,
+    removePublicHoliday,
     users,
     updateStudent,
     deleteStudent
@@ -160,6 +163,9 @@ export const ClassRegister: React.FC = () => {
 
   // Term management UI states
   const [showTermCreator, setShowTermCreator] = useState(false);
+  const [editingTermId, setEditingTermId] = useState<string | null>(null);
+  const [showHolidayManager, setShowHolidayManager] = useState(false);
+  const [holidayInputDate, setHolidayInputDate] = useState('');
   const [newTermName, setNewTermName] = useState('');
   const [newTermStartDate, setNewTermStartDate] = useState('2026-06-01');
   const [newTermDays, setNewTermDays] = useState(20); // default to 4 school weeks (20 days)
@@ -179,6 +185,10 @@ export const ClassRegister: React.FC = () => {
   // Transaction History modal states
   const [historyStudent, setHistoryStudent] = useState<Student | null>(null);
   const [paymentToDelete, setPaymentToDelete] = useState<{ id: string; label: string; studentName: string } | null>(null);
+
+  const isHoliday = useMemo(() => {
+    return !!activeTerm?.publicHolidays?.includes(currentDate);
+  }, [activeTerm, currentDate]);
 
   // Manual payment state for individual student row inline input
   const [manualAmountStudentId, setManualAmountStudentId] = useState<string | null>(null);
@@ -231,11 +241,12 @@ export const ClassRegister: React.FC = () => {
     const map = new Map<string, { pastUnpaidDays: string[]; totalDebt: number }>();
     if (!activeTerm || !activeTerm.schoolDays) return map;
 
-    const pastSchoolDays = activeTerm.schoolDays.filter(d => d < currentDate);
+    const holidays = activeTerm.publicHolidays || [];
+    const pastSchoolDays = activeTerm.schoolDays.filter(d => d < currentDate && !holidays.includes(d));
 
     students.forEach(student => {
       const unpaidDays = pastSchoolDays.filter(dStr => {
-        return !payments.some(p => p.studentId === student.id && p.date === dStr && !p.isAbsent);
+        return !payments.some(p => p.studentId === student.id && p.date === dStr);
       });
       const totalDebt = unpaidDays.length * 5;
       map.set(student.id, { pastUnpaidDays: unpaidDays, totalDebt });
@@ -252,6 +263,47 @@ export const ClassRegister: React.FC = () => {
       s.rollNumber.toLowerCase().includes(searchQuery.toLowerCase())
     );
   }, [classStudents, searchQuery]);
+
+  // Helper to automatically scroll to the next unmarked student in the current filtered class view after marking a payment or absent
+  const scrollToNextUnpaid = (currentStudentId: string) => {
+    // Find index of current student that was just marked
+    const currentIndex = filteredStudents.findIndex(s => s.id === currentStudentId);
+    if (currentIndex === -1) return;
+
+    // Search forward from current student for the next unmarked student (neither paid nor absent today)
+    let nextStudent = filteredStudents.slice(currentIndex + 1).find(s => {
+      const pInfo = paidStudentMap.get(s.id);
+      const isP = !!pInfo && !pInfo.isAbsent;
+      const isA = !!pInfo && !!pInfo.isAbsent;
+      return !isP && !isA;
+    });
+
+    // If none found forward, search from the beginning to the current student
+    if (!nextStudent) {
+      nextStudent = filteredStudents.slice(0, currentIndex).find(s => {
+        const pInfo = paidStudentMap.get(s.id);
+        const isP = !!pInfo && !pInfo.isAbsent;
+        const isA = !!pInfo && !!pInfo.isAbsent;
+        return !isP && !isA;
+      });
+    }
+
+    // Fallback: if no unmarked students exist at all, just scroll to the immediate next physical student in list
+    if (!nextStudent && currentIndex + 1 < filteredStudents.length) {
+      nextStudent = filteredStudents[currentIndex + 1];
+    }
+
+    // Scroll smoothly to that student container row
+    if (nextStudent) {
+      const targetId = `student-row-${nextStudent.id}`;
+      setTimeout(() => {
+        const element = document.getElementById(targetId);
+        if (element) {
+          element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 150); // Small timeout to let state update and class list render
+    }
+  };
 
   // Summaries
   const paidCount = useMemo(() => {
@@ -380,9 +432,20 @@ export const ClassRegister: React.FC = () => {
   const handleCreateTermSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTermName.trim()) return;
-    addTerm(newTermName.trim(), newTermStartDate, newTermDays, newTermIsActive);
+    
+    if (editingTermId) {
+      editTerm(editingTermId, newTermName.trim(), newTermStartDate, newTermDays, newTermIsActive);
+      showToast(`School term "${newTermName.trim()}" updated successfully.`);
+    } else {
+      addTerm(newTermName.trim(), newTermStartDate, newTermDays, newTermIsActive);
+      showToast(`School term "${newTermName.trim()}" generated successfully.`);
+    }
+    
     setNewTermName('');
     setNewTermIsActive(true);
+    setNewTermStartDate('2026-06-01');
+    setNewTermDays(20);
+    setEditingTermId(null);
     setShowTermCreator(false);
   };
 
@@ -413,6 +476,10 @@ export const ClassRegister: React.FC = () => {
   };
 
   const handleTogglePayment = (studentId: string) => {
+    if (isHoliday) {
+      showToast("Class registry is locked. Date selected is a public holiday.");
+      return;
+    }
     const student = students.find(s => s.id === studentId);
     const studentName = student ? student.name : "Student";
     const paidInfo = paidStudentMap.get(studentId);
@@ -426,10 +493,15 @@ export const ClassRegister: React.FC = () => {
       const discountAmount = student?.discount || 0;
       const actualAmount = Math.max(0, 5.00 - discountAmount);
       showToast(`Successfully logged GHC ${actualAmount.toFixed(2)} payment for ${studentName}!`);
+      scrollToNextUnpaid(studentId);
     }
   };
 
   const handleToggleAbsent = (studentId: string) => {
+    if (isHoliday) {
+      showToast("Class registry is locked. Date selected is a public holiday.");
+      return;
+    }
     const student = students.find(s => s.id === studentId);
     const studentName = student ? student.name : "Student";
     const paidInfo = paidStudentMap.get(studentId);
@@ -441,10 +513,15 @@ export const ClassRegister: React.FC = () => {
       // Unmarked, or marked as paid: mark as absent
       recordAbsent(studentId);
       showToast(`Marked ${studentName} as absent today (treated as debt).`);
+      scrollToNextUnpaid(studentId);
     }
   };
 
   const handleMarkAllPaid = () => {
+    if (isHoliday) {
+      showToast("Class registry is locked. Date selected is a public holiday.");
+      return;
+    }
     const unpaidIds = classStudents
       .filter(s => !paidStudentMap.has(s.id))
       .map(s => s.id);
@@ -467,7 +544,7 @@ export const ClassRegister: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6 font-sans relative">
+    <div id="register-main-container" className="space-y-6 font-sans relative">
       {/* Toast Alert floating notification */}
       {successMsg && (
         <motion.div 
@@ -577,28 +654,46 @@ export const ClassRegister: React.FC = () => {
                             {t.daysCount} DAYS • START {t.startDate}
                           </span>
                         </button>
-                        {terms.length > 1 && (
+                        <div className="flex items-center gap-1 shrink-0">
                           <button
                             type="button"
                             onClick={() => {
-                              setDeleteConf({
-                                isOpen: true,
-                                type: 'term_delete',
-                                targetId: t.id,
-                                targetName: t.name,
-                                userInput: '',
-                                onConfirm: () => {
-                                  deleteTerm(t.id);
-                                  showToast(`School term "${t.name}" was deactivated/purged.`);
-                                }
-                              });
+                              setEditingTermId(t.id);
+                              setNewTermName(t.name);
+                              setNewTermStartDate(t.startDate);
+                              setNewTermDays(t.daysCount);
+                              setNewTermIsActive(t.active);
+                              setShowTermCreator(true);
+                              setIsTermDropdownOpen(false);
                             }}
-                            className="p-1.5 text-neutral-650 hover:text-red-500 hover:bg-red-500/10 transition-colors cursor-pointer"
-                            title="Delete Term"
+                            className="p-1.5 text-neutral-650 hover:text-amber-400 hover:bg-amber-400/10 transition-colors cursor-pointer"
+                            title="Edit Term"
                           >
-                            <Trash2 size={13} />
+                            <Pencil size={13} />
                           </button>
-                        )}
+                          {terms.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setDeleteConf({
+                                  isOpen: true,
+                                  type: 'term_delete',
+                                  targetId: t.id,
+                                  targetName: t.name,
+                                  userInput: '',
+                                  onConfirm: () => {
+                                    deleteTerm(t.id);
+                                    showToast(`School term "${t.name}" was deactivated/purged.`);
+                                  }
+                                });
+                              }}
+                              className="p-1.5 text-neutral-650 hover:text-red-500 hover:bg-red-500/10 transition-colors cursor-pointer"
+                              title="Delete Term"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -611,14 +706,40 @@ export const ClassRegister: React.FC = () => {
             </div>
           </div>
           
-          <button
-            type="button"
-            onClick={() => setShowTermCreator(!showTermCreator)}
-            className="bg-neutral-950 hover:bg-neutral-850 border-2 border-neutral-800 hover:border-amber-400 text-neutral-300 hover:text-white px-4 py-2 text-[10px] font-black uppercase tracking-widest transition-all inline-flex items-center gap-2"
-          >
-            <CalendarPlus size={14} className="text-amber-400" />
-            {showTermCreator ? 'HIDE CREATOR' : 'CREATE NEW SCHOOL TERM'}
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                if (showTermCreator) {
+                  setEditingTermId(null);
+                  setNewTermName('');
+                  setNewTermStartDate('2026-06-01');
+                  setNewTermDays(20);
+                  setNewTermIsActive(true);
+                }
+                setShowTermCreator(!showTermCreator);
+                setShowHolidayManager(false);
+              }}
+              className="bg-neutral-950 hover:bg-neutral-850 border-2 border-neutral-800 hover:border-amber-400 text-neutral-300 hover:text-white px-4 py-2 text-[10px] font-black uppercase tracking-widest transition-all inline-flex items-center gap-2 focus:outline-none"
+            >
+              <CalendarPlus size={14} className="text-amber-400" />
+              {showTermCreator ? (editingTermId ? 'EXIT EDIT MODE' : 'HIDE CREATOR') : 'CREATE NEW SCHOOL TERM'}
+            </button>
+
+            {(currentUser?.role === 'Administrator' || currentUser?.role === 'Headmaster') && (
+              <button
+                type="button"
+                onClick={() => {
+                  setShowHolidayManager(!showHolidayManager);
+                  setShowTermCreator(false);
+                }}
+                className="bg-neutral-950 hover:bg-neutral-850 border-2 border-neutral-800 hover:border-red-500 text-neutral-300 hover:text-white px-4 py-2 text-[10px] font-black uppercase tracking-widest transition-all inline-flex items-center gap-2 focus:outline-none"
+              >
+                <CalendarX size={14} className="text-red-500" />
+                {showHolidayManager ? 'HIDE HOLIDAYS' : 'MANAGE PUBLIC HOLIDAYS'}
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Active Expandable New Term Form */}
@@ -630,8 +751,14 @@ export const ClassRegister: React.FC = () => {
             className="bg-neutral-950 border-2 border-amber-400 p-6 space-y-4"
           >
             <div className="flex items-center gap-2 pb-2 border-b border-neutral-800">
-              <Plus size={16} className="text-amber-400" />
-              <span className="text-xs font-mono font-black uppercase tracking-wider text-white">Create New Schooling Term Schedule</span>
+              {editingTermId ? (
+                <Pencil size={14} className="text-amber-400" />
+              ) : (
+                <Plus size={16} className="text-amber-400" />
+              )}
+              <span className="text-xs font-mono font-black uppercase tracking-wider text-white">
+                {editingTermId ? 'Edit Existing school term' : 'Create New Schooling Term Schedule'}
+              </span>
             </div>
             
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -692,10 +819,86 @@ export const ClassRegister: React.FC = () => {
                 type="submit"
                 className="bg-amber-400 hover:bg-amber-300 text-black px-6 py-2.5 text-xs font-black uppercase tracking-widest transition-colors cursor-pointer"
               >
-                GENERATE SCHEDULE
+                {editingTermId ? 'UPDATE TERM DETAILS' : 'GENERATE SCHEDULE'}
               </button>
             </div>
           </motion.form>
+        )}
+
+        {/* Dynamic Expandable Public Holiday Scheduler */}
+        {showHolidayManager && activeTerm && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-neutral-950 border-2 border-red-500/40 p-6 space-y-4"
+          >
+            <div className="flex items-center gap-2 pb-2 border-b border-neutral-800">
+              <Landmark size={16} className="text-red-500" />
+              <span className="text-xs font-mono font-black uppercase tracking-wider text-white">Dynamic Public Holiday Scheduler</span>
+            </div>
+
+            {/* Form to declare holiday */}
+            <div className="flex flex-col sm:flex-row items-end gap-4">
+              <div className="flex-grow space-y-1.5 w-full">
+                <label className="text-[10px] uppercase font-mono font-black text-neutral-500">Pick School weekday to declare as Holiday (Active Term)</label>
+                <select
+                  id="holiday-date-selector"
+                  className="w-full bg-neutral-900 border border-neutral-800 text-xs py-2.5 px-3 focus:outline-none focus:border-red-500 font-mono font-bold text-white uppercase cursor-pointer"
+                >
+                  <option value="">-- SELECT DATE FROM CURRENT TERM --</option>
+                  {activeTerm.schoolDays.map(d => {
+                    const isAlreadyHoliday = (activeTerm.publicHolidays || []).includes(d);
+                    if (isAlreadyHoliday) return null;
+                    return <option key={d} value={d}>{d}</option>;
+                  })}
+                </select>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const selectEl = document.getElementById('holiday-date-selector') as HTMLSelectElement | null;
+                  if (selectEl && selectEl.value) {
+                    addPublicHoliday(activeTerm.id, selectEl.value);
+                    const selectedVal = selectEl.value;
+                    selectEl.value = "";
+                    showToast(`Successfully declared holiday for date: ${selectedVal}!`);
+                  } else {
+                    showToast("Please choose a valid day to declare as public holiday.");
+                  }
+                }}
+                className="bg-red-500 hover:bg-red-400 text-white px-6 py-2.5 text-xs font-black uppercase tracking-widest transition-colors cursor-pointer shrink-0 w-full sm:w-auto"
+              >
+                DECLARE AS HOLIDAY
+              </button>
+            </div>
+
+            {/* List of holidays */}
+            <div className="space-y-2 pt-2 border-t border-neutral-850">
+              <h4 className="text-[9px] uppercase font-mono font-black text-neutral-400">DESIGNATED PUBLIC HOLIDAYS FOR THIS ACTIVE TERM:</h4>
+              {(!activeTerm.publicHolidays || activeTerm.publicHolidays.length === 0) ? (
+                <p className="text-[10px] text-neutral-600 uppercase font-mono italic">No holidays defined for this term yet.</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {activeTerm.publicHolidays.map(dateStr => (
+                    <div key={dateStr} className="flex items-center bg-red-950/60 border border-red-500/30 text-red-400 px-2.5 py-1 text-[10px] font-mono font-bold gap-2">
+                      <span>{dateStr}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          removePublicHoliday(activeTerm.id, dateStr);
+                          showToast(`Public holiday on date: ${dateStr} is cancelled/removed.`);
+                        }}
+                        className="text-red-450 hover:text-red-300 transition-colors cursor-pointer focus:outline-none"
+                      >
+                        <X size={12} className="stroke-[3]" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </motion.div>
         )}
 
         {/* School Days Calendar Carousel/Grid split by Weeks */}
@@ -719,13 +922,20 @@ export const ClassRegister: React.FC = () => {
                   <div className="flex-1 grid grid-cols-2 sm:grid-cols-5 gap-2">
                     {week.days.map((dayStr) => {
                       const isActive = currentDate === dayStr;
+                      const isDayHoliday = activeTerm?.publicHolidays?.includes(dayStr);
                       const paidCount = getPaidCountForDate(dayStr);
                       const classTotal = classStudents.length;
                       
                       // Decide color palette based on completion
                       let cardStyle = "bg-neutral-900 border-neutral-800 hover:border-neutral-700 text-neutral-400";
                       let dotStyle = "bg-neutral-600";
-                      if (isActive) {
+                      
+                      if (isDayHoliday) {
+                        cardStyle = isActive
+                          ? "bg-red-500 text-white border-red-500 scale-[1.01] shadow-[2px_2px_0px_0px_rgba(255,255,255,0.1)] font-bold"
+                          : "bg-red-950/20 border-red-900/40 text-red-400 hover:bg-red-950/30";
+                        dotStyle = "bg-red-500";
+                      } else if (isActive) {
                         cardStyle = "bg-amber-400 text-black border-amber-400 scale-[1.01] shadow-[2px_2px_0px_0px_rgba(255,255,255,0.1)]";
                         dotStyle = "bg-black animate-pulse";
                       } else if (paidCount > 0) {
@@ -756,8 +966,12 @@ export const ClassRegister: React.FC = () => {
                           </div>
                           <div className="flex justify-between items-end w-full leading-none mt-1">
                             <span className="text-[11px] font-mono leading-none tracking-tight">{formattedDate}</span>
-                            <span className="text-[10px] font-black font-mono leading-none">
-                              {paidCount}/{classTotal}
+                            <span className="text-[10px] font-black font-mono leading-none flex items-center">
+                              {isDayHoliday ? (
+                                <span className="text-[7.5px] px-1 py-0.2 bg-red-500/20 text-red-300 border border-red-500/30 rounded font-sans tracking-wide uppercase">HOLIDAY</span>
+                              ) : (
+                                `${paidCount}/${classTotal}`
+                              )}
                             </span>
                           </div>
                         </button>
@@ -916,7 +1130,7 @@ export const ClassRegister: React.FC = () => {
 
             <button
               onClick={handleMarkAllPaid}
-              disabled={outstandingCount === 0}
+              disabled={outstandingCount === 0 || isHoliday}
               className="w-full sm:w-auto text-[10px] font-black bg-white hover:bg-amber-400 text-black py-3 px-5 transition-colors flex items-center justify-center gap-2 uppercase tracking-widest disabled:opacity-30 disabled:cursor-not-allowed"
             >
               <CheckSquare size={14} /> BULK MARK PAID (GHC 5.00)
@@ -941,6 +1155,21 @@ export const ClassRegister: React.FC = () => {
               </span>
               <span className="text-[9px] bg-amber-400/10 border border-amber-400/25 px-2 py-0.5 text-amber-300 font-mono tracking-widest font-black uppercase shrink-0">INTELLIGENT GATEWAY</span>
             </div>
+
+            {isHoliday && (
+              <div className="bg-red-950/20 border-b border-red-500/30 p-6 text-center text-red-400 space-y-1.5 select-none font-mono">
+                <div className="flex items-center justify-center gap-2 text-red-500">
+                  <Landmark size={20} className="stroke-[2.5]" />
+                  <span className="text-sm font-black uppercase tracking-wider">OFFICIAL PUBLIC HOLIDAY DETECTED</span>
+                </div>
+                <p className="text-xs font-bold uppercase tracking-widest text-neutral-200">
+                  School is closed today for academic work & dynamic gateway controls are locked.
+                </p>
+                <p className="text-[10px] uppercase text-neutral-400 tracking-wide leading-relaxed">
+                  * GATE SYSTEM OVERRIDE: Payment check-ins and absence logs are halted for this calendar block. No pupils are marked owing.
+                </p>
+              </div>
+            )}
             {filteredStudents.map(student => {
               const paidInfo = paidStudentMap.get(student.id);
               const isPaid = !!paidInfo && !paidInfo.isAbsent;
@@ -951,9 +1180,10 @@ export const ClassRegister: React.FC = () => {
               return (
                 <div 
                   key={student.id} 
+                  id={`student-row-${student.id}`}
                   className={`flex flex-col sm:flex-row justify-between items-start sm:items-center p-6 transition-all gap-4 ${
                     isPaid ? 'bg-amber-400/[0.02]' : isAbsent ? 'bg-red-500/[0.02]' : 'hover:bg-neutral-800/10'
-                  } ${hasArrearsAtRisk ? 'opacity-60 hover:opacity-100 border-l-4 border-l-red-500 bg-red-950/[0.015]' : ''}`}
+                  }  scroll-mt-24 ${hasArrearsAtRisk ? 'opacity-60 hover:opacity-100 border-l-4 border-l-red-500 bg-red-950/[0.015]' : ''}`}
                 >
                   <div className="flex items-center gap-4 w-full sm:w-auto">
                     {/* Student Avatar Widget */}
@@ -1093,7 +1323,28 @@ export const ClassRegister: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 mt-4 sm:mt-0 w-full sm:w-auto justify-end">
+                <div className="relative flex items-center w-full sm:w-auto mt-4 sm:mt-0">
+                  {/* Left Scroll Button Indicator for Action Drawer Buttons on Mobile */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const container = document.getElementById(`action-scroll-${student.id}`);
+                      if (container) {
+                        container.scrollBy({ left: -140, behavior: 'smooth' });
+                      }
+                    }}
+                    className="flex sm:hidden shrink-0 items-center justify-center w-8 h-[42px] bg-neutral-950 hover:bg-neutral-900 border-2 border-neutral-800 text-amber-400 active:scale-95 cursor-pointer z-10 mr-1.5"
+                    title="Scroll Buttons Left"
+                  >
+                    <ChevronLeft size={16} className="stroke-[3]" />
+                  </button>
+
+                  {/* Scrollable Container with buttons */}
+                  <div 
+                    id={`action-scroll-${student.id}`}
+                    className="flex-grow flex items-center gap-2 justify-start sm:justify-end overflow-x-auto whitespace-nowrap max-w-full pb-1 scroll-smooth scrollbar-thin scrollbar-thumb-amber-400/20"
+                    style={{ scrollbarWidth: 'thin' }}
+                  >
                     {/* Transaction History Button */}
                     <button
                       onClick={() => setHistoryStudent(student)}
@@ -1164,6 +1415,7 @@ export const ClassRegister: React.FC = () => {
                               }
                               recordPayment(student.id, true, amt);
                               showToast(`Successfully logged custom GHC ${amt.toFixed(2)} payment for ${student.name}!`);
+                              scrollToNextUnpaid(student.id);
                               setManualAmountStudentId(null);
                               setManualAmountValue('');
                             } else if (e.key === 'Escape') {
@@ -1182,6 +1434,7 @@ export const ClassRegister: React.FC = () => {
                             }
                             recordPayment(student.id, true, amt);
                             showToast(`Successfully logged custom GHC ${amt.toFixed(2)} payment for ${student.name}!`);
+                            scrollToNextUnpaid(student.id);
                             setManualAmountStudentId(null);
                             setManualAmountValue('');
                           }}
@@ -1201,6 +1454,11 @@ export const ClassRegister: React.FC = () => {
                         >
                           <X size={14} className="stroke-[3]" />
                         </button>
+                      </div>
+                    ) : isHoliday ? (
+                      <div className="flex items-center gap-2 px-6 py-2.5 bg-red-950/20 text-red-400 font-mono text-[10px] uppercase font-black tracking-widest border border-red-500/20 h-[42px] shrink-0 select-none">
+                        <Landmark size={14} className="text-red-500" />
+                        <span>CLOSED: HOLIDAY DETECTED</span>
                       </div>
                     ) : (
                       <>
@@ -1234,21 +1492,27 @@ export const ClassRegister: React.FC = () => {
                                 const discountAmount = student.discount || 0;
                                 const actualAmount = Math.max(0, 5.00 - discountAmount);
                                 showToast(`Logged GHC ${actualAmount.toFixed(2)} payment for ${student.name}.`);
+                                scrollToNextUnpaid(student.id);
                               } else if (action === 'ghc5') {
                                 recordPayment(student.id, true, 5.00);
                                 showToast(`Logged full GHC 5.00 payment for ${student.name} (discount ignored).`);
+                                scrollToNextUnpaid(student.id);
                               } else if (action === 'ghc4') {
                                 recordPayment(student.id, true, 4.00);
                                 showToast(`Logged custom GHC 4.00 payment for ${student.name}.`);
+                                scrollToNextUnpaid(student.id);
                               } else if (action === 'ghc3') {
                                 recordPayment(student.id, true, 3.00);
                                 showToast(`Logged custom GHC 3.00 payment for ${student.name}.`);
+                                scrollToNextUnpaid(student.id);
                               } else if (action === 'ghc2') {
                                 recordPayment(student.id, true, 2.00);
                                 showToast(`Logged custom GHC 2.00 payment for ${student.name}.`);
+                                scrollToNextUnpaid(student.id);
                               } else if (action === 'free') {
                                 recordPayment(student.id, true, 0.00);
                                 showToast(`Logged GHC 0.00 Scholarship for ${student.name}.`);
+                                scrollToNextUnpaid(student.id);
                               } else if (action === 'manual') {
                                 setManualAmountStudentId(student.id);
                                 const currentAmt = isPaid && paidInfo ? (payments.find(p => p.id === paidInfo.paymentId)?.amount ?? 5) : Math.max(0, 5 - (student.discount ?? 0));
@@ -1256,6 +1520,7 @@ export const ClassRegister: React.FC = () => {
                               } else if (action === 'absent') {
                                 recordAbsent(student.id);
                                 showToast(`Marked ${student.name} as absent today (treated as debt).`);
+                                scrollToNextUnpaid(student.id);
                               } else if (action === 'unpaid') {
                                 if (paidInfo) {
                                   deletePayment(paidInfo.paymentId);
@@ -1372,7 +1637,23 @@ export const ClassRegister: React.FC = () => {
                       </>
                     )}
                   </div>
+
+                  {/* Right Scroll Button Indicator for Action Drawer Buttons on Mobile */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const container = document.getElementById(`action-scroll-${student.id}`);
+                      if (container) {
+                        container.scrollBy({ left: 140, behavior: 'smooth' });
+                      }
+                    }}
+                    className="flex sm:hidden shrink-0 items-center justify-center w-8 h-[42px] bg-neutral-950 hover:bg-neutral-900 border-2 border-neutral-800 text-amber-400 active:scale-95 cursor-pointer z-10 ml-1.5"
+                    title="Scroll Buttons Right"
+                  >
+                    <ChevronRight size={16} className="stroke-[3]" />
+                  </button>
                 </div>
+              </div>
               );
             })}
           </div>
@@ -1395,7 +1676,7 @@ export const ClassRegister: React.FC = () => {
               
               <div className="relative group">
                 <div className="bg-neutral-950 text-emerald-400 font-mono text-[11px] p-5 border-2 border-neutral-850 leading-relaxed shadow-inner space-y-2 select-text">
-                  <p className="text-neutral-500 font-bold uppercase tracking-wider">Sender Mask: DailyFeeGhana</p>
+                  <p className="text-neutral-500 font-bold uppercase tracking-wider">Sender Mask: SaakoHoly</p>
                   <div className="flex items-center justify-between gap-2 border-b border-neutral-850 pb-2">
                     <p className="text-neutral-500 font-bold">Guardian: <span className="text-neutral-350 select-all">{guardianSmsStudent.guardianPhone}</span></p>
                     <button
@@ -2185,21 +2466,21 @@ export const ClassRegister: React.FC = () => {
                           <div className="space-y-2 bg-neutral-50 p-3.5 border border-neutral-200 rounded-xs font-sans">
                             <span className="text-[8px] font-black uppercase text-neutral-600 font-mono block">VERIFICATION STATEMENT</span>
                             <p className="text-[8px] text-neutral-550 leading-normal font-sans font-medium">
-                              Official statement of Saako Holy Child Academy daily gate receipt collections. Verified against local database nodes under the Ghana Education Trust. Please retain this physical docket for credentials validation.
+                              Official statement of Saako Holy Child Academy daily gate receipt collections. Verified against local database nodes under the Saako Holy Child Educational Trust. Please retain this physical docket for credentials validation.
                             </p>
                           </div>
 
                           <div className="text-right space-y-4 font-sans">
                             <div className="inline-block border-b-2 border-black w-48 h-10"></div>
                             <div className="text-[8.5px] font-black uppercase text-neutral-700 tracking-wider">
-                              Mrs. Grace Appiah (Headmistress)
+                              Yakubu Hakeem (Headmaster)
                               <span className="text-[8px] text-neutral-500 font-mono font-bold block mt-0.5 font-sans">SAAKO HOLY CHILD ACADEMY CHECKPOINT</span>
                             </div>
                           </div>
                         </div>
 
                         <div className="text-center text-[8px] font-mono text-neutral-400 font-bold uppercase tracking-widest pt-4 border-t border-neutral-100">
-                          Ghana Education Trust • Audited Statement System Release V1.4
+                          Saako Holy Child Trust • Audited Statement System Release V1.4
                         </div>
                       </div>
 
@@ -2525,6 +2806,79 @@ export const ClassRegister: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Sticky Bottom Class Quick-Switch Carousel ("Bottom Scroll Wheel") */}
+      <div className="fixed bottom-12 left-0 right-0 z-40 bg-neutral-900/95 backdrop-blur-md border-t-4 border-amber-400 p-2.5 flex items-center justify-between gap-3 shadow-[0_-8px_24px_rgba(0,0,0,0.6)] md:hidden">
+        {/* Left Scroll Click Action */}
+        <button
+          type="button"
+          onClick={() => {
+            const carousel = document.getElementById('bottom-class-carousel');
+            if (carousel) {
+              carousel.scrollBy({ left: -140, behavior: 'smooth' });
+            }
+          }}
+          className="bg-neutral-950 border-2 border-neutral-800 p-2 text-amber-400 hover:text-white transition-colors cursor-pointer shrink-0 flex items-center justify-center rounded-xs active:scale-95"
+          title="Scroll Left"
+        >
+          <ChevronLeft size={16} className="stroke-[3]" />
+        </button>
+
+        {/* Scrollable Container of Buttons */}
+        <div 
+          id="bottom-class-carousel"
+          className="flex-1 flex gap-2 overflow-x-auto whitespace-nowrap py-1 scroll-smooth scrollbar-none"
+          style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+        >
+          {['N1', 'N2', 'KG1', 'KG2', 'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9'].map((cls) => {
+            const isSelected = selectedClass === cls;
+            const count = classEnrolments[cls as StudentClass] || 0;
+            return (
+              <button
+                key={cls}
+                type="button"
+                onClick={() => {
+                  setSelectedClass(cls as StudentClass);
+                  // Scroll register list into view smoothly
+                  const listEl = document.getElementById('register-main-container');
+                  if (listEl) {
+                    listEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                  } else {
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                  }
+                }}
+                className={`inline-flex items-center gap-2 px-3.5 py-1.5 font-bold font-mono text-[10.5px] uppercase border transition-all shrink-0 rounded-xs ${
+                  isSelected
+                    ? 'bg-amber-400 text-black border-amber-400 font-black scale-102 shadow-sm animate-pulse'
+                    : 'bg-neutral-950 text-neutral-400 border-neutral-800 hover:border-neutral-700'
+                }`}
+              >
+                <span>{cls === 'B7' ? 'JHS1' : cls === 'B8' ? 'JHS2' : cls === 'B9' ? 'JHS3' : cls}</span>
+                <span className={`text-[8.5px] px-1 py-0.5 border font-semibold tracking-tighter ${
+                  isSelected ? 'bg-black/15 border-black/20 text-black' : 'bg-neutral-900 border-neutral-800 text-amber-500'
+                }`}>
+                  {count}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Right Scroll Click Action */}
+        <button
+          type="button"
+          onClick={() => {
+            const carousel = document.getElementById('bottom-class-carousel');
+            if (carousel) {
+              carousel.scrollBy({ left: 140, behavior: 'smooth' });
+            }
+          }}
+          className="bg-neutral-950 border-2 border-neutral-800 p-2 text-amber-400 hover:text-white transition-colors cursor-pointer shrink-0 flex items-center justify-center rounded-xs active:scale-95"
+          title="Scroll Right"
+        >
+          <ChevronRight size={16} className="stroke-[3]" />
+        </button>
+      </div>
     </div>
   );
 };

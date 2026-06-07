@@ -35,7 +35,7 @@ export const ReportPanel: React.FC = () => {
 
   // Email Summary sliding drawer state
   const [showEmailDrawer, setShowEmailDrawer] = useState(false);
-  const [recipientEmail, setRecipientEmail] = useState('accounting@school.edu.gh');
+  const [recipientEmail, setRecipientEmail] = useState('saakohca@gmail.com');
   const [emailStatus, setEmailStatus] = useState<{ success: boolean; message: string; textUrl: string } | null>(null);
   const [emailLoading, setEmailLoading] = useState(false);
 
@@ -43,9 +43,12 @@ export const ReportPanel: React.FC = () => {
   const [showPrintModal, setShowPrintModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
+  const [showPrintFriendlyModal, setShowPrintFriendlyModal] = useState(false);
+  const [printFriendlySignatory, setPrintFriendlySignatory] = useState('Yakubu Hakeem (Headmaster)');
+  const [printFriendlyMemo, setPrintFriendlyMemo] = useState('This is an official audited transcript of Saako Holy Child Academy daily ledger. Please verify all entries and signatures.');
   const [previewPage, setPreviewPage] = useState(1);
   const [customMemo, setCustomMemo] = useState('Official statement of student daily schooling fee collections. Please retain this signature receipt for authentication.');
-  const [authorizedBy, setAuthorizedBy] = useState('Mrs. Grace Appiah (Headmistress)');
+  const [authorizedBy, setAuthorizedBy] = useState('Yakubu Hakeem (Headmaster)');
   const [includeUnverified, setIncludeUnverified] = useState(true);
   const [printDateMode, setPrintDateMode] = useState<'current' | 'custom'>('current');
   const [printStartDate, setPrintStartDate] = useState('');
@@ -285,7 +288,10 @@ export const ReportPanel: React.FC = () => {
     let missing = 0;
     let future = 0;
 
+    const holidays = activeTerm.publicHolidays || [];
     activeTerm.schoolDays.forEach(dayStr => {
+      if (holidays.includes(dayStr)) return; // Exclude public holidays
+
       if (dayStr > currentDate) {
         future++;
       } else {
@@ -465,6 +471,16 @@ export const ReportPanel: React.FC = () => {
             className="flex-1 sm:flex-initial text-[10px] font-black bg-neutral-950 hover:bg-neutral-850 hover:text-white text-emerald-400 py-3.5 px-4 transition-all border-2 border-neutral-800 hover:border-emerald-400 uppercase tracking-widest cursor-pointer flex items-center justify-center gap-1.5"
           >
             <Eye size={14} /> Preview Report
+          </button>
+
+          {/* Print Friendly button */}
+          <button
+            onClick={() => {
+              setShowPrintFriendlyModal(true);
+            }}
+            className="flex-1 sm:flex-initial text-[10px] font-black bg-neutral-950 hover:bg-neutral-850 hover:text-white text-blue-400 py-3.5 px-4 transition-all border-2 border-neutral-800 hover:border-blue-400 uppercase tracking-widest cursor-pointer flex items-center justify-center gap-1.5"
+          >
+            <Printer size={14} /> Print Friendly
           </button>
 
           {/* Download CSV audit core */}
@@ -955,7 +971,7 @@ export const ReportPanel: React.FC = () => {
                   )}
 
                   <div className="text-[8.5px] font-mono uppercase text-neutral-500 tracking-wider text-center pt-2.5 border-t border-neutral-900 leading-none">
-                    Ghana Education Trust • Audits Version V1.4
+                    Saako Holy Child Trust • Audits Version V1.4
                   </div>
                 </div>
               </div>
@@ -1057,7 +1073,7 @@ export const ReportPanel: React.FC = () => {
                   type="email"
                   value={recipientEmail}
                   onChange={(e) => setRecipientEmail(e.target.value)}
-                  placeholder="accounting@school.edu.gh"
+                  placeholder="saakohca@gmail.com"
                   className="w-full bg-neutral-950 border-2 border-neutral-800 py-3.5 px-4 text-xs font-mono outline-none focus:border-amber-400 text-white font-bold"
                 />
               </div>
@@ -1111,7 +1127,7 @@ export const ReportPanel: React.FC = () => {
                       {`SUBJECT: Daily School Fee Tracker - Automated Monthly Audit Summary
 TO: ${recipientEmail}
 
-Ghanaian Educational Trust Daily Fee Tracker Report
+Saako educational trust Daily Fee Tracker Report
 -------------------------------------------------------
 Scope Period: May 2026 Monthly Summary
 Total Verified Fees Collected: GHC [SUM]
@@ -1341,6 +1357,7 @@ B7 to B9: GHC [SUM]`}
                 type="button"
                 onClick={() => {
                   if (typeof window !== 'undefined') {
+                    window.focus();
                     window.print();
                   }
                 }}
@@ -1393,7 +1410,8 @@ B7 to B9: GHC [SUM]`}
                   let totalDebt = 0;
                   let unpaidDaysCount = 0;
                   if (activeTerm && activeTerm.schoolDays && sProfile) {
-                    const pastSchoolDays = activeTerm.schoolDays.filter(d => d < currentDate);
+                    const holidays = activeTerm.publicHolidays || [];
+                    const pastSchoolDays = activeTerm.schoolDays.filter(d => d < currentDate && !holidays.includes(d));
                     const unpaidDays = pastSchoolDays.filter(dStr => {
                       return !payments.some(p => p.studentId === sProfile.id && p.date === dStr);
                     });
@@ -1859,6 +1877,296 @@ B7 to B9: GHC [SUM]`}
               >
                 Close Preview
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PRINT FRIENDLY MODAL - PDF/PRINTER READY STRUCTURE FOR CURRENT FILTERED DATA */}
+      {showPrintFriendlyModal && (
+        <div className="fixed inset-0 z-50 overflow-hidden bg-neutral-950 flex flex-col md:flex-row font-sans">
+          {/* CUSTOM STYLE INJECTIONS FOR FLUID AND RELIABLE A4 PORTRAIT PRINTING */}
+          <style dangerouslySetInnerHTML={{ __html: `
+            @media print {
+              body * {
+                visibility: hidden !important;
+              }
+              #print-friendly-area, #print-friendly-area * {
+                visibility: visible !important;
+              }
+              #print-friendly-area {
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 100% !important;
+                margin: 0 !important;
+                padding: 12mm !important;
+                background: white !important;
+                color: black !important;
+                font-family: ui-sans-serif, system-ui, -apple-system, sans-serif !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+              }
+              .no-print {
+                display: none !important;
+              }
+              /* Standard high-fidelity styling rules for printed sheets */
+              table {
+                width: 100% !important;
+                border-collapse: collapse !important;
+              }
+              th, td {
+                border: 1px solid #c0c0c0 !important;
+                padding: 6px 8px !important;
+                font-size: 10px !important;
+              }
+              th {
+                background-color: #f3f4f6 !important;
+                font-weight: bold !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+              }
+            }
+          `}} />
+
+          {/* CONTROL PANEL COLUMN (HIDDEN IN PRINTING) */}
+          <div className="w-full md:w-96 bg-neutral-900 border-r-4 border-neutral-800 flex flex-col h-full overflow-y-auto no-print p-6 space-y-6 text-white shrink-0">
+            <div className="border-b border-neutral-855 pb-4">
+              <span className="text-[10px] text-blue-400 font-mono tracking-widest font-black uppercase block">Saako Holy Child Trust</span>
+              <h3 className="text-sm font-black text-white uppercase tracking-widest flex items-center gap-2 mt-1">
+                <Printer size={18} className="text-blue-400" /> PRINT FRIENDLY LEDGER
+              </h3>
+            </div>
+
+            {/* Config Fields */}
+            <div className="space-y-4">
+              <h4 className="text-[10px] font-mono uppercase font-black text-neutral-450 tracking-wider">Document Settings</h4>
+              
+              {/* Authorized Signatory field */}
+              <div className="space-y-1">
+                <label className="text-[9px] font-mono uppercase font-black text-neutral-500 block">Authorized Signatory Name</label>
+                <input
+                  type="text"
+                  value={printFriendlySignatory}
+                  onChange={(e) => setPrintFriendlySignatory(e.target.value)}
+                  className="w-full bg-neutral-950 border-2 border-neutral-850 hover:border-neutral-700 px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-blue-400 font-bold"
+                  placeholder="e.g. Yakubu Hakeem (Headmaster)"
+                />
+              </div>
+
+              {/* Custom Footnotes / Verification Memos */}
+              <div className="space-y-1">
+                <label className="text-[9px] font-mono uppercase font-black text-neutral-500 block">Statement Annotation Memo</label>
+                <textarea
+                  rows={4}
+                  value={printFriendlyMemo}
+                  onChange={(e) => setPrintFriendlyMemo(e.target.value)}
+                  className="w-full bg-neutral-950 border-2 border-neutral-850 hover:border-neutral-700 px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-blue-400 text-[11px] leading-relaxed resize-none"
+                  placeholder="Add custom annotations or compliance guidelines..."
+                />
+              </div>
+            </div>
+
+            {/* Document Statistics Board */}
+            <div className="bg-neutral-950 border border-neutral-850 p-4 space-y-3 font-mono">
+              <span className="text-[9px] font-mono uppercase text-neutral-500 font-extrabold block">Print Batch Valuation</span>
+              <div className="space-y-1.5 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-neutral-500">Total Entries:</span>
+                  <span className="text-white font-extrabold">{filteredPayments.length} rows</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-neutral-550">Sum Amount:</span>
+                  <span className="text-emerald-400 font-extrabold">GHC {totalsInfo.totalCollected.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-neutral-550">Unverified rows:</span>
+                  <span className="text-amber-500 font-extrabold">{totalsInfo.unverifiedCount} matching</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Manual actions area */}
+            <div className="pt-2 space-y-2">
+              <button
+                type="button"
+                onClick={() => {
+                  if (typeof window !== 'undefined') {
+                    window.focus();
+                    window.print();
+                  }
+                }}
+                disabled={filteredPayments.length === 0}
+                className="w-full py-4 text-xs font-black uppercase text-white bg-blue-600 hover:bg-blue-500 disabled:bg-neutral-800 disabled:text-neutral-550 transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg"
+              >
+                <Printer size={15} /> COMPILE AND PRINT PDF
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowPrintFriendlyModal(false)}
+                className="w-full py-3.5 text-xs font-black uppercase text-neutral-450 hover:text-white bg-neutral-950 hover:bg-neutral-850 border border-neutral-800 transition-colors cursor-pointer"
+              >
+                DISMISS SYSTEM
+              </button>
+            </div>
+          </div>
+
+          {/* HIGH-FIDELITY LIVE A4 SHEET WORKSPACE */}
+          <div className="flex-1 overflow-y-auto bg-neutral-950 p-4 md:p-8 no-print-scroll scrollbar-thin">
+            
+            {/* Real-time Document Compilation Indicator */}
+            <div className="max-w-[210mm] mx-auto flex items-center justify-between no-print border-b border-neutral-850 pb-3 mb-6 font-mono">
+              <span className="text-[10px] font-black uppercase text-neutral-400 flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-blue-500 animate-pulse"></span>
+                LIVE REPORT PREPARATION HARNESS • {filteredPayments.length} ENTRIES LOADED
+              </span>
+              <span className="text-[10px] text-neutral-500">GRAYSCALE PRINT-SAFE GRAPHICS</span>
+            </div>
+
+            {/* PRINT PORTRAIT SKELETON CANVAS */}
+            <div 
+              id="print-friendly-area" 
+              className="bg-white text-black p-10 md:p-12 shadow-2xl max-w-[210mm] mx-auto min-h-[297mm] flex flex-col justify-between border border-neutral-300 font-sans"
+            >
+              
+              {/* UPPER SECTION: Headings, Metadata, and Financial Matrix */}
+              <div className="space-y-6">
+                
+                {/* Official Crest Headings Banner */}
+                <div className="border-b-4 border-neutral-900 pb-4 flex justify-between items-start">
+                  <div className="space-y-1">
+                    <span className="text-[9px] font-bold text-neutral-600 font-mono tracking-widest uppercase block">
+                      OFFICIAL ADMINISTRATIVE AUDIT RECORD
+                    </span>
+                    <h2 className="text-2xl font-black uppercase tracking-tight leading-none text-black">
+                      SAAKO HOLY CHILD ACADEMY
+                    </h2>
+                    <p className="text-[10px] text-neutral-600 font-black uppercase tracking-widest font-mono leading-none mt-1">
+                      Holiness is our Key, P. O. Box ls15, Sawla-Savannah. Tel: +233545029200 / +2330507274133
+                    </p>
+                  </div>
+
+                  <div className="text-right space-y-1 font-mono">
+                    <span className="text-[10px] font-black uppercase px-2.5 py-1 bg-neutral-200 border border-black text-black inline-block leading-none">
+                      LEDGER STATEMENT
+                    </span>
+                    <div className="text-[8px] text-neutral-500 font-bold mt-1">
+                      RUN DATE: {new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute:'2-digit' })}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Scope Filters and Transaction Summary Metrics */}
+                <div className="grid grid-cols-4 gap-4 bg-neutral-50 p-4 border border-neutral-300 font-mono text-[10px] uppercase leading-relaxed text-neutral-800">
+                  <div className="space-y-0.5">
+                    <span className="text-[8px] text-neutral-500 font-black block">ACADEMIC COHORT FILTER</span>
+                    <span className="font-extrabold text-black">{classFilter === 'ALL' ? 'ALL GRADES / CLASSES' : `GRADE CLASS ${classFilter}`}</span>
+                  </div>
+                  <div className="space-y-0.5 border-l border-neutral-300 pl-3">
+                    <span className="text-[8px] text-neutral-500 font-black block">DEMOGRAPHIC RANGE</span>
+                    <span className="font-extrabold text-black">{categoryFilter === 'ALL' ? 'ALL GROUPS (BOARD/DAY)' : categoryFilter}</span>
+                  </div>
+                  <div className="space-y-0.5 border-l border-neutral-300 pl-3">
+                    <span className="text-[8px] text-neutral-500 font-black block">VALUATION BALANCE</span>
+                    <span className="font-extrabold text-emerald-700 text-xs">GHC {totalsInfo.totalCollected.toFixed(2)}</span>
+                  </div>
+                  <div className="space-y-0.5 border-l border-neutral-300 pl-3">
+                    <span className="text-[8px] text-neutral-500 font-black block">RECORD LENGTH</span>
+                    <span className="font-extrabold text-black">{filteredPayments.length} ROWS MATCHED</span>
+                  </div>
+                </div>
+
+                {/* LEDGER GRID TABLE */}
+                <div className="overflow-hidden border border-neutral-300">
+                  <table className="w-full text-left text-[11px] border-collapse leading-normal font-sans">
+                    <thead className="bg-neutral-100 font-mono text-[9px] uppercase tracking-wider text-black border-b-2 border-neutral-400">
+                      <tr>
+                        <th className="p-2 border border-neutral-300 text-center font-bold w-10">#</th>
+                        <th className="p-2 border border-neutral-300 font-bold">TRANSACTION DATE</th>
+                        <th className="p-2 border border-neutral-300 font-bold">PUPIL BENEFICIARY</th>
+                        <th className="p-2 border border-neutral-300 text-center font-bold">GRADE</th>
+                        <th className="p-2 border border-neutral-300 font-bold">DEMOGRAPHIC</th>
+                        <th className="p-2 border border-neutral-300 text-right font-bold flex-1">FEE (GHC)</th>
+                        <th className="p-2 border border-neutral-300 font-bold">RECEIPT ID / REF</th>
+                        <th className="p-2 border border-neutral-300 text-center font-bold">VERIFICATION STATUS</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-neutral-300">
+                      {filteredPayments.length === 0 ? (
+                        <tr>
+                          <td colSpan={8} className="text-center py-8 text-neutral-400 italic">
+                            No ledger entries listed in active session.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredPayments.map((p, idx) => (
+                          <tr key={p.id} className="hover:bg-neutral-50">
+                            <td className="p-2 border border-neutral-300 text-center font-mono">{idx + 1}</td>
+                            <td className="p-2 border border-neutral-300 font-mono text-neutral-600">{p.date}</td>
+                            <td className="p-2 border border-neutral-300 font-bold uppercase">{p.studentName}</td>
+                            <td className="p-2 border border-neutral-300 text-center font-mono font-semibold text-neutral-800">{p.class}</td>
+                            <td className="p-2 border border-neutral-300 text-xs text-neutral-700 font-medium uppercase font-mono">{p.category}</td>
+                            <td className="p-2 border border-neutral-300 text-right font-mono font-bold">GHC {p.amount.toFixed(2)}</td>
+                            <td className="p-2 border border-neutral-300 font-mono text-[9px] text-neutral-600">{p.id.toUpperCase().substring(0, 10)}...</td>
+                            <td className="p-2 border border-neutral-300 text-center font-mono text-[9px]">
+                              {p.verified ? 'APPROVED' : 'PENDING APPROVAL'}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Custom annotations and regulatory stamps */}
+                {printFriendlyMemo && (
+                  <div className="bg-neutral-50 p-3.5 border border-neutral-300 rounded-px text-[10px] leading-relaxed text-neutral-600 italic">
+                    <span className="font-bold text-neutral-800 uppercase not-italic block mb-1 text-[8px] tracking-wide">
+                      AUDIT STATION COMMENTS & MEMORANDUM
+                    </span>
+                    {printFriendlyMemo}
+                  </div>
+                )}
+              </div>
+
+              {/* LOWER SECTION: Signature Blocks & Security Seals */}
+              <div className="pt-8 mt-8 border-t border-neutral-300 flex justify-between items-end gap-6 shrink-0">
+                
+                {/* Signatures Structure */}
+                <div className="flex-1 grid grid-cols-2 gap-6 text-[10px] leading-relaxed">
+                  <div className="space-y-4">
+                    <span className="text-neutral-500 font-black uppercase text-[8px] block">PREPARED & VERIFIED BY:</span>
+                    <div className="h-10 border-b border-black w-44"></div>
+                    <div>
+                      <span className="text-black font-extrabold uppercase">ASSIGNED DESK OFFICER</span>
+                      <span className="text-neutral-500 block text-[9px]">Class Gate Supervisor / Auditor</span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <span className="text-neutral-500 font-black uppercase text-[8px] block">APPROVED & COUNTERSIGNED BY:</span>
+                    <div className="h-10 border-b border-black w-44"></div>
+                    <div>
+                      <span className="text-black font-extrabold uppercase">{printFriendlySignatory}</span>
+                      <span className="text-neutral-500 block text-[9px]">Saako Holy Child Board Exec</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* SAAKO HOLY CHILD ACADEMY SEAL */}
+                <div className="shrink-0 flex flex-col items-center justify-center">
+                  <div className="h-20 w-20 rounded-full border-2 border-dashed border-indigo-500/80 p-1 flex flex-col items-center justify-center text-center select-none font-mono bg-indigo-50/50 shadow-inner">
+                    <div className="rounded-full border border-amber-500/60 bg-white h-full w-full flex flex-col items-center justify-center p-1 font-mono uppercase text-center leading-[1.1] shadow-sm">
+                      <span className="text-[7px] text-indigo-900 font-extrabold block">SAAKO TRUST</span>
+                      <span className="text-[6px] text-amber-600 font-black block mt-0.5 tracking-wider">VALID SEAL</span>
+                      <span className="text-[5px] text-indigo-700 block font-bold">SAWLA-SAVANNAH</span>
+                    </div>
+                  </div>
+                  <span className="text-[7px] font-mono text-indigo-500 uppercase tracking-widest mt-1 block font-bold">OFFICIAL IMPRESS</span>
+                </div>
+              </div>
+
             </div>
           </div>
         </div>

@@ -11,6 +11,7 @@ interface DatabaseSchema {
   users: any[];
   students: any[];
   payments: any[];
+  terms?: any[];
 }
 
 function loadDatabase(): DatabaseSchema {
@@ -22,7 +23,7 @@ function loadDatabase(): DatabaseSchema {
   } catch (error) {
     console.error("Failed to load local DB file, using fallback:", error);
   }
-  return { users: [], students: [], payments: [] };
+  return { users: [], students: [], payments: [], terms: [] };
 }
 
 function saveDatabase(data: DatabaseSchema) {
@@ -98,6 +99,38 @@ async function bootstrapCloudSeeding() {
           chunk.forEach(item => {
             if (item && item.id) {
               batch.set(doc(firestoreDb, "payments", item.id), item);
+            }
+          });
+          await batch.commit();
+        }
+      }
+
+      // Seed Terms
+      let termsToSeed = local.terms || [];
+      if (termsToSeed.length === 0) {
+        const defaultTerms = [{
+          id: 'term_default',
+          name: 'Term 1 (May/June 2026)',
+          startDate: '2026-05-25',
+          daysCount: 15,
+          schoolDays: [
+            "2026-05-25", "2026-05-26", "2026-05-27", "2026-05-28", "2026-05-29",
+            "2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04", "2026-06-05",
+            "2026-06-08", "2026-06-09", "2026-06-10", "2026-06-11", "2026-06-12"
+          ],
+          active: true
+        }];
+        termsToSeed = defaultTerms;
+        local.terms = defaultTerms;
+        saveDatabase(local);
+      }
+      if (termsToSeed.length > 0) {
+        for (let i = 0; i < termsToSeed.length; i += 400) {
+          const chunk = termsToSeed.slice(i, i + 400);
+          const batch = writeBatch(firestoreDb);
+          chunk.forEach(item => {
+            if (item && item.id) {
+              batch.set(doc(firestoreDb, "terms", item.id), item);
             }
           });
           await batch.commit();
@@ -383,13 +416,14 @@ async function startServer() {
 
   // POST /api/seed
   app.post("/api/seed", async (req, res) => {
-    const { users, students, payments } = req.body;
+    const { users, students, payments, terms } = req.body;
     
     // Save to local cache backup
     const dbLocal = loadDatabase();
     dbLocal.users = users || dbLocal.users;
     dbLocal.students = students || dbLocal.students;
     dbLocal.payments = payments || dbLocal.payments;
+    dbLocal.terms = terms || dbLocal.terms;
     saveDatabase(dbLocal);
 
     if (firestoreDb) {
@@ -411,8 +445,103 @@ async function startServer() {
         if (users) await seedCol("users", users);
         if (students) await seedCol("students", students);
         if (payments) await seedCol("payments", payments);
+        if (terms) await seedCol("terms", terms);
       } catch (e) {
         console.error("Firestore complete seeding failed:", e);
+      }
+    }
+    res.json({ success: true });
+  });
+
+  // GET /api/terms
+  app.get("/api/terms", async (req, res) => {
+    if (firestoreDb) {
+      try {
+        const qSnaps = await getDocs(collection(firestoreDb, "terms"));
+        const list = qSnaps.docs.map(d => d.data());
+        // Sync local cache
+        const dbLocal = loadDatabase();
+        dbLocal.terms = list;
+        saveDatabase(dbLocal);
+        return res.json(list);
+      } catch (e) {
+        console.error("Firestore getTerms failed, falling back to local database:", e);
+      }
+    }
+    const db = loadDatabase();
+    res.json(db.terms || []);
+  });
+
+  // POST /api/terms
+  app.post("/api/terms", async (req, res) => {
+    const term = req.body;
+
+    // Save to local cache backup
+    const dbLocal = loadDatabase();
+    if (!dbLocal.terms) dbLocal.terms = [];
+    const idx = dbLocal.terms.findIndex((t) => t.id === term.id);
+    if (idx >= 0) {
+      dbLocal.terms[idx] = term;
+    } else {
+      dbLocal.terms.push(term);
+    }
+    saveDatabase(dbLocal);
+
+    if (firestoreDb) {
+      try {
+        await setDoc(doc(firestoreDb, "terms", term.id), term);
+      } catch (e) {
+        console.error("Firestore saveTerm failed:", e);
+      }
+    }
+    res.json({ success: true });
+  });
+
+  // POST /api/terms/batch
+  app.post("/api/terms/batch", async (req, res) => {
+    const terms = req.body;
+    if (!Array.isArray(terms)) {
+      return res.status(400).json({ error: "Terms must be an array" });
+    }
+
+    // Save to local cache backup
+    const dbLocal = loadDatabase();
+    dbLocal.terms = terms;
+    saveDatabase(dbLocal);
+
+    if (firestoreDb) {
+      try {
+        for (let i = 0; i < terms.length; i += 400) {
+          const chunk = terms.slice(i, i + 400);
+          const batch = writeBatch(firestoreDb);
+          chunk.forEach((t) => {
+            batch.set(doc(firestoreDb, "terms", t.id), t);
+          });
+          await batch.commit();
+        }
+      } catch (e) {
+        console.error("Firestore saveTerms batch failed:", e);
+      }
+    }
+    res.json({ success: true });
+  });
+
+  // DELETE /api/terms/:id
+  app.delete("/api/terms/:id", async (req, res) => {
+    const id = req.params.id;
+
+    // Save to local cache backup
+    const dbLocal = loadDatabase();
+    if (dbLocal.terms) {
+      dbLocal.terms = dbLocal.terms.filter((t) => t.id !== id);
+      saveDatabase(dbLocal);
+    }
+
+    if (firestoreDb) {
+      try {
+        await deleteDoc(doc(firestoreDb, "terms", id));
+      } catch (e) {
+        console.error("Firestore deleteTerm failed:", e);
       }
     }
     res.json({ success: true });

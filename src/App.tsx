@@ -463,7 +463,7 @@ function NavigationWrapper() {
           </div>
         </div>
         <div className="text-[9px] font-black text-neutral-600 uppercase tracking-wider hidden sm:block">
-          &copy; {new Date().getFullYear()} SAAKO HOLY CHILD ACADEMY • Ghana Education Ledger Authority
+          &copy; {new Date().getFullYear()} SAAKO HOLY CHILD ACADEMY • Saako Holy Child Ledger Authority
         </div>
       </footer>
 

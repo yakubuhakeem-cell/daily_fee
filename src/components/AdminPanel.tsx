@@ -6,7 +6,7 @@
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { StudentClass, Student, UserRole } from '../types';
-import { Plus, UserPlus, Trash2, Edit2, ShieldAlert, Check, X, ToggleLeft, ToggleRight, Database, Server, RefreshCw, Copy, Share2, Users, BellRing, MessageSquareCode, UserCheck, Camera, Upload } from 'lucide-react';
+import { Plus, UserPlus, Trash2, Edit2, ShieldAlert, Check, X, ToggleLeft, ToggleRight, Database, Server, RefreshCw, Copy, Share2, Users, BellRing, MessageSquareCode, UserCheck, Camera, Upload, Search } from 'lucide-react';
 import { getClassCategory } from '../initialData';
 
 export const AdminPanel: React.FC = () => {
@@ -37,23 +37,45 @@ export const AdminPanel: React.FC = () => {
     activeTerm,
     payments,
     resetData,
-    purgeDeactivatedStudents
+    purgeDeactivatedStudents,
+    backups,
+    createBackup,
+    restoreBackup,
+    deleteBackup,
+    clearAllBackups,
+    nextBackupTimeLeft
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<'students' | 'mfa' | 'gates' | 'database'>('students');
   const [studentFilter, setStudentFilter] = useState<'all' | 'active' | 'inactive'>('all');
+  const [searchQuery, setSearchQuery] = useState('');
   const [showLedgerSwitchModal, setShowLedgerSwitchModal] = useState(false);
   const [isSyncingTransition, setIsSyncingTransition] = useState(false);
   const [copiedAddress, setCopiedAddress] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [backupLabel, setBackupLabel] = useState('');
+  const [showRestoreConfirmId, setShowRestoreConfirmId] = useState<string | null>(null);
+  const [showBackupPurgeConfirm, setShowBackupPurgeConfirm] = useState(false);
 
-  // Filter students based on state (active, inactive, or all)
+  // Filter students based on state (active, inactive, or all) and search query
   const filteredStudentsForList = useMemo(() => {
-    if (studentFilter === 'active') return students.filter(st => st.active);
-    if (studentFilter === 'inactive') return students.filter(st => !st.active);
-    return students;
-  }, [students, studentFilter]);
+    let list = students;
+    if (studentFilter === 'active') {
+      list = students.filter(st => st.active);
+    } else if (studentFilter === 'inactive') {
+      list = students.filter(st => !st.active);
+    }
+    
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase().trim();
+      list = list.filter(st => 
+        st.name.toLowerCase().includes(query) || 
+        st.id.toLowerCase().includes(query)
+      );
+    }
+    return list;
+  }, [students, studentFilter, searchQuery]);
 
   // State for SMS Modal
   const [smsTarget, setSmsTarget] = useState<{
@@ -1159,6 +1181,27 @@ export const AdminPanel: React.FC = () => {
               </div>
             </div>
 
+            {/* Quick Pupil Lookup Bar */}
+            <div className="px-6 py-4 bg-neutral-950/60 border-b-2 border-neutral-850 flex items-center gap-3">
+              <Search size={14} className="text-neutral-500 shrink-0" />
+              <input
+                type="text"
+                placeholder="Search student by name or ID..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full bg-transparent border-0 p-0 text-xs text-white placeholder-neutral-650 focus:outline-none focus:ring-0 font-mono font-bold uppercase tracking-wider"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="text-[10px] font-mono font-black text-neutral-400 hover:text-white uppercase transition-all cursor-pointer"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+
             <div className="divide-y-2 divide-neutral-850 overflow-y-auto max-h-[480px]">
               {filteredStudentsForList.length === 0 ? (
                 <div className="p-12 text-center text-xs font-mono font-black uppercase text-neutral-500 tracking-wider">
@@ -2079,6 +2122,188 @@ export const AdminPanel: React.FC = () => {
               </div>
             </div>
 
+            {/* Local Offline Backups & Recovery Hub */}
+            <div className="bg-neutral-950 border-2 border-neutral-800 p-6 space-y-5">
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center pb-4 border-b border-neutral-850 gap-4">
+                <div className="space-y-1">
+                  <span className="text-[10px] font-black tracking-widest uppercase font-mono text-amber-500 flex items-center gap-1.5">
+                    <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                    Recurring 30-Minute Task Active
+                  </span>
+                  <h4 className="text-base font-black uppercase text-white leading-tight font-mono flex items-center gap-2 block">
+                    <Database size={18} className="text-amber-400" />
+                    Offline Local Backup & Recovery Hub
+                  </h4>
+                  <p className="text-xs text-neutral-400 leading-relaxed font-semibold">
+                    Automated background task captures state snapshots every 30 minutes. Securely guards directories, terms, and billing logs against data loss in Offline mode.
+                  </p>
+                </div>
+
+                <div className="flex flex-row md:flex-col items-end gap-1.5 bg-neutral-900 border border-neutral-850 px-4 py-2.5 font-mono select-none shrink-0 w-full md:w-auto text-right">
+                  <div className="text-[10px] uppercase text-neutral-500 font-bold tracking-wider">Next Auto Backup In</div>
+                  <div className="text-lg font-black text-white leading-none">
+                    {Math.floor(nextBackupTimeLeft / 60)}m {(nextBackupTimeLeft % 60).toString().padStart(2, '0')}s
+                  </div>
+                </div>
+              </div>
+
+              {/* Create Manual Backup Trigger bar */}
+              <div className="bg-neutral-900 border border-neutral-850 p-4 flex flex-col md:flex-row items-center gap-4">
+                <div className="relative flex-1 w-full">
+                  <input
+                    type="text"
+                    placeholder="Enter manual backup label (e.g., Before class merge)..."
+                    value={backupLabel}
+                    onChange={(e) => setBackupLabel(e.target.value)}
+                    maxLength={60}
+                    className="w-full bg-neutral-950 border-2 border-neutral-800 px-4 py-2 text-xs font-mono font-bold text-white uppercase placeholder-neutral-600 focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    createBackup(backupLabel.trim() || undefined, false);
+                    setBackupLabel('');
+                    showToast('Captured fresh local database snapshot.');
+                  }}
+                  className="w-full md:w-auto shrink-0 px-5 py-2.5 bg-neutral-850 hover:bg-neutral-800 text-white font-black text-xs uppercase tracking-widest font-mono transition-colors cursor-pointer border-2 border-neutral-750"
+                >
+                  Create Snapshot
+                </button>
+              </div>
+
+              {/* Backups List */}
+              <div className="space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="text-[10px] font-black tracking-widest uppercase font-mono text-neutral-500">
+                    Stored Snapshots ({backups.length}/10 slots used)
+                  </span>
+                  {backups.length > 0 && (
+                    <div className="shrink-0">
+                      {showBackupPurgeConfirm ? (
+                        <div className="flex items-center gap-2">
+                          <span className="text-[9px] font-mono font-bold uppercase text-red-400 animate-pulse">WIPE ALL?</span>
+                          <button
+                            type="button"
+                            onClick={() => setShowBackupPurgeConfirm(false)}
+                            className="text-[9px] font-bold uppercase text-neutral-400 hover:text-white underline font-mono cursor-pointer"
+                          >
+                            CANCEL
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              clearAllBackups();
+                              setShowBackupPurgeConfirm(false);
+                              showToast('Cleared all local backups.');
+                            }}
+                            className="text-[9px] font-bold uppercase text-red-500 hover:text-red-400 underline font-mono cursor-pointer"
+                          >
+                            CONFIRM
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setShowBackupPurgeConfirm(true)}
+                          className="text-[9px] font-bold uppercase text-neutral-500 hover:text-red-400 underline font-mono transition-colors cursor-pointer"
+                        >
+                          Purge Backup Cache
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {backups.length === 0 ? (
+                  <div className="border border-dashed border-neutral-800 p-8 text-center text-neutral-500 space-y-1.5 font-mono select-none">
+                    <Database size={24} className="mx-auto text-neutral-700 stroke-[1.5]" />
+                    <p className="text-xs uppercase font-extrabold tracking-wider text-neutral-400">No backup records saved</p>
+                    <p className="text-[10px] font-medium leading-relaxed max-w-lg mx-auto uppercase">
+                      The automated timer will automatically capture database state. Try creating a manual snapshot above to protect changes dynamically.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="max-h-[300px] overflow-y-auto space-y-3.5 pr-2 custom-scrollbar">
+                    {backups.map(b => (
+                      <div key={b.id} className="bg-neutral-900 border border-neutral-850 p-4.5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 hover:border-neutral-700 transition">
+                        <div className="space-y-1.5 flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-mono text-xs font-black uppercase text-white truncate max-w-[280px]">
+                              {b.label}
+                            </span>
+                            <span className={`text-[9px] font-black tracking-widest uppercase font-mono px-2 py-0.5 border leading-none shrink-0 ${
+                              b.isAuto 
+                                ? 'bg-amber-950/20 border-amber-500/20 text-amber-500' 
+                                : 'bg-blue-950/20 border-blue-500/20 text-blue-400'
+                            }`}>
+                              {b.isAuto ? 'AUTO' : 'MANUAL'}
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 font-mono text-[10px] leading-none text-neutral-400 font-semibold uppercase">
+                            <span>Students: <strong className="text-white">{b.counts.students}</strong></span>
+                            <span className="border-l border-neutral-800 h-2.5"></span>
+                            <span>Payments: <strong className="text-white">{b.counts.payments}</strong></span>
+                            <span className="border-l border-neutral-800 h-2.5"></span>
+                            <span>Terms: <strong className="text-white">{b.counts.terms}</strong></span>
+                            <span className="border-l border-neutral-800 h-2.5"></span>
+                            <span className="text-neutral-500 font-bold">{b.timestamp}</span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-3 shrink-0 self-end sm:self-auto">
+                          {showRestoreConfirmId === b.id ? (
+                            <div className="flex items-center gap-2 font-mono">
+                              <span className="text-[10px] font-black uppercase tracking-wider text-amber-500 animate-pulse">ROLLBACK?</span>
+                              <button
+                                type="button"
+                                onClick={() => setShowRestoreConfirmId(null)}
+                                className="px-2.5 py-1.5 border border-neutral-800 hover:border-neutral-750 text-[10px] font-black uppercase tracking-wider text-neutral-400 hover:text-white transition cursor-pointer"
+                              >
+                                CANCEL
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  restoreBackup(b.id);
+                                  setShowRestoreConfirmId(null);
+                                  showToast(`Restored base state from snapshot: "${b.label}"`);
+                                }}
+                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white border-2 border-emerald-500 text-[10px] font-black uppercase tracking-wider transition cursor-pointer"
+                              >
+                                CONFIRM
+                              </button>
+                            </div>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => setShowRestoreConfirmId(b.id)}
+                                className="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-black text-[10px] uppercase font-mono tracking-widest border border-neutral-700 transition cursor-pointer"
+                              >
+                                Restore
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  deleteBackup(b.id);
+                                  showToast('Selected backup snapshot deleted.');
+                                }}
+                                className="p-2 text-neutral-500 hover:text-red-400 hover:bg-neutral-800/40 rounded transition cursor-pointer"
+                                title="Delete backup"
+                              >
+                                <X size={14} className="stroke-[3]" />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
             {/* Clear Sample / Start Live Data System Utility */}
             <div className="bg-neutral-950 border-2 border-red-950/60 p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-6 relative">
               <div className="space-y-1.5 max-w-2xl">
@@ -2345,7 +2570,7 @@ export const AdminPanel: React.FC = () => {
                   <div className="text-emerald-400">
                     <span className="text-neutral-500 font-bold uppercase tracking-wider block">Sender Mask: SAAKOCHECK (URGENT)</span>
                     <p className="border-t border-neutral-800/80 my-2 pt-2" />
-                    <p>Hello. URGENT ALERT: Our registers show that {smsTarget.student.name} has missed gate check-in fee collections for {smsTarget.consecutiveDays} consecutive school days (Dates: {smsTarget.unpaidDates.join(', ')}). Outstanding: GHC {(smsTarget.consecutiveDays * 5).toFixed(2)}. Make payments at the gate register to avoid access disruption. - Grace Appiah (Headmistress)</p>
+                    <p>Hello. URGENT ALERT: Our registers show that {smsTarget.student.name} has missed gate check-in fee collections for {smsTarget.consecutiveDays} consecutive school days (Dates: {smsTarget.unpaidDates.join(', ')}). Outstanding: GHC {(smsTarget.consecutiveDays * 5).toFixed(2)}. Make payments at the gate register to avoid access disruption. - Yakubu Hakeem (Administrator)</p>
                   </div>
                 </div>
 
@@ -2353,7 +2578,7 @@ export const AdminPanel: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => {
-                      const msg = `Hello. URGENT ALERT: Our registers show that ${smsTarget.student.name} has missed gate check-in fee collections for ${smsTarget.consecutiveDays} consecutive school days (Dates: ${smsTarget.unpaidDates.join(', ')}). Outstanding: GHC ${(smsTarget.consecutiveDays * 5).toFixed(2)}. Make payments at the gate register to avoid access disruption. - Grace Appiah (Headmistress)`;
+                      const msg = `Hello. URGENT ALERT: Our registers show that ${smsTarget.student.name} has missed gate check-in fee collections for ${smsTarget.consecutiveDays} consecutive school days (Dates: ${smsTarget.unpaidDates.join(', ')}). Outstanding: GHC ${(smsTarget.consecutiveDays * 5).toFixed(2)}. Make payments at the gate register to avoid access disruption. - Yakubu Hakeem (Administrator)`;
                       navigator.clipboard.writeText(msg);
                       showToast(`Copied urgent arrears SMS log text!`);
                     }}
@@ -2378,7 +2603,7 @@ export const AdminPanel: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => {
-                    const msg = `Hello. URGENT ALERT: Our registers show that ${smsTarget.student.name} has missed gate check-in fee collections for ${smsTarget.consecutiveDays} consecutive school days (Dates: ${smsTarget.unpaidDates.join(', ')}). Outstanding: GHC ${(smsTarget.consecutiveDays * 5).toFixed(2)}. Make payments at the gate register to avoid access disruption. - Grace Appiah (Headmistress)`;
+                    const msg = `Hello. URGENT ALERT: Our registers show that ${smsTarget.student.name} has missed gate check-in fee collections for ${smsTarget.consecutiveDays} consecutive school days (Dates: ${smsTarget.unpaidDates.join(', ')}). Outstanding: GHC ${(smsTarget.consecutiveDays * 5).toFixed(2)}. Make payments at the gate register to avoid access disruption. - Yakubu Hakeem (Administrator)`;
                     navigator.clipboard.writeText(msg);
                     showToast("Copied SMS text to clipboard!");
                   }}

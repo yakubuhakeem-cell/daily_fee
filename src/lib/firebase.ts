@@ -17,7 +17,7 @@ import {
   memoryLocalCache
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { Student, PaymentRecord, UserAccount } from '../types';
+import { Student, PaymentRecord, UserAccount, Term } from '../types';
 
 const dbId = (!firebaseConfig.firestoreDatabaseId || firebaseConfig.firestoreDatabaseId === 'default') 
   ? undefined 
@@ -234,18 +234,73 @@ export const db = {
   },
 
   // Seed local cache into server tables
-  async seedTables(users: UserAccount[], students: Student[], payments: PaymentRecord[]): Promise<boolean> {
+  async seedTables(users: UserAccount[], students: Student[], payments: PaymentRecord[], terms?: Term[]): Promise<boolean> {
     try {
       const res = await fetch("/api/seed", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ users, students, payments }),
+        body: JSON.stringify({ users, students, payments, terms }),
       });
       return res.ok;
     } catch (e) {
       console.error("Local Server API seedTables batch error: ", e);
+      return false;
+    }
+  },
+
+  async getTerms(): Promise<Term[] | null> {
+    try {
+      const res = await fetch("/api/terms");
+      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+      return await res.json();
+    } catch (e) {
+      console.error("Local Server API getTerms error: ", e);
+      return null;
+    }
+  },
+
+  async saveTerm(term: Term): Promise<boolean> {
+    try {
+      const res = await fetch("/api/terms", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(term),
+      });
+      return res.ok;
+    } catch (e) {
+      console.error("Local Server API saveTerm error: ", e);
+      return false;
+    }
+  },
+
+  async saveTerms(terms: Term[]): Promise<boolean> {
+    try {
+      const res = await fetch("/api/terms/batch", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(terms),
+      });
+      return res.ok;
+    } catch (e) {
+      console.error("Local Server API saveTerms batch error: ", e);
+      return false;
+    }
+  },
+
+  async deleteTerm(termId: string): Promise<boolean> {
+    try {
+      const res = await fetch(`/api/terms/${termId}`, {
+        method: "DELETE",
+      });
+      return res.ok;
+    } catch (e) {
+      console.error("Local Server API deleteTerm error: ", e);
       return false;
     }
   }

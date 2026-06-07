@@ -60,6 +60,7 @@ export interface Term {
   daysCount: number; // Allocated school days
   schoolDays: string[]; // Mon-Fri dates generated from startDate
   active: boolean;
+  publicHolidays?: string[]; // Array of YYYY-MM-DD dates representing holidays
 }
 
 export interface PendingEdit {
@@ -69,4 +70,24 @@ export interface PendingEdit {
   description: string;
   timestamp: string;
 }
+
+export interface BackupRecord {
+  id: string;
+  timestamp: string;
+  label: string;
+  isAuto: boolean;
+  counts: {
+    students: number;
+    payments: number;
+    users: number;
+    terms: number;
+  };
+  data: {
+    students: Student[];
+    payments: PaymentRecord[];
+    users: UserAccount[];
+    terms: Term[];
+  };
+}
+
 

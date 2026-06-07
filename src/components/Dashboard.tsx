@@ -54,7 +54,8 @@ export const Dashboard: React.FC = () => {
     clearSampleStudents,
     pendingLocalEdits,
     seedFirebaseFromLocal,
-    storageMode
+    storageMode,
+    users
   } = useApp();
 
   const [syncStatus, setSyncStatus] = useState<{ loading: boolean; error: string | null; successMessage: string | null }>({
@@ -92,6 +93,11 @@ export const Dashboard: React.FC = () => {
     return saved ? parseInt(saved, 10) : 500;
   });
 
+  // Duty Roster State
+  const [dutySearch, setDutySearch] = useState('');
+  const [dutyFilter, setDutyFilter] = useState<'all' | 'active' | 'standby'>('all');
+  const [dutyCopied, setDutyCopied] = useState(false);
+
   const handleUpdateDailyGoal = (newGoal: number) => {
     const goal = Math.max(1, newGoal);
     setDailyGoal(goal);
@@ -105,6 +111,128 @@ export const Dashboard: React.FC = () => {
   React.useEffect(() => {
     setDateFilter(currentDate);
   }, [currentDate]);
+
+  // Memoized daily list of duty roster assignments
+  const dutyRoster = useMemo(() => {
+    const classesList: StudentClass[] = [
+      'Nursery', 'KG1', 'KG2',
+      'B1', 'B2', 'B3', 'B4', 'B5', 'B6',
+      'B7', 'B8', 'B9'
+    ];
+
+    return classesList.map((cls) => {
+      // Find actual assigned teacher user or default fallback
+      const assignedUser = users.find(u => u.role === 'Teacher' && (u.assignedClass === cls || u.assignedClasses?.includes(cls)) && u.active !== false);
+      
+      let teacherName = '';
+      let email = 'N/A';
+      if (assignedUser) {
+        teacherName = assignedUser.name;
+        email = assignedUser.email;
+      } else {
+        if (cls === 'Nursery') teacherName = 'Mrs. Abigail Mensah';
+        else if (cls === 'B1') teacherName = 'Mr. Emmanuel Gyamfi';
+        else if (cls === 'KG1') teacherName = 'Mrs. Grace Annan';
+        else if (cls === 'KG2') teacherName = 'Mrs. Beatrice Boateng';
+        else if (cls === 'B2') teacherName = 'Mr. Samuel Osei';
+        else if (cls === 'B3') teacherName = 'Mr. Kofi Boateng';
+        else if (cls === 'B4') teacherName = 'Mrs. Rita Owusu';
+        else if (cls === 'B5') teacherName = 'Mr. Desmond Taylor';
+        else if (cls === 'B6') teacherName = 'Mrs. Joyce Arthur';
+        else if (cls === 'B7') teacherName = 'Mr. Richard Boadu';
+        else if (cls === 'B8') teacherName = 'Madam Faustina Asare';
+        else if (cls === 'B9') teacherName = 'Mr. Philip Ansah';
+        else teacherName = 'Madam Mary Appiah';
+      }
+
+      // Specific class monitoring responsibility based on class category & grade
+      let responsibility = "Gatekeeper & Registration Desk";
+      let keyBadge = 'Pre-School';
+      if (cls === 'Nursery') {
+        responsibility = "Pre-School Gate Reception & Playground Safety Marshal";
+        keyBadge = 'Nursery';
+      } else if (cls === 'KG1') {
+        responsibility = "Pre-School Gate Reception & Guardian Hand-off Organizer";
+        keyBadge = 'KG1';
+      } else if (cls === 'KG2') {
+        responsibility = "KG Compound Monitor, Attendance & Health-status Sentry";
+        keyBadge = 'KG2';
+      } else if (cls === 'B1') {
+        responsibility = "Gate Collector, Ledger Entry Officer & Pocket Receipt Dispatcher";
+        keyBadge = 'Primary';
+      } else if (cls === 'B2') {
+        responsibility = "Class Overseer, Gatekeeper & Daily Token Issuance Officer";
+        keyBadge = 'Primary';
+      } else if (cls === 'B3') {
+        responsibility = "B3 Gateway Marshaller & Classroom Attendance Check Controller";
+        keyBadge = 'Primary';
+      } else if (cls === 'B4') {
+        responsibility = "Checkpoint Sentry, Guardian Liaison & Cash Flow Logger";
+        keyBadge = 'Primary';
+      } else if (cls === 'B5') {
+        responsibility = "Hallway Corridor Patrol Officer & Compliance Gatekeeper";
+        keyBadge = 'Primary';
+      } else if (cls === 'B6') {
+        responsibility = "Class Monitor & Central Academic Ledger Verification Auditor";
+        keyBadge = 'Primary';
+      } else if (cls === 'B7') {
+        responsibility = "JHS Outer Fence Patrol Marshal & Assembly Gatekeeper Officer";
+        keyBadge = 'JHS';
+      } else if (cls === 'B8') {
+        responsibility = "JHS Main Corridor Gate Superintendent & Homework Compliance Checker";
+        keyBadge = 'JHS';
+      } else if (cls === 'B9') {
+        responsibility = "JHS Senior Exit Marshal & Latecomer Disciplinary Point Officer";
+        keyBadge = 'JHS';
+      }
+
+      // Live Check-in Statistics for current date
+      const classPayments = payments.filter(p => p.class === cls && p.date === dateFilter);
+      const verifiedPayments = classPayments.filter(p => p.verified && !p.isAbsent);
+      const hasCollectedToday = classPayments.some(p => p.collectedBy === teacherName);
+      
+      return {
+        className: cls,
+        teacherName,
+        email,
+        responsibility,
+        hasCollectedToday,
+        verifiedCount: verifiedPayments.length,
+        isCustomUser: !!assignedUser,
+        keyBadge,
+      };
+    });
+  }, [users, payments, dateFilter]);
+
+  // Filtered Roster Based on Search query and view filters
+  const filteredDutyRoster = useMemo(() => {
+    return dutyRoster.filter(item => {
+      const matchesSearch = 
+        item.teacherName.toLowerCase().includes(dutySearch.toLowerCase()) ||
+        item.className.toLowerCase().includes(dutySearch.toLowerCase()) ||
+        item.responsibility.toLowerCase().includes(dutySearch.toLowerCase());
+
+      const matchesStatus = 
+        dutyFilter === 'all' ? true :
+        dutyFilter === 'active' ? item.hasCollectedToday :
+        !item.hasCollectedToday;
+
+      return matchesSearch && matchesStatus;
+    });
+  }, [dutyRoster, dutySearch, dutyFilter]);
+
+  const handleCopyRosterText = () => {
+    const header = `SAAKO HOLY CHILD ACADEMY - DUTY ROSTER FOR ${dateFilter}\n=========================================\n`;
+    const body = dutyRoster.map((item, idx) => {
+      return `${idx + 1}. [Class ${item.className}] Teacher: ${item.teacherName} | Status: ${item.hasCollectedToday ? 'ACTIVE ON DUTY' : 'STANDBY'} | Responsibility: ${item.responsibility}`;
+    }).join('\n');
+    
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      navigator.clipboard.writeText(header + body);
+      setDutyCopied(true);
+      setTimeout(() => setDutyCopied(false), 2000);
+    }
+  };
 
   // Chart toggle metric state
   const [chartMetric, setChartMetric] = useState<'revenue' | 'volume'>('revenue');
@@ -184,11 +312,79 @@ export const Dashboard: React.FC = () => {
     return (payments || []).reduce((acc, p) => p.verified ? acc + p.amount : acc, 0);
   }, [payments]);
 
+  const recentPayments = useMemo(() => {
+    return [...(payments || [])]
+      .sort((a, b) => {
+        const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+        const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+        if (timeA !== timeB) return timeB - timeA;
+        return (b.id || '').localeCompare(a.id || '');
+      })
+      .slice(0, 10);
+  }, [payments]);
+
   const dailyProgressPercent = useMemo(() => {
     return dailyGoal > 0 ? (stats.totalCollected / dailyGoal) * 100 : 0;
   }, [stats.totalCollected, dailyGoal]);
 
   const customCollectionRate = dailyProgressPercent;
+
+  // Monthly Fee Collection Analytics Calculations
+  const currentMonthYearMonth = useMemo(() => {
+    return dateFilter.slice(0, 7); // "YYYY-MM"
+  }, [dateFilter]);
+
+  const currentMonthName = useMemo(() => {
+    try {
+      return new Date(`${dateFilter}T00:00:00`).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    } catch {
+      return 'Current Month';
+    }
+  }, [dateFilter]);
+
+  const monthSchoolDays = useMemo(() => {
+    if (!activeTerm || !activeTerm.schoolDays) return [];
+    return activeTerm.schoolDays.filter(d => d.startsWith(currentMonthYearMonth));
+  }, [activeTerm, currentMonthYearMonth]);
+
+  const monthlyCollectedVerified = useMemo(() => {
+    return (payments || [])
+      .filter(p => p.verified && p.date.startsWith(currentMonthYearMonth))
+      .reduce((sum, p) => sum + p.amount, 0);
+  }, [payments, currentMonthYearMonth]);
+
+  const monthlyCollectedPending = useMemo(() => {
+    return (payments || [])
+      .filter(p => !p.verified && !p.isAbsent && p.date.startsWith(currentMonthYearMonth))
+      .reduce((sum, p) => sum + p.amount, 0);
+  }, [payments, currentMonthYearMonth]);
+
+  const activeStudentsCount = useMemo(() => {
+    return (students || []).filter(s => s.active).length;
+  }, [students]);
+
+  // Projected enrollment potential is (Active Enrolled Pupils * 5 GHC fee per day * number of school days this month)
+  const monthlyProjectedEnrollmentTarget = useMemo(() => {
+    return activeStudentsCount * 5 * monthSchoolDays.length;
+  }, [activeStudentsCount, monthSchoolDays]);
+
+  // Projected configured collection target is (daily custom collection goal * number of school days this month)
+  const monthlyProjectedGoalTarget = useMemo(() => {
+    return dailyGoal * monthSchoolDays.length;
+  }, [dailyGoal, monthSchoolDays]);
+
+  // Performance progress percentages
+  const enrollmentProgressPercent = useMemo(() => {
+    return monthlyProjectedEnrollmentTarget > 0 
+      ? (monthlyCollectedVerified / monthlyProjectedEnrollmentTarget) * 100 
+      : 0;
+  }, [monthlyCollectedVerified, monthlyProjectedEnrollmentTarget]);
+
+  const goalProgressPercent = useMemo(() => {
+    return monthlyProjectedGoalTarget > 0 
+      ? (monthlyCollectedVerified / monthlyProjectedGoalTarget) * 100 
+      : 0;
+  }, [monthlyCollectedVerified, monthlyProjectedGoalTarget]);
 
   // Handle manual date changing to explore other days
   const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -812,6 +1008,128 @@ export const Dashboard: React.FC = () => {
             transition={{ duration: 0.2 }}
             className="space-y-6"
           >
+            {/* Monthly Fee Collection & Projections Bento Banner */}
+            <div className="bg-neutral-900 border-4 border-neutral-800 p-8 space-y-6">
+              <div className="flex flex-col md:flex-row justify-between md:items-center pb-4 border-b-2 border-neutral-850 gap-4">
+                <div>
+                  <span className="text-[9px] text-amber-500 font-mono tracking-widest font-black uppercase bg-amber-400/10 border border-amber-400/30 px-2.5 py-1 rounded-xs">
+                    Monthly Performance Summary
+                  </span>
+                  <h3 className="text-xl font-black uppercase italic text-white tracking-tight mt-2 flex items-center gap-2">
+                    <Coins size={18} className="text-amber-400" /> {currentMonthName} Cash Flow & Projections
+                  </h3>
+                  <p className="text-[10px] text-neutral-500 font-mono uppercase tracking-widest mt-1 font-bold">
+                    Comparing actual ledger revenue against forecasted enrolment & collection targets
+                  </p>
+                </div>
+                <div className="flex items-center gap-3 text-[10px] font-mono font-bold uppercase text-neutral-400">
+                  <span className="bg-neutral-950 border border-neutral-805 px-3 py-1.5 flex items-center gap-1.5">
+                    <Calendar size={12} className="text-amber-400" /> 
+                    <span>{monthSchoolDays.length} Active School Days</span>
+                  </span>
+                </div>
+              </div>
+
+              {/* Sub-grid of Stats Cards */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                {/* 1. ACTUAL MONTHLY REVENUE COLLECTED */}
+                <div className="bg-neutral-950 border-2 border-neutral-850 p-5 space-y-2">
+                  <span className="text-[9px] text-neutral-500 font-mono uppercase tracking-widest font-extrabold block">Collected Revenue (Verified)</span>
+                  <div className="text-2xl font-black text-emerald-400 font-mono">GHC {monthlyCollectedVerified.toFixed(2)}</div>
+                  {monthlyCollectedPending > 0 && (
+                    <div className="text-[8.5px] text-amber-500 font-mono font-bold uppercase">
+                      + GHC {monthlyCollectedPending.toFixed(2)} Pending
+                    </div>
+                  )}
+                  <p className="text-[9.5px] text-neutral-500 leading-tight">
+                    All processed gate payments successfully signed by educators this month.
+                  </p>
+                </div>
+
+                {/* 2. PROJECTED ENROLMENT TARGET POTENTIAL */}
+                <div className="bg-neutral-950 border-2 border-neutral-850 p-5 space-y-2">
+                  <span className="text-[9px] text-neutral-500 font-mono uppercase tracking-widest font-extrabold block">Full Enrollment Target</span>
+                  <div className="text-2xl font-black text-white font-mono">GHC {monthlyProjectedEnrollmentTarget.toFixed(2)}</div>
+                  <div className="text-[8.5px] text-neutral-400 font-mono font-extrabold uppercase">
+                    {activeStudentsCount} Enrolled • GHC 5/day
+                  </div>
+                  <p className="text-[9.5px] text-neutral-500 leading-tight">
+                    Potential collections if 100% of the active student roll paid every single day.
+                  </p>
+                </div>
+
+                {/* 3. CONFIGURED COLLECTION GOAL TARGET */}
+                <div className="bg-neutral-950 border-2 border-neutral-850 p-5 space-y-2">
+                  <span className="text-[9px] text-neutral-500 font-mono uppercase tracking-widest font-extrabold block">Configured Custom Goal</span>
+                  <div className="text-2xl font-black text-amber-400 font-mono">GHC {monthlyProjectedGoalTarget.toFixed(2)}</div>
+                  <div className="text-[8.5px] text-neutral-400 font-mono font-extrabold uppercase">
+                    Daily Goal: GHC {dailyGoal}
+                  </div>
+                  <p className="text-[9.5px] text-neutral-500 leading-tight">
+                    The custom milestone established for collections across critical gate check-ins.
+                  </p>
+                </div>
+
+                {/* 4. PERFORMANCE RATIOS */}
+                <div className="bg-neutral-950 border-2 border-neutral-850 p-5 flex flex-col justify-between space-y-2">
+                  <div>
+                    <span className="text-[9px] text-neutral-500 font-mono uppercase tracking-widest font-extrabold block">Target Coverage Ratio</span>
+                    <div className="flex items-baseline gap-1 mt-1">
+                      <div className="text-2xl font-black text-white font-mono">{goalProgressPercent.toFixed(1)}%</div>
+                      <span className="text-[9px] text-neutral-500 font-mono">of custom goal</span>
+                    </div>
+                  </div>
+                  <div className="text-[9.5px] text-neutral-450 font-mono font-semibold flex items-center justify-between">
+                    <span>Enrollment potential cover:</span>
+                    <strong className="text-neutral-200">{enrollmentProgressPercent.toFixed(1)}%</strong>
+                  </div>
+                </div>
+              </div>
+
+              {/* Progress Indicator Tracks */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+                {/* Custom Goal Progress Slider Bar */}
+                <div className="bg-neutral-950/45 p-4 border border-neutral-850 space-y-2">
+                  <div className="flex justify-between items-center text-[10px] font-mono font-extrabold text-neutral-400 uppercase tracking-wider">
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 bg-amber-400 rounded-full" /> Goal Target Progress
+                    </span>
+                    <span className="text-amber-400 font-black">{goalProgressPercent.toFixed(1)}% Completed</span>
+                  </div>
+                  <div className="w-full bg-neutral-950 h-3 border border-neutral-850 rounded-xs overflow-hidden">
+                    <div 
+                      className="bg-amber-400 h-full transition-all duration-500"
+                      style={{ width: `${Math.min(100, goalProgressPercent)}%` }}
+                    />
+                  </div>
+                  <div className="flex justify-between text-[9px] text-neutral-500 font-mono uppercase">
+                    <span>GHC 0.00</span>
+                    <span>Target: GHC {monthlyProjectedGoalTarget.toFixed(2)}</span>
+                  </div>
+                </div>
+
+                {/* Full Enrollment potential Slider Bar */}
+                <div className="bg-neutral-950/45 p-4 border border-neutral-850 space-y-2">
+                  <div className="flex justify-between items-center text-[10px] font-mono font-extrabold text-neutral-400 uppercase tracking-wider">
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 bg-emerald-400 rounded-full" /> Max Enrollment Potential
+                    </span>
+                    <span className="text-emerald-400 font-black">{enrollmentProgressPercent.toFixed(1)}% Covered</span>
+                  </div>
+                  <div className="w-full bg-neutral-950 h-3 border border-neutral-850 rounded-xs overflow-hidden">
+                    <div 
+                      className="bg-emerald-400 h-full transition-all duration-500"
+                      style={{ width: `${Math.min(100, enrollmentProgressPercent)}%` }}
+                    />
+                  </div>
+                  <div className="flex justify-between text-[9px] text-neutral-500 font-mono uppercase">
+                    <span>GHC 0.00</span>
+                    <span>Potential: GHC {monthlyProjectedEnrollmentTarget.toFixed(2)}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             {/* Top row: Trend Graphics & Category split Bento block */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               
@@ -1164,6 +1482,255 @@ export const Dashboard: React.FC = () => {
                 >
                   View All Alerts Desk
                 </button>
+              </div>
+            </div>
+
+            {/* Duty Roster Visual Card */}
+            <div className="bg-neutral-900 border-4 border-neutral-800 p-8 space-y-6">
+              <div className="flex flex-col sm:flex-row justify-between sm:items-center pb-4 border-b-2 border-neutral-850 gap-4 font-sans">
+                <div>
+                  <span className="text-[9px] text-amber-500 font-mono tracking-widest font-black uppercase bg-amber-400/10 border border-amber-400/30 px-2.5 py-1 rounded-xs">
+                    Staff Schedule & Compliance
+                  </span>
+                  <h3 className="text-xl font-black uppercase italic text-white tracking-tight mt-2 flex items-center gap-2">
+                    <Users size={18} className="text-amber-400" /> Educator Duty Roster
+                  </h3>
+                  <p className="text-[10px] text-neutral-500 font-mono uppercase tracking-widest mt-1 font-bold">
+                    Class monitoring responsibilities & live check-in statuses for {dateFilter}
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    onClick={handleCopyRosterText}
+                    className="bg-neutral-950 border border-neutral-800 hover:border-neutral-605 hover:text-white transition-all text-neutral-300 font-mono font-bold text-[9px] uppercase px-3 py-1.5 flex items-center gap-1.5 cursor-pointer"
+                  >
+                    {dutyCopied ? (
+                      <span className="text-emerald-400 font-black">✓ Copied text!</span>
+                    ) : (
+                      <span>Copy Duty Logs</span>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Filters & Inputs Bar */}
+              <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3 bg-neutral-950/50 p-4 border border-neutral-850">
+                {/* Search Box */}
+                <div className="relative flex-1 max-w-md">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-neutral-500" size={14} />
+                  <input
+                    type="text"
+                    value={dutySearch}
+                    onChange={(e) => setDutySearch(e.target.value)}
+                    placeholder="Search roster by staff name, class grade or specific duty..."
+                    className="w-full bg-neutral-950 border border-neutral-800 focus:border-neutral-604 focus:ring-0 text-white placeholder-neutral-500 text-xs pl-9 pr-4 py-2 uppercase font-mono tracking-wide rounded-none"
+                  />
+                </div>
+
+                {/* Filter Tabs */}
+                <div className="flex bg-neutral-950 p-1 border border-neutral-800 max-w-fit self-start sm:self-auto">
+                  <button
+                    onClick={() => setDutyFilter('all')}
+                    className={`px-3 py-1.5 text-[9px] font-black font-mono uppercase tracking-widest transition-colors cursor-pointer ${
+                      dutyFilter === 'all' ? 'bg-amber-400 text-black font-extrabold' : 'text-neutral-400 hover:text-white'
+                    }`}
+                  >
+                    All ({dutyRoster.length})
+                  </button>
+                  <button
+                    onClick={() => setDutyFilter('active')}
+                    className={`px-3 py-1.5 text-[9px] font-black font-mono uppercase tracking-widest transition-colors cursor-pointer ${
+                      dutyFilter === 'active' ? 'bg-amber-400 text-black font-extrabold' : 'text-neutral-400 hover:text-white'
+                    }`}
+                  >
+                    Active ({dutyRoster.filter(d => d.hasCollectedToday).length})
+                  </button>
+                  <button
+                    onClick={() => setDutyFilter('standby')}
+                    className={`px-3 py-1.5 text-[9px] font-black font-mono uppercase tracking-widest transition-colors cursor-pointer ${
+                      dutyFilter === 'standby' ? 'bg-amber-400 text-black font-extrabold' : 'text-neutral-400 hover:text-white'
+                    }`}
+                  >
+                    Standby ({dutyRoster.filter(d => !d.hasCollectedToday).length})
+                  </button>
+                </div>
+              </div>
+
+              {/* Roster Grid list */}
+              {filteredDutyRoster.length === 0 ? (
+                <div className="py-12 text-center text-neutral-500 border border-neutral-850 bg-neutral-950/25">
+                  <span className="font-mono text-xs uppercase font-bold text-neutral-400">No duty assignments match your filter search.</span>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {filteredDutyRoster.map((item) => (
+                    <div 
+                      key={item.className}
+                      className={`bg-neutral-950 border-2 transition-all p-5 flex flex-col justify-between space-y-4 ${
+                        item.hasCollectedToday 
+                          ? 'border-emerald-850 hover:border-emerald-700 bg-neutral-950/70' 
+                          : 'border-neutral-850 hover:border-neutral-700 bg-neutral-950/30'
+                      }`}
+                    >
+                      <div className="space-y-3">
+                        {/* Title and class Level Badges */}
+                        <div className="flex justify-between items-start gap-2">
+                          <div className="space-y-0.5">
+                            <span className="text-[9px] font-mono font-extrabold tracking-widest text-neutral-500 uppercase">
+                              Class Gateway Assignment
+                            </span>
+                            <div className="text-lg font-black text-white font-mono flex items-center gap-1.5">
+                              Class {item.className}
+                            </div>
+                          </div>
+                          
+                          <span className={`px-2 py-0.5 text-[9px] font-mono font-black uppercase tracking-wider border ${
+                            item.className.startsWith('B') 
+                              ? 'bg-neutral-900 border-neutral-850 text-neutral-300' 
+                              : 'bg-amber-955/20 border-amber-900 text-amber-500'
+                          }`}>
+                            {item.keyBadge}
+                          </span>
+                        </div>
+
+                        {/* Teacher Assignment */}
+                        <div className="border-t border-b border-neutral-900 py-3 space-y-1">
+                          <span className="text-[9px] text-neutral-500 font-mono uppercase tracking-widest font-extrabold block">Assigned Staff</span>
+                          <div className="flex items-center gap-2">
+                            <div className="text-sm font-sans font-black text-white uppercase tracking-wider truncate">
+                              {item.teacherName}
+                            </div>
+                            {item.isCustomUser ? (
+                              <span className="text-[8px] bg-sky-950 text-sky-400 border border-sky-900 px-1.5 py-0.2 uppercase font-black font-mono tracking-widest rounded-xs scale-90">
+                                Staff Account
+                              </span>
+                            ) : (
+                              <span className="text-[8px] bg-neutral-900 text-neutral-500 border border-neutral-850 px-1.5 py-0.2 uppercase font-black font-mono tracking-widest rounded-xs scale-90">
+                                Default Fallback
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-[9.5px] text-neutral-500 font-mono block truncate lowercase">
+                            {item.email !== 'N/A' ? item.email : `${item.teacherName.toLowerCase().replace(/\s+/g, '')}@school.edu`}
+                          </span>
+                        </div>
+
+                        {/* specific responsibility */}
+                        <div className="space-y-1">
+                          <span className="text-[9px] text-neutral-500 font-mono uppercase tracking-widest font-extrabold block">Monitoring Responsibility</span>
+                          <p className="text-[11px] text-neutral-300 font-medium leading-relaxed uppercase tracking-tight font-sans">
+                            {item.responsibility}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Live Status and checkout rate */}
+                      <div className="pt-3 border-t border-neutral-900 flex justify-between items-center text-[10px] font-mono font-bold">
+                        <div className="flex items-center gap-1.5">
+                          <span className={`w-2.5 h-2.5 rounded-full ${item.hasCollectedToday ? 'bg-emerald-400 animate-pulse' : 'bg-neutral-600'}`} />
+                          <span className={`uppercase font-black tracking-wider ${item.hasCollectedToday ? 'text-emerald-400' : 'text-neutral-500'}`}>
+                            {item.hasCollectedToday ? 'ACTIVE ON DUTY' : 'STANDBY'}
+                          </span>
+                        </div>
+                        
+                        <div className="text-right">
+                          <span className="text-neutral-500">Collected today:</span>{' '}
+                          <strong className={item.verifiedCount > 0 ? 'text-white' : 'text-neutral-400'}>
+                            {item.verifiedCount} Pupils
+                          </strong>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Recent Activity Feed */}
+            <div className="bg-neutral-900 border-4 border-neutral-800 p-8 space-y-6">
+              <div className="flex flex-col sm:flex-row justify-between sm:items-center pb-2 border-b-2 border-neutral-850 gap-2">
+                <div>
+                  <h3 className="text-xl font-black uppercase italic text-white tracking-tight flex items-center gap-2">
+                    <Activity size={18} className="text-amber-400" /> Recent Activity Feed
+                  </h3>
+                  <p className="text-[10px] text-neutral-500 font-mono uppercase tracking-widest mt-1 font-bold">Real-time gate check-in fee collections (Last 10 entries)</p>
+                </div>
+                <div className="text-[9px] font-black font-mono uppercase tracking-wider text-emerald-400 bg-emerald-950/40 border border-emerald-900/60 px-2.5 py-1 max-w-fit">
+                  Live Feed Status: 🟢 ACTIVE
+                </div>
+              </div>
+
+              {/* Scrollable list view */}
+              <div className="max-h-[350px] overflow-y-auto pr-1 space-y-3 scrollbar-thin scrollbar-thumb-neutral-800">
+                {recentPayments.length === 0 ? (
+                  <div className="py-16 text-center text-neutral-600 font-black uppercase tracking-widest text-xs font-mono">
+                    No recent payment activity recorded today.
+                  </div>
+                ) : (
+                  recentPayments.map((p) => {
+                    const paymentTime = p.timestamp ? new Date(p.timestamp).toLocaleTimeString('en-GB', {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                      second: '2-digit'
+                    }) : '';
+                    const paymentDateStr = p.date ? new Date(p.date).toLocaleDateString('en-GB', {
+                      day: 'numeric',
+                      month: 'short',
+                      year: 'numeric'
+                    }) : '';
+
+                    return (
+                      <div 
+                        key={p.id} 
+                        className="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-neutral-950 border-2 border-neutral-850 hover:border-neutral-700 p-4 transition-all gap-4 font-mono"
+                      >
+                        <div className="flex items-start gap-4 flex-1">
+                          <div className={`py-2 px-3 shrink-0 text-center font-black text-xs border ${
+                            p.verified 
+                              ? 'bg-emerald-950/40 border-emerald-900 text-emerald-400' 
+                              : 'bg-amber-950/40 border-amber-900 text-amber-450'
+                          }`}>
+                            {p.class}
+                          </div>
+                          <div className="space-y-1">
+                            <h4 className="text-xs sm:text-sm font-black text-white uppercase tracking-tight leading-none pt-0.5 font-sans">
+                              {p.studentName}
+                            </h4>
+                            <div className="flex flex-wrap gap-2 items-center text-[9px] text-neutral-500 font-black uppercase tracking-wide">
+                              <span className="text-neutral-400">{p.category}</span>
+                              <span className="text-neutral-700">•</span>
+                              <span>By {p.collectedBy || 'Unknown'}</span>
+                              <span className="text-neutral-700">•</span>
+                              <span className="text-neutral-450">ID: #{p.studentId.slice(-5)}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex sm:flex-col items-baseline sm:items-end justify-between w-full sm:w-auto mt-2 sm:mt-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-neutral-900">
+                          <div className="text-left sm:text-right">
+                            <span className="text-sm sm:text-base font-black text-white">GHC {p.amount.toFixed(2)}</span>
+                            <div className="text-[8px] text-neutral-500 font-semibold uppercase mt-0.5">
+                              {paymentDateStr} {paymentTime && `@ ${paymentTime}`}
+                            </div>
+                          </div>
+                          
+                          <div className="mt-1">
+                            {p.verified ? (
+                              <span className="inline-block px-2 py-0.5 bg-emerald-950/40 text-emerald-400 border border-emerald-900 text-[8px] uppercase font-black tracking-widest">
+                                Approved
+                              </span>
+                            ) : (
+                              <span className="inline-block px-1.5 py-0.5 bg-amber-950/40 text-amber-500 border border-amber-900 text-[8px] uppercase font-black tracking-widest">
+                                Pending
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
               </div>
             </div>
           </motion.div>

@@ -98,4 +98,4 @@ This repository complies with the highest standards of secure Git practices:
 
 ---
 
-&copy; 2026 **SAAKO HOLY CHILD ACADEMY** &bull; Ghana Education Ledger Authority. All Rights Reserved.
+&copy; 2026 **SAAKO HOLY CHILD ACADEMY** &bull; Saako Holy Child Ledger Authority. All Rights Reserved.

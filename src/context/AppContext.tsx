@@ -4,7 +4,7 @@
  */
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { Student, PaymentRecord, UserAccount, UserRole, StudentClass, SchoolCategory, Term, PendingEdit } from '../types';
+import { Student, PaymentRecord, UserAccount, UserRole, StudentClass, SchoolCategory, Term, PendingEdit, BackupRecord } from '../types';
 import { INITIAL_USERS, INITIAL_STUDENTS, generateSeedPayments, getClassCategory } from '../initialData';
 import { db } from '../lib/firebase';
 import { generateSchoolDays } from '../utils/termUtils';
@@ -17,8 +17,11 @@ interface AppContextType {
   terms: Term[];
   activeTerm: Term | null;
   addTerm: (name: string, startDate: string, daysCount: number, isActive?: boolean) => void;
+  editTerm: (termId: string, name: string, startDate: string, daysCount: number, isActive?: boolean) => void;
   setActiveTerm: (termId: string) => void;
   deleteTerm: (termId: string) => void;
+  addPublicHoliday: (termId: string, date: string) => void;
+  removePublicHoliday: (termId: string, date: string) => void;
   currentDate: string; // YYYY-MM-DD format
   setCurrentDate: (date: string) => void;
   login: (email: string, mfaCode?: string, password?: string) => { success: boolean; requiresMfa?: boolean; requiresPassword?: boolean; error?: string };
@@ -59,6 +62,12 @@ interface AppContextType {
   lastBgSyncTime: string | null;
   pendingLocalEdits: PendingEdit[];
   clearPendingLocalEdits: () => void;
+  backups: BackupRecord[];
+  createBackup: (label?: string, isAuto?: boolean) => void;
+  restoreBackup: (backupId: string) => void;
+  deleteBackup: (backupId: string) => void;
+  clearAllBackups: () => void;
+  nextBackupTimeLeft: number; // in seconds
 }
 
 export interface DailyStats {
@@ -151,6 +160,131 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setPendingLocalEdits([]);
     localStorage.removeItem('s_pending_local_edits');
   };
+
+  const [backups, setBackups] = useState<BackupRecord[]>(() => {
+    const saved = localStorage.getItem('s_backups');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  const [nextBackupTimeLeft, setNextBackupTimeLeft] = useState<number>(30 * 60);
+
+  // Sync to refs for safe closure lookup in setInterval loop without re-triggering effect
+  const studentsRef = React.useRef(students);
+  const paymentsRef = React.useRef(payments);
+  const usersRef = React.useRef(users);
+  const termsRef = React.useRef(terms);
+
+  useEffect(() => {
+    studentsRef.current = students;
+  }, [students]);
+
+  useEffect(() => {
+    paymentsRef.current = payments;
+  }, [payments]);
+
+  useEffect(() => {
+    usersRef.current = users;
+  }, [users]);
+
+  useEffect(() => {
+    termsRef.current = terms;
+  }, [terms]);
+
+  const createBackup = (label?: string, isAuto = false) => {
+    const now = new Date();
+    const timestampString = now.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric'
+    }) + ' at ' + now.toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true
+    });
+
+    const currentStudents = studentsRef.current;
+    const currentPayments = paymentsRef.current;
+    const currentUsers = usersRef.current;
+    const currentTerms = termsRef.current;
+
+    const actualLabel = label || `${isAuto ? 'Automated Scheduled' : 'Manual'} Backup`;
+
+    const newBackup: BackupRecord = {
+      id: 'backup_' + now.getTime(),
+      timestamp: timestampString,
+      label: actualLabel,
+      isAuto,
+      counts: {
+        students: currentStudents.length,
+        payments: currentPayments.length,
+        users: currentUsers.length,
+        terms: currentTerms.length
+      },
+      data: {
+        students: JSON.parse(JSON.stringify(currentStudents)),
+        payments: JSON.parse(JSON.stringify(currentPayments)),
+        users: JSON.parse(JSON.stringify(currentUsers)),
+        terms: JSON.parse(JSON.stringify(currentTerms))
+      }
+    };
+
+    setBackups(prev => {
+      const next = [newBackup, ...prev].slice(0, 10);
+      localStorage.setItem('s_backups', JSON.stringify(next));
+      return next;
+    });
+
+    console.log(`[Backup System] Created local backup: ${actualLabel}`);
+  };
+
+  const restoreBackup = (backupId: string) => {
+    const backup = backups.find(b => b.id === backupId);
+    if (!backup) {
+      console.warn(`[Backup System] Backup not found for id: ${backupId}`);
+      return;
+    }
+
+    setStudents(backup.data.students);
+    setPayments(backup.data.payments);
+    setUsers(backup.data.users);
+    setTerms(backup.data.terms);
+
+    localStorage.setItem('s_students', JSON.stringify(backup.data.students));
+    localStorage.setItem('s_payments', JSON.stringify(backup.data.payments));
+    localStorage.setItem('s_users', JSON.stringify(backup.data.users));
+    localStorage.setItem('s_terms', JSON.stringify(backup.data.terms));
+
+    recordLocallyPendingEdit('bulk', 'update', `Restored system state from local backup: "${backup.label}"`);
+  };
+
+  const deleteBackup = (backupId: string) => {
+    setBackups(prev => {
+      const next = prev.filter(b => b.id !== backupId);
+      localStorage.setItem('s_backups', JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const clearAllBackups = () => {
+    setBackups([]);
+    localStorage.removeItem('s_backups');
+  };
+
+  // Background backup task - running every 30 minutes
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      setNextBackupTimeLeft(prev => {
+        if (prev <= 1) {
+          createBackup(undefined, true);
+          return 30 * 60; // Reset countdown
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(intervalId);
+  }, []);
 
   const [bgSyncEnabled, setBgSyncEnabledState] = useState<boolean>(() => {
     const saved = localStorage.getItem('s_background_sync_enabled');
@@ -254,13 +388,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       
       try {
         // Run lookups in parallel to minimize wait times (cut 24s sequence down to 8s)
-        const [dbUsers, dbStudents, dbPayments] = await Promise.all([
+        const [dbUsers, dbStudents, dbPayments, dbTerms] = await Promise.all([
           db.getUsers(),
           db.getStudents(),
-          db.getPayments()
+          db.getPayments(),
+          db.getTerms()
         ]);
 
-        if (dbUsers === null || dbStudents === null || dbPayments === null) {
+        if (dbUsers === null || dbStudents === null || dbPayments === null || dbTerms === null) {
           console.warn('Cloud database collections are offline/misconfigured. Falling back to LocalStorage...');
           setFirebaseConnected(false);
           setStorageModeState('local');
@@ -277,6 +412,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           let parsedLocalUsers = INITIAL_USERS;
           let parsedLocalStudents = INITIAL_STUDENTS;
           let parsedLocalPayments = generateSeedPayments();
+          let parsedLocalTerms = [{
+            id: 'term_default',
+            name: 'Term 1 (May/June 2026)',
+            startDate: '2026-05-25',
+            daysCount: 15,
+            schoolDays: generateSchoolDays('2026-05-25', 15),
+            active: true
+          }];
           
           try {
             if (localUsers) {
@@ -299,26 +442,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             }
           } catch (e) {}
 
-          const seeded = await db.seedTables(parsedLocalUsers, parsedLocalStudents, parsedLocalPayments);
+          try {
+            if (localTerms) {
+              const t = JSON.parse(localTerms);
+              if (Array.isArray(t) && t.length > 0) parsedLocalTerms = t;
+            }
+          } catch (e) {}
+
+          const seeded = await db.seedTables(parsedLocalUsers, parsedLocalStudents, parsedLocalPayments, parsedLocalTerms);
           if (seeded) {
             setUsers(parsedLocalUsers);
             setStudents(parsedLocalStudents);
             setPayments(parsedLocalPayments);
+            setTerms(parsedLocalTerms);
             localStorage.setItem('s_users', JSON.stringify(parsedLocalUsers));
             localStorage.setItem('s_students', JSON.stringify(parsedLocalStudents));
             localStorage.setItem('s_payments', JSON.stringify(parsedLocalPayments));
-            
-            // Seed default term on successful cloud reset
-            const initialTerms = [{
-              id: 'term_default',
-              name: 'Term 1 (May/June 2026)',
-              startDate: '2026-05-25',
-              daysCount: 15,
-              schoolDays: generateSchoolDays('2026-05-25', 15),
-              active: true
-            }];
-            setTerms(initialTerms);
-            localStorage.setItem('s_terms', JSON.stringify(initialTerms));
+            localStorage.setItem('s_terms', JSON.stringify(parsedLocalTerms));
             return;
           } else {
             console.warn('Seeding failed (perhaps due to unauthorized 401 or structural issues). Falling back to local storage.');
@@ -339,20 +479,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         localStorage.setItem('s_students', JSON.stringify(dbStudents));
         localStorage.setItem('s_payments', JSON.stringify(dbPayments));
         
-        // Load local terms in active cloud mode as well since they are locally persistent
-        if (localTerms) {
-          setTerms(JSON.parse(localTerms));
+        // Sync terms in active cloud mode
+        if (dbTerms && dbTerms.length > 0) {
+          setTerms(dbTerms);
+          localStorage.setItem('s_terms', JSON.stringify(dbTerms));
         } else {
-          const initialTerms = [{
-            id: 'term_default',
-            name: 'Term 1 (May/June 2026)',
-            startDate: '2026-05-25',
-            daysCount: 15,
-            schoolDays: generateSchoolDays('2026-05-25', 15),
-            active: true
-          }];
-          setTerms(initialTerms);
-          localStorage.setItem('s_terms', JSON.stringify(initialTerms));
+          if (localTerms) {
+            const parsed = JSON.parse(localTerms);
+            setTerms(parsed);
+            db.saveTerms(parsed);
+          } else {
+            const initialTerms = [{
+              id: 'term_default',
+              name: 'Term 1 (May/June 2026)',
+              startDate: '2026-05-25',
+              daysCount: 15,
+              schoolDays: generateSchoolDays('2026-05-25', 15),
+              active: true
+            }];
+            setTerms(initialTerms);
+            localStorage.setItem('s_terms', JSON.stringify(initialTerms));
+            db.saveTerms(initialTerms);
+          }
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -876,14 +1024,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const datesToRecord: string[] = [];
+    
+    // Always put currentDate as the first recorded day
+    datesToRecord.push(currentDate);
+
     let scanIndex = startIndex;
 
-    // 1. Scan ahead to find unpaid school weekdays
+    // 1. Scan ahead to find unpaid school weekdays (excluding currentDate)
     while (datesToRecord.length < daysToCover && scanIndex < schoolDays.length) {
       const dStr = schoolDays[scanIndex];
-      const isDayPaid = payments.some(p => p.studentId === studentId && p.date === dStr);
-      if (!isDayPaid) {
-        datesToRecord.push(dStr);
+      if (dStr !== currentDate) {
+        const isDayPaid = payments.some(p => p.studentId === studentId && p.date === dStr);
+        if (!isDayPaid) {
+          datesToRecord.push(dStr);
+        }
       }
       scanIndex++;
     }
@@ -922,21 +1076,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let nextPayments = [...payments];
     const recordsToCloudSync: PaymentRecord[] = [];
 
+    // 1. Log the full advance cash payment on the explicit day it was collected (currentDate)
+    const mainExistingIdx = nextPayments.findIndex(p => p.studentId === studentId && p.date === currentDate && !p.id.endsWith('_debt'));
+    const mainRecord: PaymentRecord = {
+      id: mainExistingIdx > -1 ? nextPayments[mainExistingIdx].id : `p_${studentId}_${currentDate}`,
+      studentId: student.id,
+      studentName: student.name,
+      class: student.class,
+      category: student.category,
+      amount: amount,
+      date: currentDate,
+      timestamp: new Date().toISOString(),
+      collectedBy: currentUser ? currentUser.name : 'System Host',
+      verified,
+      notes: `Advance Fee Primary (Paid GHC ${amount.toFixed(2)} in advance, covering days: ${datesToRecord.join(', ')})`
+    };
+
+    if (mainExistingIdx > -1) {
+      nextPayments[mainExistingIdx] = mainRecord;
+    } else {
+      nextPayments.push(mainRecord);
+    }
+    recordsToCloudSync.push(mainRecord);
+
+    // 2. Log 0-amount marker records for each covered day (except currentDate if it's in datesToRecord) 
+    // to mark them as paid/cleared without spreading the actual cash collection
     datesToRecord.forEach((dayStr) => {
-      const existingIdx = nextPayments.findIndex(p => p.studentId === studentId && p.date === dayStr);
-      
+      if (dayStr === currentDate) return;
+
+      const existingIdx = nextPayments.findIndex(p => p.studentId === studentId && p.date === dayStr && !p.id.endsWith('_debt'));
       const record: PaymentRecord = {
         id: existingIdx > -1 ? nextPayments[existingIdx].id : `p_${studentId}_${dayStr}`,
         studentId: student.id,
         studentName: student.name,
         class: student.class,
         category: student.category,
-        amount: 5.00,
+        amount: 0,
         date: dayStr,
         timestamp: new Date().toISOString(),
         collectedBy: currentUser ? currentUser.name : 'System Host',
         verified,
-        notes: `Advance (Part of GHC ${amount.toFixed(2)} advance collected on ${currentDate})`
+        notes: `Covered (Prepaid in advance, GHC ${amount.toFixed(2)} on ${currentDate})`
       };
 
       if (existingIdx > -1) {
@@ -983,7 +1163,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Scan ascending (oldest-to-newest unpaid) to clear oldest debt first!
     for (const dStr of pastSchoolDays) {
       if (datesToRecord.length >= daysToCover) break;
-      const isDayPaid = payments.some(p => p.studentId === studentId && p.date === dStr && !p.isAbsent);
+      const isDayPaid = payments.some(p => p.studentId === studentId && p.date === dStr);
       if (!isDayPaid) {
         datesToRecord.push(dStr);
       }
@@ -994,6 +1174,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let nextPayments = [...payments];
     const recordsToCloudSync: PaymentRecord[] = [];
 
+    // 1. Create a single payment record for currentDate with the full settled amount
+    const todayDebtPaymentId = `p_${studentId}_${currentDate}_debt`;
+    const existingTodayDebtIdx = nextPayments.findIndex(p => p.id === todayDebtPaymentId);
+
+    const todayDebtRecord: PaymentRecord = {
+      id: todayDebtPaymentId,
+      studentId: student.id,
+      studentName: student.name,
+      class: student.class,
+      category: student.category,
+      amount: amount, // Log the actual total debt clearance amount here on the payment day!
+      date: currentDate,
+      timestamp: new Date().toISOString(),
+      collectedBy: currentUser ? currentUser.name : 'System Host',
+      verified,
+      notes: `Settled Debt (Cleared GHC ${amount.toFixed(2)} arrears covering ${datesToRecord.length} days)`
+    };
+
+    if (existingTodayDebtIdx > -1) {
+      nextPayments[existingTodayDebtIdx] = todayDebtRecord;
+    } else {
+      nextPayments.push(todayDebtRecord);
+    }
+    recordsToCloudSync.push(todayDebtRecord);
+
+    // 2. Create zero-amount marker records for each cleared past day to settle arrears without spreading the money
     datesToRecord.forEach((dayStr) => {
       const existingIdx = nextPayments.findIndex(p => p.studentId === studentId && p.date === dayStr);
       
@@ -1003,12 +1209,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         studentName: student.name,
         class: student.class,
         category: student.category,
-        amount: 5.00,
+        amount: 0, // Put GHC 0 on those individual past days being settled
         date: dayStr,
         timestamp: new Date().toISOString(),
         collectedBy: currentUser ? currentUser.name : 'System Host',
         verified,
-        notes: `Settle Debt (Part of GHC ${amount.toFixed(2)} arrears settled on ${currentDate})`
+        notes: `Arrears Cleared (Settle Debt of GHC ${amount.toFixed(2)} processed on ${currentDate})`
       };
 
       if (existingIdx > -1) {
@@ -1298,7 +1504,7 @@ TO: ${email}
 CC: school-finance-dept@school.edu.gh
 SUBJECT: Daily School Fee Tracker - Automated Monthly Audit Summary
 
-Ghanaian Educational Trust Daily Fee Tracker Report
+Saako educational trust Daily Fee Tracker Report
 -------------------------------------------------------
 Scope Period: May 2026 Monthly Summary
 Report Date: ${new Date().toLocaleDateString('en-GB')}
@@ -1330,6 +1536,9 @@ School Administration Financial Audit System (MFA Secure)
   const saveTerms = (newTerms: Term[]) => {
     setTerms(newTerms);
     localStorage.setItem('s_terms', JSON.stringify(newTerms));
+    if (storageMode === 'cloud') {
+      db.saveTerms(newTerms);
+    }
   };
 
   const addTerm = (name: string, startDate: string, daysCount: number, isActive = true) => {
@@ -1364,6 +1573,44 @@ School Administration Financial Audit System (MFA Secure)
     recordLocallyPendingEdit('term', 'create', `Created new school term: "${name}" (${newTerm.active ? 'Active' : 'Inactive'})`);
   };
 
+  const editTerm = (id: string, name: string, startDate: string, daysCount: number, isActive = true) => {
+    const schoolDays = generateSchoolDays(startDate, daysCount);
+    
+    let nextTerms = terms.map(t => {
+      if (t.id === id) {
+        return {
+          ...t,
+          name,
+          startDate,
+          daysCount,
+          schoolDays,
+          active: isActive
+        };
+      }
+      return t;
+    });
+
+    // If we make it active, mark others inactive
+    if (isActive) {
+      nextTerms = nextTerms.map(t => ({
+        ...t,
+        active: t.id === id
+      }));
+      if (schoolDays.length > 0) {
+        setCurrentDate(schoolDays[0]);
+      }
+    } else {
+      // If we mark the currently active term inactive and there is no other active term, let's keep things correct
+      const hasActive = nextTerms.some(t => t.active);
+      if (!hasActive && nextTerms.length > 0) {
+        // Fallback: make the first one active, or let activeTerm be null
+      }
+    }
+    
+    saveTerms(nextTerms);
+    recordLocallyPendingEdit('term', 'update', `Updated school term: "${name}" (${isActive ? 'Active' : 'Inactive'})`);
+  };
+
   const setActiveTerm = (termId: string) => {
     const nextTerms = terms.map(t => ({
       ...t,
@@ -1387,7 +1634,42 @@ School Administration Financial Audit System (MFA Secure)
       }
     }
     saveTerms(remaining);
+    if (storageMode === 'cloud') {
+      db.deleteTerm(termId);
+    }
     recordLocallyPendingEdit('term', 'delete', `Deleted school term: "${targetTerm?.name || 'Term'}"`);
+  };
+
+  const addPublicHoliday = (termId: string, date: string) => {
+    const nextTerms = terms.map(t => {
+      if (t.id === termId) {
+        const holidays = t.publicHolidays || [];
+        if (!holidays.includes(date)) {
+          return {
+            ...t,
+            publicHolidays: [...holidays, date]
+          };
+        }
+      }
+      return t;
+    });
+    saveTerms(nextTerms);
+    recordLocallyPendingEdit('term', 'update', `Added public holiday on ${date}`);
+  };
+
+  const removePublicHoliday = (termId: string, date: string) => {
+    const nextTerms = terms.map(t => {
+      if (t.id === termId) {
+        const holidays = t.publicHolidays || [];
+        return {
+          ...t,
+          publicHolidays: holidays.filter(h => h !== date)
+        };
+      }
+      return t;
+    });
+    saveTerms(nextTerms);
+    recordLocallyPendingEdit('term', 'update', `Removed public holiday on ${date}`);
   };
 
   const resetData = () => {
@@ -1409,6 +1691,12 @@ School Administration Financial Audit System (MFA Secure)
     }];
     setTerms(initialTerms);
     localStorage.setItem('s_terms', JSON.stringify(initialTerms));
+
+    if (db.isActive() && storageMode === 'cloud') {
+      db.seedTables(INITIAL_USERS, INITIAL_STUDENTS, generateSeedPayments(), initialTerms).catch(err => {
+        console.error("Failed to seed fallback data on backend server:", err);
+      });
+    }
   };
 
   const clearSampleStudents = () => {
@@ -1446,8 +1734,11 @@ School Administration Financial Audit System (MFA Secure)
       terms,
       activeTerm,
       addTerm,
+      editTerm,
       setActiveTerm,
       deleteTerm,
+      addPublicHoliday,
+      removePublicHoliday,
       currentDate,
       setCurrentDate,
       login,
@@ -1487,7 +1778,13 @@ School Administration Financial Audit System (MFA Secure)
       bgSyncStatus,
       lastBgSyncTime,
       pendingLocalEdits: storageMode === 'cloud' ? [] : pendingLocalEdits,
-      clearPendingLocalEdits
+      clearPendingLocalEdits,
+      backups,
+      createBackup,
+      restoreBackup,
+      deleteBackup,
+      clearAllBackups,
+      nextBackupTimeLeft
     }}>
       {children}
     </AppContext.Provider>
