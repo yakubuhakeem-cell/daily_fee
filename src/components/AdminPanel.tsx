@@ -8,6 +8,7 @@ import { useApp } from '../context/AppContext';
 import { StudentClass, Student, UserRole } from '../types';
 import { Plus, UserPlus, Trash2, Edit2, ShieldAlert, Check, X, ToggleLeft, ToggleRight, Database, Server, RefreshCw, Copy, Share2, Users, BellRing, MessageSquareCode, UserCheck, Camera, Upload, Search } from 'lucide-react';
 import { getClassCategory } from '../initialData';
+import { AdjustmentsTab } from './AdjustmentsTab';
 
 export const AdminPanel: React.FC = () => {
   const { 
@@ -36,6 +37,7 @@ export const AdminPanel: React.FC = () => {
     currentDate,
     activeTerm,
     payments,
+    adjustPayment,
     resetData,
     purgeDeactivatedStudents,
     backups,
@@ -43,10 +45,13 @@ export const AdminPanel: React.FC = () => {
     restoreBackup,
     deleteBackup,
     clearAllBackups,
-    nextBackupTimeLeft
+    nextBackupTimeLeft,
+    audioMuted,
+    setAudioMuted,
+    playFeedbackSound
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'students' | 'mfa' | 'gates' | 'database'>('students');
+  const [activeTab, setActiveTab] = useState<'students' | 'mfa' | 'gates' | 'database' | 'adjustments'>('students');
   const [studentFilter, setStudentFilter] = useState<'all' | 'active' | 'inactive'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [showLedgerSwitchModal, setShowLedgerSwitchModal] = useState(false);
@@ -173,7 +178,353 @@ export const AdminPanel: React.FC = () => {
   const [newStudentPhone, setNewStudentPhone] = useState('');
   const [newStudentPhoto, setNewStudentPhoto] = useState<string | null>(null);
   const [newStudentDiscount, setNewStudentDiscount] = useState<number>(0);
+  const [newStudentGender, setNewStudentGender] = useState<'Male' | 'Female'>('Male');
   const [editStudentObj, setEditStudentObj] = useState<Student | null>(null);
+
+  // CSV Import states
+  const [csvPreviewRows, setCsvPreviewRows] = useState<any[]>([]);
+  const [csvParsingError, setCsvParsingError] = useState<string | null>(null);
+  const [isCsvDragging, setIsCsvDragging] = useState(false);
+  const [showCsvPreviewModal, setShowCsvPreviewModal] = useState(false);
+  const [showBulkImportModal, setShowBulkImportModal] = useState(false);
+  const [pastedRosterText, setPastedRosterText] = useState('');
+  const [importSource, setImportSource] = useState<'upload' | 'paste'>('upload');
+
+  const normalizeClassOrGrade = (val: string): StudentClass | null => {
+    const clean = val.trim().toUpperCase().replace(/[\s-_]/g, '');
+    
+    if (clean === 'NURSERY') return 'Nursery';
+    if (clean === 'KG1' || clean === 'KINDERGARTEN1' || clean === 'KINDERGARTENONE') return 'KG1';
+    if (clean === 'KG2' || clean === 'KINDERGARTENTWO') return 'KG2';
+    
+    const matchB = clean.match(/^(?:B|BASIC|GRADE|PRIMARY|CLASS)(\d)$/);
+    if (matchB) {
+      const num = matchB[1];
+      const bClass = `B${num}` as StudentClass;
+      const validB = ['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9'];
+      if (validB.includes(bClass)) return bClass;
+    }
+    
+    if (/^[1-9]$/.test(clean)) {
+      return `B${clean}` as StudentClass;
+    }
+    
+    const directClasses: Record<string, StudentClass> = {
+      'NURSERY': 'Nursery',
+      'KG1': 'KG1',
+      'KG2': 'KG2',
+      'B1': 'B1',
+      'B2': 'B2',
+      'B3': 'B3',
+      'B4': 'B4',
+      'B5': 'B5',
+      'B6': 'B6',
+      'B7': 'B7',
+      'B8': 'B8',
+      'B9': 'B9'
+    };
+    
+    return directClasses[clean] || null;
+  };
+
+  const validateCsvRow = (row: any) => {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    
+    const name = row.name ? row.name.trim() : null;
+    if (!name) {
+      errors.push("Missing pupil full name");
+    } else if (name.length < 3) {
+      warnings.push("Pupil name is unusually short");
+    }
+    
+    const rawClass = row.rawClass ? row.rawClass.trim() : null;
+    let normalized: StudentClass | null = null;
+    if (!rawClass) {
+      errors.push("Missing class/grade field");
+    } else {
+      normalized = normalizeClassOrGrade(rawClass);
+      if (!normalized) {
+        errors.push(`Invalid class or grade '${rawClass}'. Hand-entered grades must be KG1, KG2, Nursery, B1-B9.`);
+      } else if (normalized.toLowerCase() !== rawClass.toLowerCase()) {
+        warnings.push(`Normalized '${rawClass}' to '${normalized}'`);
+      }
+    }
+    
+    let guardianPhone = row.guardianPhone ? row.guardianPhone.toString().trim().replace(/\D/g, '') : undefined;
+    if (row.guardianPhone && !guardianPhone) {
+      warnings.push("Guardian phone contains no digits; ignored");
+      guardianPhone = undefined;
+    } else if (guardianPhone && (guardianPhone.length < 9 || guardianPhone.length > 15)) {
+      warnings.push(`Unusual phone number length (${guardianPhone.length} digits)`);
+    }
+    
+    let discountVal = 0;
+    if (row.discount !== undefined && row.discount !== '') {
+      const dVal = parseFloat(row.discount);
+      if (isNaN(dVal)) {
+        warnings.push("Discount is not a number; reset to 0");
+      } else if (dVal < 0 || dVal > 5) {
+        warnings.push("Discount must be GHC 0 to 5; capped.");
+        discountVal = Math.max(0, Math.min(5, dVal));
+      } else {
+        discountVal = dVal;
+      }
+    }
+
+    let parsedGender: 'Male' | 'Female' | undefined = undefined;
+    if (row.rawGender) {
+      const cleanG = row.rawGender.trim().toLowerCase();
+      if (cleanG.startsWith('m')) {
+        parsedGender = 'Male';
+      } else if (cleanG.startsWith('f')) {
+        parsedGender = 'Female';
+      } else {
+        warnings.push(`Unrecognized gender '${row.rawGender}'; defaulting to Male`);
+        parsedGender = 'Male';
+      }
+    }
+    
+    return {
+      ...row,
+      name: name || '',
+      guardianPhone,
+      discount: discountVal,
+      normalizedClass: normalized,
+      gender: parsedGender,
+      isValid: errors.length === 0,
+      errors,
+      warnings
+    };
+  };
+
+  const parseCSV = (text: string) => {
+    const lines: string[][] = [];
+    let row: string[] = [];
+    let inQuotes = false;
+    let currentVal = '';
+    
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+      const nextChar = text[i + 1];
+      
+      if (char === '"') {
+        if (inQuotes && nextChar === '"') {
+          currentVal += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if ((char === ',' || char === '\t') && !inQuotes) {
+        row.push(currentVal.trim());
+        currentVal = '';
+      } else if ((char === '\r' || char === '\n') && !inQuotes) {
+        if (char === '\r' && nextChar === '\n') {
+          i++;
+        }
+        row.push(currentVal.trim());
+        if (row.length > 0 && !(row.length === 1 && row[0] === '')) {
+          lines.push(row);
+        }
+        row = [];
+        currentVal = '';
+      } else {
+        currentVal += char;
+      }
+    }
+    
+    if (currentVal || row.length > 0) {
+      row.push(currentVal.trim());
+      if (row.length > 0 && !(row.length === 1 && row[0] === '')) {
+        lines.push(row);
+      }
+    }
+    
+    return lines;
+  };
+
+  const handleCsvFileLoad = (file: File) => {
+    setCsvParsingError(null);
+    
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const text = e.target?.result as string;
+        if (!text) {
+          setCsvParsingError("The CSV file is empty or could not be read.");
+          return;
+        }
+        
+        const parsedLines = parseCSV(text);
+        if (parsedLines.length < 2) {
+          setCsvParsingError("The spreadsheet must contain at least a header row and one student data row.");
+          return;
+        }
+        
+        const headers = parsedLines[0].map(h => h.toLowerCase().trim());
+        
+        let nameIdx = headers.findIndex(h => h.includes('name'));
+        let classIdx = headers.findIndex(h => h.includes('class') || h.includes('grade') || h.includes('level'));
+        let phoneIdx = headers.findIndex(h => h.includes('phone') || h.includes('contact') || h.includes('guardian') || h.includes('mobile'));
+        let discountIdx = headers.findIndex(h => h.includes('discount') || h.includes('fee') || h.includes('scholarship') || h.includes('rate'));
+        let genderIdx = headers.findIndex(h => h.includes('gender') || h.includes('sex'));
+        
+        if (nameIdx === -1) nameIdx = 0;
+        if (classIdx === -1) classIdx = headers.length > 1 ? 1 : -1;
+        if (phoneIdx === -1 && headers.length > 2) phoneIdx = 2;
+        if (discountIdx === -1 && headers.length > 3) discountIdx = 3;
+        if (genderIdx === -1 && headers.length > 4) genderIdx = 4;
+        
+        if (classIdx === -1 && nameIdx === -1) {
+          setCsvParsingError("Could not detect Name and Class columns. Please make sure the header row contains columns labeled 'Name' and 'Class'.");
+          return;
+        }
+        
+        const rowsToValidate: any[] = [];
+        for (let i = 1; i < parsedLines.length; i++) {
+          const line = parsedLines[i];
+          if (line.length === 0 || (line.length === 1 && line[0] === '')) {
+            continue;
+          }
+          
+          const rawName = nameIdx !== -1 && nameIdx < line.length ? line[nameIdx] : '';
+          const rawClass = classIdx !== -1 && classIdx < line.length ? line[classIdx] : '';
+          const rawPhone = phoneIdx !== -1 && phoneIdx < line.length ? line[phoneIdx] : '';
+          const rawDiscount = discountIdx !== -1 && discountIdx < line.length ? line[discountIdx] : '';
+          const rawGender = genderIdx !== -1 && genderIdx < line.length ? line[genderIdx] : '';
+          
+          const validatedRow = validateCsvRow({
+            rowIndex: i + 1,
+            name: rawName,
+            rawClass: rawClass,
+            guardianPhone: rawPhone,
+            discount: rawDiscount,
+            rawGender: rawGender
+          });
+          
+          rowsToValidate.push(validatedRow);
+        }
+        
+        if (rowsToValidate.length === 0) {
+          setCsvParsingError("The CSV file contained no valid student rows under the header.");
+          return;
+        }
+        
+        setCsvPreviewRows(rowsToValidate);
+        setShowCsvPreviewModal(true);
+      } catch (err: any) {
+        setCsvParsingError(`Error parsing CSV file: ${err.message || err}`);
+      }
+    };
+    
+    reader.readAsText(file);
+  };
+
+  const handleProcessPastedText = (rawText: string) => {
+    setCsvParsingError(null);
+    if (!rawText.trim()) {
+      setCsvParsingError("The text input is empty. Please copy-paste some valid rows under a header.");
+      return;
+    }
+
+    try {
+      const parsedLines = parseCSV(rawText.trim());
+      if (parsedLines.length < 2) {
+        setCsvParsingError("The pasted dataset must contain at least a header row and one student data row.");
+        return;
+      }
+
+      const headers = parsedLines[0].map(h => h.toLowerCase().trim());
+
+      let nameIdx = headers.findIndex(h => h.includes('name'));
+      let classIdx = headers.findIndex(h => h.includes('class') || h.includes('grade') || h.includes('level'));
+      let phoneIdx = headers.findIndex(h => h.includes('phone') || h.includes('contact') || h.includes('guardian') || h.includes('mobile'));
+      let discountIdx = headers.findIndex(h => h.includes('discount') || h.includes('fee') || h.includes('scholarship') || h.includes('rate'));
+      let genderIdx = headers.findIndex(h => h.includes('gender') || h.includes('sex'));
+
+      if (nameIdx === -1) nameIdx = 0;
+      if (classIdx === -1) classIdx = headers.length > 1 ? 1 : -1;
+      if (phoneIdx === -1 && headers.length > 2) phoneIdx = 2;
+      if (discountIdx === -1 && headers.length > 3) discountIdx = 3;
+      if (genderIdx === -1 && headers.length > 4) genderIdx = 4;
+
+      if (classIdx === -1 && nameIdx === -1) {
+        setCsvParsingError("Could not detect Name and Class columns in the pasted text headers. Ensure your top row includes columns like 'Name' and 'Class'.");
+        return;
+      }
+
+      const rowsToValidate: any[] = [];
+      for (let i = 1; i < parsedLines.length; i++) {
+        const line = parsedLines[i];
+        if (line.length === 0 || (line.length === 1 && line[0] === '')) {
+          continue;
+        }
+
+        const rawName = nameIdx !== -1 && nameIdx < line.length ? line[nameIdx] : '';
+        const rawClass = classIdx !== -1 && classIdx < line.length ? line[classIdx] : '';
+        const rawPhone = phoneIdx !== -1 && phoneIdx < line.length ? line[phoneIdx] : '';
+        const rawDiscount = discountIdx !== -1 && discountIdx < line.length ? line[discountIdx] : '';
+        const rawGender = genderIdx !== -1 && genderIdx < line.length ? line[genderIdx] : '';
+
+        const validatedRow = validateCsvRow({
+          rowIndex: i + 1,
+          name: rawName,
+          rawClass: rawClass,
+          guardianPhone: rawPhone,
+          discount: rawDiscount,
+          rawGender: rawGender
+        });
+
+        rowsToValidate.push(validatedRow);
+      }
+
+      if (rowsToValidate.length === 0) {
+        setCsvParsingError("The pasted text contained no valid student rows under the header.");
+        return;
+      }
+
+      setCsvPreviewRows(rowsToValidate);
+      setShowCsvPreviewModal(true);
+      setShowBulkImportModal(false); // Close setup wizard to switch to review mode
+    } catch (err: any) {
+      setCsvParsingError(`Error parsing pasted dataset: ${err.message || err}`);
+    }
+  };
+
+  const handleDownloadSampleCsv = () => {
+    const csvContent = "Full Name,Class,Guardian Phone,Discount\n" +
+                       "Priscilla Owusu,B1,0541234567,2.50\n" +
+                       "Kofi Mensah,KG1,0507654321,0.00\n" +
+                       "Abena Boateng,Nursery,,5.00";
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", "student_roster_template.csv");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const executeCsvImport = () => {
+    const validRows = csvPreviewRows.filter(r => r.isValid);
+    if (validRows.length === 0) return;
+
+    validRows.forEach(row => {
+      addStudent(
+        row.name.trim(),
+        row.normalizedClass,
+        row.guardianPhone?.trim() || undefined,
+        undefined,
+        row.discount,
+        row.gender
+      );
+    });
+
+    showToast(`Successfully enrolled ${validRows.length} students from CSV roster!`);
+    setShowCsvPreviewModal(false);
+    setCsvPreviewRows([]);
+  };
   
   // Success indicator
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -315,17 +666,29 @@ export const AdminPanel: React.FC = () => {
     e.preventDefault();
     if (!newStudentName.trim()) return;
 
+    const isDuplicate = students.some(
+      s => s.name.trim().toLowerCase() === newStudentName.trim().toLowerCase() && s.class === newStudentClass
+    );
+
+    if (isDuplicate) {
+      playFeedbackSound('error');
+      showToast(`Conflict error: Pupil "${newStudentName.trim()}" is already registered in class ${newStudentClass}!`);
+      return;
+    }
+
     addStudent(
       newStudentName.trim(), 
       newStudentClass, 
       newStudentPhone.trim() || undefined, 
       newStudentPhoto || undefined,
-      newStudentDiscount
+      newStudentDiscount,
+      newStudentGender
     );
     setNewStudentName('');
     setNewStudentPhone('');
     setNewStudentPhoto(null);
     setNewStudentDiscount(0);
+    setNewStudentGender('Male');
     showToast('Student successfully registered to the daily ledger catalog.');
   };
 
@@ -335,6 +698,7 @@ export const AdminPanel: React.FC = () => {
     setNewStudentPhone('');
     setNewStudentPhoto(null);
     setNewStudentDiscount(0);
+    setNewStudentGender('Male');
     showToast('Student registration form cleared.');
   };
 
@@ -539,6 +903,356 @@ export const AdminPanel: React.FC = () => {
         </div>
       )}
 
+      {/* BULK DATA IMPORT WIZARD MODAL */}
+      {showBulkImportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-fade-in animate-duration-200">
+          <div className="bg-neutral-950 border-4 border-amber-500 max-w-3xl w-full p-6 space-y-6 shadow-[10px_10px_0px_0px_rgba(245,158,11,0.25)] relative max-h-[95vh] flex flex-col justify-between overflow-y-auto">
+            
+            {/* Header */}
+            <div className="flex items-center justify-between border-b-2 border-neutral-850 pb-4 shrink-0">
+              <div className="flex items-center gap-3">
+                <Database className="text-amber-500 animate-pulse" size={28} />
+                <div>
+                  <span className="text-[10px] font-mono tracking-widest text-amber-500 uppercase font-black">ADMINISTRATOR TOOLKIT</span>
+                  <h3 className="text-lg font-black uppercase tracking-tight text-white font-mono">Bulk Pupil Import Wizard</h3>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowBulkImportModal(false);
+                  setPastedRosterText('');
+                  setCsvParsingError(null);
+                }}
+                className="text-neutral-500 hover:text-white transition-colors p-1 cursor-pointer bg-transparent border-0"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Step 1: Standardized Template Guide */}
+            <div className="bg-neutral-900 border-2 border-neutral-800 p-4 space-y-2 shrink-0">
+              <h4 className="text-[10px] font-mono font-black text-amber-400 uppercase tracking-wider flex items-center gap-2">
+                📋 Required Column Layout & CSV Template Standard
+              </h4>
+              <p className="text-[11px] text-neutral-350 leading-relaxed font-semibold">
+                To guarantee correct automatic assignment, your spreadsheet or pasted cells must respect this header line format and these exact column names:
+              </p>
+              <div className="overflow-x-auto text-[10px] font-mono">
+                <table className="w-full text-center border-collapse">
+                  <thead>
+                    <tr className="bg-neutral-950 text-neutral-450 border border-neutral-800 uppercase text-[9px]">
+                      <th className="p-2 border-r border-neutral-800">Full Name (Required)</th>
+                      <th className="p-2 border-r border-neutral-800">Class (Required)</th>
+                      <th className="p-2 border-r border-neutral-800">Guardian Phone (Optional)</th>
+                      <th className="p-2">Discount (Optional)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="bg-neutral-950/40 text-neutral-300 border border-neutral-800">
+                      <td className="p-2 border-r border-neutral-805">Priscilla Owusu</td>
+                      <td className="p-2 border-r border-neutral-805">B1</td>
+                      <td className="p-2 border-r border-neutral-805">0541234567</td>
+                      <td className="p-2 font-bold text-amber-400">2.50</td>
+                    </tr>
+                    <tr className="bg-neutral-950/40 text-neutral-300 border border-neutral-800">
+                      <td className="p-2 border-r border-neutral-805">Kofi Mensah</td>
+                      <td className="p-2 border-r border-neutral-805">KG1</td>
+                      <td className="p-2 border-r border-neutral-805">0507654321</td>
+                      <td className="p-2 font-bold text-amber-400">0.00</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div className="pt-2 flex justify-end">
+                <button
+                  type="button"
+                  onClick={handleDownloadSampleCsv}
+                  className="bg-neutral-950 hover:bg-neutral-800 text-amber-500 hover:text-amber-400 border border-neutral-800 hover:border-amber-500/45 px-3 py-1.5 font-mono text-[9px] font-black uppercase tracking-wider transition-colors cursor-pointer"
+                >
+                  📥 Download Sample Template .CSV
+                </button>
+              </div>
+            </div>
+
+            {/* Input Selection Tabs */}
+            <div className="space-y-4 flex-1 flex flex-col min-h-0">
+              <div className="flex border-b-2 border-neutral-850 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setImportSource('upload');
+                    setCsvParsingError(null);
+                  }}
+                  className={`px-4 py-2.5 font-mono text-xs font-black uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer border-b-2 -mb-[2px] bg-transparent ${
+                    importSource === 'upload'
+                      ? 'border-amber-400 text-amber-400 bg-neutral-900/50'
+                      : 'border-transparent text-neutral-555 hover:text-neutral-300'
+                  }`}
+                >
+                  📁 Option A: Roster File Upload
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setImportSource('paste');
+                    setCsvParsingError(null);
+                  }}
+                  className={`px-4 py-2.5 font-mono text-xs font-black uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer border-b-2 -mb-[2px] bg-transparent ${
+                    importSource === 'paste'
+                      ? 'border-amber-400 text-amber-400 bg-neutral-900/50'
+                      : 'border-transparent text-neutral-555 hover:text-neutral-300'
+                  }`}
+                >
+                  📝 Option B: Copy-Paste Cells
+                </button>
+              </div>
+
+              {/* Tab Content Dynamic View */}
+              <div className="flex-1 min-h-[160px] flex flex-col justify-center">
+                {importSource === 'upload' ? (
+                  <div
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setIsCsvDragging(true);
+                    }}
+                    onDragLeave={() => setIsCsvDragging(false)}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setIsCsvDragging(false);
+                      const file = e.dataTransfer.files?.[0];
+                      if (file) {
+                        handleCsvFileLoad(file);
+                        setShowBulkImportModal(false); // Switch focus to the preview table
+                      }
+                    }}
+                    className={`border-2 border-dashed p-8 text-center transition-all cursor-pointer flex flex-col items-center justify-center flex-1 min-h-[150px] ${
+                      isCsvDragging
+                        ? "border-amber-400 bg-amber-955/20"
+                        : "border-neutral-800 hover:border-neutral-700 bg-neutral-950/20"
+                    }`}
+                    onClick={() => document.getElementById('modal-csv-file-input')?.click()}
+                  >
+                    <Upload size={28} className={isCsvDragging ? "text-amber-400 mb-2 animate-bounce" : "text-neutral-500 mb-2"} />
+                    <span className="text-xs font-mono font-black text-neutral-250 uppercase tracking-wider block">
+                      Drag & Drop Standardized CSV File
+                    </span>
+                    <span className="text-[10px] font-mono text-neutral-500 uppercase mt-1 block">
+                      or click to select file from your machine
+                    </span>
+                    <input
+                      id="modal-csv-file-input"
+                      type="file"
+                      accept=".csv"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          handleCsvFileLoad(file);
+                          setShowBulkImportModal(false); // Switch focus to the preview table
+                        }
+                        e.target.value = '';
+                      }}
+                      className="hidden"
+                    />
+                  </div>
+                ) : (
+                  <div className="space-y-3 flex-1 flex flex-col">
+                    <p className="text-[10px] text-neutral-405 uppercase font-mono font-bold leading-relaxed">
+                      Copy whole rows from Excel or Google Sheets (with the header row included) and paste them directly in the zone below:
+                    </p>
+                    <textarea
+                      value={pastedRosterText}
+                      onChange={(e) => setPastedRosterText(e.target.value)}
+                      placeholder="Full Name&#9;Class&#9;Guardian Phone&#9;Discount&#10;Priscilla Owusu&#9;B1&#9;0541234567&#9;2.50&#10;Kofi Mensah&#9;KG1&#9;0507654321&#9;0.00"
+                      className="w-full flex-1 min-h-[160px] bg-neutral-950 border-2 border-neutral-800 font-mono text-xs p-4 focus:outline-none focus:border-amber-400 text-white placeholder:text-neutral-700"
+                    />
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => handleProcessPastedText(pastedRosterText)}
+                        className="bg-amber-400 hover:bg-amber-300 text-black px-4 py-2.5 font-mono text-[10px] font-black uppercase tracking-widest transition-all cursor-pointer flex items-center gap-2 border-0"
+                        disabled={!pastedRosterText.trim()}
+                      >
+                        🚀 Parse & Validate Copied Dataset
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Parsing Errors within the Setup Wizard */}
+              {csvParsingError && (
+                <div className="bg-red-955 border-2 border-red-900/60 p-3 text-left shrink-0">
+                  <p className="text-[9px] font-mono font-black text-rose-400 uppercase tracking-widest mb-1">
+                    ⚠️ Import Parsing Conflict:
+                  </p>
+                  <p className="text-[10px] font-mono font-bold text-neutral-350 leading-snug">
+                    {csvParsingError}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Bottom Actions */}
+            <div className="border-t-2 border-neutral-850 pt-4 flex gap-3 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowBulkImportModal(false);
+                  setPastedRosterText('');
+                  setCsvParsingError(null);
+                }}
+                className="w-full py-3 px-4 bg-neutral-900 hover:bg-neutral-850 border border-neutral-800 text-neutral-400 hover:text-white font-bold uppercase text-xs tracking-wider transition-colors cursor-pointer font-mono text-center"
+              >
+                Close Import Toolkit
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* CSV Spreadsheet Bulk Import Review Modal */}
+      {showCsvPreviewModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-fade-in animate-duration-200">
+          <div className="bg-neutral-950 border-4 border-amber-500 max-w-4xl w-full p-6 space-y-6 shadow-[10px_10px_0px_0px_rgba(245,158,11,0.25)] relative max-h-[90vh] flex flex-col justify-between">
+            
+            {/* Header */}
+            <div className="flex items-center justify-between border-b-2 border-neutral-850 pb-4">
+              <div className="flex items-center gap-3">
+                <Database className="text-amber-500 animate-pulse" size={28} />
+                <div>
+                  <span className="text-[10px] font-mono tracking-widest text-amber-500 uppercase font-black">BULK SPREADSHEET VALIDATION ENGINE</span>
+                  <h3 className="text-lg font-black uppercase tracking-tight text-white font-mono">Verify Enrollee Ledger Dataset</h3>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCsvPreviewModal(false);
+                  setCsvPreviewRows([]);
+                }}
+                className="text-neutral-550 hover:text-white transition-colors p-1"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Stats Indicators */}
+            <div className="grid grid-cols-3 gap-3">
+              <div className="bg-neutral-900 border-2 border-neutral-800 p-3 text-center">
+                <span className="block text-[9px] font-mono text-neutral-400 uppercase font-bold">Total Rows</span>
+                <span className="text-lg font-mono font-black text-white">{csvPreviewRows.length}</span>
+              </div>
+              <div className="bg-neutral-900 border-2 border-neutral-800 p-3 text-center">
+                <span className="block text-[9px] font-mono text-emerald-500 uppercase font-extrabold">Ready to Enroll</span>
+                <span className="text-lg font-mono font-black text-emerald-400">
+                  {csvPreviewRows.filter(r => r.isValid).length}
+                </span>
+              </div>
+              <div className="bg-neutral-900 border-2 border-neutral-800 p-3 text-center">
+                <span className="block text-[9px] font-mono text-red-500 uppercase font-extrabold">Validation Errors</span>
+                <span className="text-lg font-mono font-black text-red-400">
+                  {csvPreviewRows.filter(r => !r.isValid).length}
+                </span>
+              </div>
+            </div>
+
+            {/* List Row Preview */}
+            <div className="flex-1 overflow-y-auto border-2 border-neutral-800 bg-neutral-950/40 p-1 font-mono text-xs text-white max-h-[40vh]">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-neutral-900 text-neutral-450 text-[9px] uppercase tracking-wider sticky top-0">
+                    <th className="p-3 border-b border-neutral-850">Row</th>
+                    <th className="p-3 border-b border-neutral-850">Pupil Full Name</th>
+                    <th className="p-3 border-b border-neutral-850">Hand-entered Class</th>
+                    <th className="p-3 border-b border-neutral-850">Verified Grade</th>
+                    <th className="p-3 border-b border-neutral-850">Contact / Phone</th>
+                    <th className="p-3 border-b border-neutral-850">Discount</th>
+                    <th className="p-3 border-b border-neutral-850">Validation Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-neutral-900">
+                  {csvPreviewRows.map((row, idx) => (
+                    <tr key={idx} className="hover:bg-neutral-900/40 text-[11px]">
+                      <td className="p-3 font-semibold text-neutral-500">#{row.rowIndex}</td>
+                      <td className="p-3 font-black uppercase text-white">{row.name || <span className="text-red-500 italic">empty</span>}</td>
+                      <td className="p-3 text-neutral-400">{row.rawClass || <span className="text-red-500 italic">empty</span>}</td>
+                      <td className="p-3">
+                        {row.normalizedClass ? (
+                          <span className="px-1.5 py-0.5 rounded-sm bg-amber-400/10 text-amber-400 font-extrabold border border-amber-500/25">
+                            {row.normalizedClass}
+                          </span>
+                        ) : (
+                          <span className="px-1.5 py-0.5 rounded-sm bg-red-955 text-red-400 font-extrabold border border-red-900/40 uppercase text-[9px]">
+                            UNRESOLVED
+                          </span>
+                        )}
+                      </td>
+                      <td className="p-3 text-neutral-405">{row.guardianPhone || <span className="text-neutral-600 font-mono">—</span>}</td>
+                      <td className="p-3 text-amber-400 font-black">GHC {row.discount.toFixed(2)}</td>
+                      <td className="p-3">
+                        <div className="space-y-1">
+                          {row.isValid ? (
+                            <span className="inline-flex items-center gap-1 text-[9px] font-black text-emerald-400 bg-emerald-950/20 px-1.5 py-0.5 rounded border border-emerald-990 uppercase">
+                              <Check size={10} /> Valid Roster Entry
+                            </span>
+                          ) : (
+                            <div className="space-y-0.5">
+                              {row.errors.map((err: string, i: number) => (
+                                <span key={i} className="block text-[8px] font-black text-rose-450 bg-red-955 px-1.5 py-0.5 rounded border border-red-900/30 uppercase leading-normal">
+                                  🚫 {err}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          {row.warnings.map((warn: string, i: number) => (
+                            <span key={i} className="block text-[8px] font-medium text-amber-400 bg-amber-955 px-1.5 py-0.5 rounded border border-amber-900/30 normal-case leading-normal">
+                              ⚠️ {warn}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Bottom Actions */}
+            <div className="border-t-2 border-neutral-850 pt-4 flex gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCsvPreviewModal(false);
+                  setCsvPreviewRows([]);
+                }}
+                className="w-1/3 py-3 px-4 bg-neutral-900 hover:bg-neutral-850 border border-neutral-800 text-neutral-400 hover:text-white font-bold uppercase text-xs tracking-wider transition-colors cursor-pointer font-mono"
+              >
+                Discard Dataset
+              </button>
+              
+              <button
+                type="button"
+                disabled={csvPreviewRows.filter(r => r.isValid).length === 0}
+                onClick={executeCsvImport}
+                className={`w-2/3 py-3 px-4 font-black uppercase text-xs tracking-wider font-mono transition-all flex items-center justify-between cursor-pointer ${
+                  csvPreviewRows.some(r => r.isValid)
+                    ? 'bg-amber-400 hover:bg-amber-350 text-black hover:scale-[1.01] active:scale-[0.99]'
+                    : 'bg-neutral-800 text-neutral-500 cursor-not-allowed border border-neutral-700'
+                }`}
+              >
+                <span>🚀 Confirm Bulk Enrollment</span>
+                <span className="bg-black/10 px-2 py-0.5 rounded text-[10px]">
+                  Import {csvPreviewRows.filter(r => r.isValid).length} Students
+                </span>
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+
       {/* Admin header with controls */}
       <div className="bg-neutral-900 border-4 border-neutral-800 p-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
         <div>
@@ -591,6 +1305,17 @@ export const AdminPanel: React.FC = () => {
           >
             <Database size={13} />
             Database Connect
+          </button>
+          <button
+            onClick={() => setActiveTab('adjustments')}
+            className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
+              activeTab === 'adjustments'
+                ? 'bg-amber-400 text-black'
+                : 'text-neutral-500 hover:text-white'
+            }`}
+          >
+            <RefreshCw size={13} />
+            Adjust Payments
           </button>
         </div>
       </div>
@@ -795,13 +1520,26 @@ export const AdminPanel: React.FC = () => {
           )}
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Add / Edit student card */}
-          <div className="bg-neutral-900 border-4 border-neutral-800 p-8 h-fit space-y-6">
+          {/* Column 1: Forms & CSV Imports */}
+          <div className="space-y-6 col-span-1">
+            {/* Add / Edit student card */}
+            <div className="bg-neutral-900 border-4 border-neutral-800 p-8 h-fit space-y-6">
             {!editStudentObj ? (
               <form onSubmit={handleAddStudentSubmit} className="space-y-5">
-                <div className="flex items-center gap-3 pb-3 border-b-2 border-neutral-800">
-                  <UserPlus size={18} className="text-amber-400" />
-                  <h3 className="text-sm font-black uppercase tracking-widest text-white">Register New Student</h3>
+                <div className="flex items-center justify-between gap-2 pb-3 border-b-2 border-neutral-800">
+                  <div className="flex items-center gap-3">
+                    <UserPlus size={18} className="text-amber-400" />
+                    <h3 className="text-sm font-black uppercase tracking-widest text-white">Register Student</h3>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowBulkImportModal(true)}
+                    className="bg-neutral-800 hover:bg-amber-400 hover:text-black border border-neutral-700 hover:border-amber-400 px-2.5 py-1 text-[8px] font-mono font-black uppercase tracking-widest transition-all cursor-pointer border-0"
+                    id="btn-trigger-bulk-import"
+                    title="Bulk import pupils from spreadsheet template or copy-pasted block"
+                  >
+                    🚀 Bulk Import
+                  </button>
                 </div>
 
                 <div className="space-y-4">
@@ -842,6 +1580,28 @@ export const AdminPanel: React.FC = () => {
                       <div className="bg-neutral-950 border-2 border-neutral-850 py-3 px-4 text-xs text-amber-400 font-black font-mono uppercase tracking-wider">
                         {getClassCategory(newStudentClass)}
                       </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                      Pupil Gender
+                    </label>
+                    <div className="flex gap-3">
+                      {(['Male', 'Female'] as const).map((g) => (
+                        <button
+                          key={g}
+                          type="button"
+                          onClick={() => setNewStudentGender(g)}
+                          className={`flex-1 py-3 px-4 text-xs font-mono font-black uppercase tracking-widest border-2 transition-all cursor-pointer ${
+                            newStudentGender === g
+                              ? 'bg-amber-400 text-black border-amber-400 font-black'
+                              : 'bg-neutral-950 text-neutral-400 border-neutral-800 hover:text-white hover:border-neutral-700'
+                          }`}
+                        >
+                          {g === 'Male' ? '👦 Male' : '👧 Female'}
+                        </button>
+                      ))}
                     </div>
                   </div>
 
@@ -1006,6 +1766,28 @@ export const AdminPanel: React.FC = () => {
 
                   <div>
                     <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                      Pupil Gender
+                    </label>
+                    <div className="flex gap-3">
+                      {(['Male', 'Female'] as const).map((g) => (
+                        <button
+                          key={g}
+                          type="button"
+                          onClick={() => setEditStudentObj({ ...editStudentObj, gender: g })}
+                          className={`flex-1 py-3 px-4 text-xs font-mono font-black uppercase tracking-widest border-2 transition-all cursor-pointer ${
+                            (editStudentObj.gender || 'Male') === g
+                              ? 'bg-amber-400 text-black border-amber-400 font-black'
+                              : 'bg-neutral-950 text-neutral-400 border-neutral-800 hover:text-white hover:border-neutral-700'
+                          }`}
+                        >
+                          {g === 'Male' ? '👦 Male' : '👧 Female'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
                       Guardian Phone Number
                     </label>
                     <input
@@ -1105,6 +1887,33 @@ export const AdminPanel: React.FC = () => {
                 </div>
               </form>
             )}
+            </div>
+
+            {/* CSV Bulk Import Card */}
+            <div className="bg-neutral-900 border-4 border-neutral-800 p-8 h-fit space-y-5">
+              <div className="flex items-center gap-3 pb-3 border-b-2 border-neutral-800">
+                <Database size={18} className="text-amber-400" />
+                <h3 className="text-sm font-black uppercase tracking-widest text-white">Mass Enrollment Roster</h3>
+              </div>
+
+              <p className="text-[11px] text-neutral-350 font-semibold leading-relaxed">
+                Onboard whole classrooms or grades simultaneously. Reduce tedious keystroke entries by uploading a custom spreadsheet or copy-pasting active pupil lists directly.
+              </p>
+
+              <div className="space-y-4 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowBulkImportModal(true)}
+                  className="w-full text-xs font-mono font-black border-2 border-amber-500 bg-amber-500/10 hover:bg-amber-400 hover:text-black text-amber-400 py-3 uppercase tracking-widest transition-all text-center cursor-pointer flex items-center justify-center gap-2 border-0"
+                  id="btn-sidebar-launch-bulk"
+                >
+                  🚀 Open Import Toolkit
+                </button>
+                <p className="text-[8px] font-mono text-neutral-500 uppercase tracking-wide text-center">
+                  Supports Excel copy/paste cells & standard .CSV files
+                </p>
+              </div>
+            </div>
           </div>
 
           {/* Directory Listings */}
@@ -1231,6 +2040,14 @@ export const AdminPanel: React.FC = () => {
                       <p className={`text-base font-black text-white uppercase tracking-tight ${!st.active ? 'line-through text-neutral-500' : ''}`}>{st.name}</p>
                       <div className="flex gap-2.5 items-center text-[10px] text-neutral-400 font-mono font-bold uppercase tracking-wider">
                         <span className="bg-neutral-955 border border-neutral-800 px-2.5 py-0.5 text-amber-400 font-black">{st.class}</span>
+                        {st.gender && (
+                          <>
+                            <span>•</span>
+                            <span className="bg-neutral-955 border border-neutral-800 px-2 py-0.5 text-neutral-300 font-extrabold flex items-center gap-0.5">
+                              {st.gender === 'Male' ? '👦 M' : '👧 F'}
+                            </span>
+                          </>
+                        )}
                         <span>•</span>
                         <span>Category: {st.category}</span>
                         <span>•</span>
@@ -1906,7 +2723,7 @@ export const AdminPanel: React.FC = () => {
             </div>
           </div>
         </div>
-      ) : (
+      ) : activeTab === 'database' ? (
         <div className="space-y-6">
           <div className="bg-neutral-900 border-4 border-neutral-800 p-8 space-y-6">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center pb-4 border-b-2 border-neutral-800 gap-4">
@@ -2047,6 +2864,54 @@ export const AdminPanel: React.FC = () => {
                     storageMode !== 'cloud' ? 'text-neutral-600' : 'text-neutral-300'
                   }`}>
                     {bgSyncEnabled && storageMode === 'cloud' ? 'ON' : 'OFF'}
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            {/* System Audio & Feedback Chime Settings */}
+            <div className={`p-4 border-2 transition-all ${
+              !audioMuted
+                ? 'bg-amber-950/20 border-amber-900/60'
+                : 'bg-neutral-950/50 border-neutral-850'
+            } flex flex-col md:flex-row justify-between items-start md:items-center gap-4`}>
+              <div className="space-y-1.5 flex-1">
+                <div className="flex items-center gap-3">
+                  <h4 className="text-sm font-black uppercase text-white tracking-wider font-mono flex items-center gap-2">
+                    🔊 Portal Sound Effects
+                  </h4>
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-mono leading-none border uppercase tracking-wider font-bold ${
+                    !audioMuted
+                      ? 'bg-amber-950 text-amber-400 border-amber-900'
+                      : 'bg-neutral-900 text-neutral-500 border-neutral-800'
+                  }`}>
+                    {audioMuted ? 'MUTED' : 'ACTIVE'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-neutral-400 leading-relaxed font-semibold">
+                  Mute/unmute all auditory signals, including successful pupil check-ins (high-register chime), registration duplicate conflicts (low-register buzzer), or QR scan alerts.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3 shrink-0 self-end md:self-auto">
+                <label className="relative inline-flex items-center cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={!audioMuted}
+                    onChange={(e) => {
+                      setAudioMuted(!e.target.checked);
+                      showToast(
+                        e.target.checked
+                          ? 'Auditory feedback check-in sound cues ENABLED!'
+                          : 'Auditory feedback cues MUTED (Silent mode Active).'
+                      );
+                    }}
+                    className="sr-only peer"
+                    id="toggle-system-audio"
+                  />
+                  <div className="w-11 h-6 bg-neutral-800 rounded-full peer peer-focus:ring-0 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-neutral-400 after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-400 peer-checked:after:bg-black"></div>
+                  <span className="ml-3 text-xs font-black uppercase tracking-wider font-mono text-neutral-300">
+                    {!audioMuted ? 'ON' : 'OFF'}
                   </span>
                 </label>
               </div>
@@ -2515,6 +3380,8 @@ export const AdminPanel: React.FC = () => {
             </div>
           </div>
         </div>
+      ) : (
+        <AdjustmentsTab />
       )}
       {/* SMS Urgent notification Modal Overlay */}
       {smsTarget && (

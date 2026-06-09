@@ -20,6 +20,17 @@ export interface Student {
   guardianPhone?: string;
   photoUrl?: string;
   discount?: number; // Optional daily check-in discount amount (0.00 to 5.00)
+  gender?: 'Male' | 'Female';
+}
+
+export interface PaymentHistoryEntry {
+  modifiedBy: string;
+  modifiedAt: string;
+  oldAmount: number;
+  newAmount: number;
+  oldIsAbsent?: boolean;
+  newIsAbsent?: boolean;
+  reason: string;
 }
 
 export interface PaymentRecord {
@@ -35,6 +46,8 @@ export interface PaymentRecord {
   verified: boolean;
   notes?: string;
   isAbsent?: boolean; // True if the student was marked absent today
+  clearedDates?: string[]; // The array of past school days cleared by this debt payment
+  history?: PaymentHistoryEntry[];
 }
 
 export type UserRole = 'Administrator' | 'Teacher' | 'Accountant' | 'Headmaster';

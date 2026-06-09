@@ -2,7 +2,7 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import { initializeApp } from "firebase/app";
-import { getFirestore, collection, doc, getDocs, setDoc, deleteDoc, writeBatch } from "firebase/firestore";
+import { initializeFirestore, memoryLocalCache, collection, doc, getDocs, setDoc, deleteDoc, writeBatch } from "firebase/firestore";
 
 const DB_FILE = path.join(process.cwd(), "db.json");
 const CONFIG_FILE = path.join(process.cwd(), "firebase-applet-config.json");
@@ -34,18 +34,31 @@ function saveDatabase(data: DatabaseSchema) {
   }
 }
 
-// Initialize Firebase server-side if configuration exists
+// Core Timeout helper to prevent infinite hangs in sandbox or offline situations
+async function withTimeout<T>(promise: Promise<T>, timeoutMs = 2000, context = 'Firestore Operation'): Promise<T> {
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => {
+      reject(new Error(`[Timeout Error] ${context} timed out after ${timeoutMs}ms.`));
+    }, timeoutMs);
+  });
+  return Promise.race([promise, timeoutPromise]);
+}
+
+// Initialize Firebase server-side if configuration exists with long polling
 let firestoreDb: any = null;
 if (fs.existsSync(CONFIG_FILE)) {
   try {
     const firebaseConfig = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8"));
     if (firebaseConfig && firebaseConfig.projectId) {
-      console.log("Initializing server-side Cloud Firestore for project:", firebaseConfig.projectId);
+      console.log("Initializing server-side Cloud Firestore with Long Polling for project:", firebaseConfig.projectId);
       const firebaseApp = initializeApp(firebaseConfig);
       const dbId = (!firebaseConfig.firestoreDatabaseId || firebaseConfig.firestoreDatabaseId === 'default') 
         ? undefined 
         : firebaseConfig.firestoreDatabaseId;
-      firestoreDb = getFirestore(firebaseApp, dbId);
+      firestoreDb = initializeFirestore(firebaseApp, {
+        localCache: memoryLocalCache(),
+        experimentalForceLongPolling: true,
+      }, dbId);
     }
   } catch (err) {
     console.error("Firebase server-side init error: ", err);
@@ -57,7 +70,7 @@ async function bootstrapCloudSeeding() {
   if (!firestoreDb) return;
   try {
     console.log("Checking Cloud Firestore seed status...");
-    const qSnapshot = await getDocs(collection(firestoreDb, "users"));
+    const qSnapshot = await withTimeout(getDocs(collection(firestoreDb, "users")), 2500, "Seed Check");
     if (qSnapshot.empty) {
       console.log("Cloud Firestore is empty. Seeding Firestore with local db.json database...");
       const local = loadDatabase();
@@ -73,7 +86,7 @@ async function bootstrapCloudSeeding() {
               batch.set(doc(firestoreDb, "users", item.id), item);
             }
           });
-          await batch.commit();
+          await withTimeout(batch.commit(), 3000, "Seed Users Batch");
         }
       }
 
@@ -87,7 +100,7 @@ async function bootstrapCloudSeeding() {
               batch.set(doc(firestoreDb, "students", item.id), item);
             }
           });
-          await batch.commit();
+          await withTimeout(batch.commit(), 3000, "Seed Students Batch");
         }
       }
 
@@ -101,7 +114,7 @@ async function bootstrapCloudSeeding() {
               batch.set(doc(firestoreDb, "payments", item.id), item);
             }
           });
-          await batch.commit();
+          await withTimeout(batch.commit(), 3000, "Seed Payments Batch");
         }
       }
 
@@ -133,7 +146,7 @@ async function bootstrapCloudSeeding() {
               batch.set(doc(firestoreDb, "terms", item.id), item);
             }
           });
-          await batch.commit();
+          await withTimeout(batch.commit(), 3000, "Seed Terms Batch");
         }
       }
 
@@ -153,6 +166,19 @@ async function startServer() {
   // Add JSON parsing middleware with custom limits for batch transactions
   app.use(express.json({ limit: "50mb" }));
 
+  // Permit CORS and log requests
+  app.use((req, res, next) => {
+    res.header("Access-Control-Allow-Origin", "*");
+    res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
+    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    if (req.method === "OPTIONS") {
+      res.sendStatus(200);
+      return;
+    }
+    console.log(`[Server API Log] ${req.method} ${req.url}`);
+    next();
+  });
+
   // Run the seeding bootstrap check
   bootstrapCloudSeeding();
 
@@ -165,7 +191,7 @@ async function startServer() {
   app.get("/api/users", async (req, res) => {
     if (firestoreDb) {
       try {
-        const qSnaps = await getDocs(collection(firestoreDb, "users"));
+        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "users")), 1500, "getUsers");
         const list = qSnaps.docs.map(d => d.data());
         // Sync local cache
         const dbLocal = loadDatabase();
@@ -197,7 +223,7 @@ async function startServer() {
 
     if (firestoreDb) {
       try {
-        await setDoc(doc(firestoreDb, "users", user.id), user);
+        await withTimeout(setDoc(doc(firestoreDb, "users", user.id), user), 1500, "saveUser");
       } catch (e) {
         console.error("Firestore saveUser failed:", e);
       }
@@ -218,7 +244,7 @@ async function startServer() {
 
     if (firestoreDb) {
       try {
-        await deleteDoc(doc(firestoreDb, "users", id));
+        await withTimeout(deleteDoc(doc(firestoreDb, "users", id)), 1500, "deleteUser");
       } catch (e) {
         console.error("Firestore deleteUser failed:", e);
       }
@@ -230,7 +256,7 @@ async function startServer() {
   app.get("/api/students", async (req, res) => {
     if (firestoreDb) {
       try {
-        const qSnaps = await getDocs(collection(firestoreDb, "students"));
+        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "students")), 1500, "getStudents");
         const list = qSnaps.docs.map(d => d.data());
         // Sync local cache
         const dbLocal = loadDatabase();
@@ -262,7 +288,7 @@ async function startServer() {
 
     if (firestoreDb) {
       try {
-        await setDoc(doc(firestoreDb, "students", student.id), student);
+        await withTimeout(setDoc(doc(firestoreDb, "students", student.id), student), 1500, "saveStudent");
       } catch (e) {
         console.error("Firestore saveStudent failed:", e);
       }
@@ -287,11 +313,11 @@ async function startServer() {
 
     if (firestoreDb) {
       try {
-        await deleteDoc(doc(firestoreDb, "students", id));
+        await withTimeout(deleteDoc(doc(firestoreDb, "students", id)), 1500, "deleteStudent");
         
         // Cascade delete associated payments in Firestore
         const paymentsRef = collection(firestoreDb, "payments");
-        const qSnaps = await getDocs(paymentsRef);
+        const qSnaps = await withTimeout(getDocs(paymentsRef), 1500, "cascadePaymentsQuery");
         const batch = writeBatch(firestoreDb);
         let hasDeleted = false;
         qSnaps.docs.forEach((docSnap) => {
@@ -302,7 +328,7 @@ async function startServer() {
           }
         });
         if (hasDeleted) {
-          await batch.commit();
+          await withTimeout(batch.commit(), 1500, "cascadePaymentsBatchCommit");
         }
       } catch (e) {
         console.error("Firestore deleteStudent failed:", e);
@@ -315,7 +341,7 @@ async function startServer() {
   app.get("/api/payments", async (req, res) => {
     if (firestoreDb) {
       try {
-        const qSnaps = await getDocs(collection(firestoreDb, "payments"));
+        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "payments")), 1500, "getPayments");
         const list = qSnaps.docs.map(d => d.data());
         // Sync local cache
         const dbLocal = loadDatabase();
@@ -347,7 +373,7 @@ async function startServer() {
 
     if (firestoreDb) {
       try {
-        await setDoc(doc(firestoreDb, "payments", payment.id), payment);
+        await withTimeout(setDoc(doc(firestoreDb, "payments", payment.id), payment), 1500, "savePayment");
       } catch (e) {
         console.error("Firestore savePayment failed:", e);
       }
@@ -384,7 +410,7 @@ async function startServer() {
           chunk.forEach((p) => {
             batch.set(doc(firestoreDb, "payments", p.id), p);
           });
-          await batch.commit();
+          await withTimeout(batch.commit(), 2000, "savePaymentsBatch");
         }
       } catch (e) {
         console.error("Firestore savePayments batch failed:", e);
@@ -406,7 +432,7 @@ async function startServer() {
 
     if (firestoreDb) {
       try {
-        await deleteDoc(doc(firestoreDb, "payments", id));
+        await withTimeout(deleteDoc(doc(firestoreDb, "payments", id)), 1500, "deletePayment");
       } catch (e) {
         console.error("Firestore deletePayment failed:", e);
       }
@@ -438,7 +464,7 @@ async function startServer() {
                 batch.set(doc(firestoreDb, colName, item.id), item);
               }
             });
-            await batch.commit();
+            await withTimeout(batch.commit(), 3000, `seedCollectionBatch-${colName}`);
           }
         };
 
@@ -457,7 +483,7 @@ async function startServer() {
   app.get("/api/terms", async (req, res) => {
     if (firestoreDb) {
       try {
-        const qSnaps = await getDocs(collection(firestoreDb, "terms"));
+        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "terms")), 1500, "getTerms");
         const list = qSnaps.docs.map(d => d.data());
         // Sync local cache
         const dbLocal = loadDatabase();
@@ -489,7 +515,7 @@ async function startServer() {
 
     if (firestoreDb) {
       try {
-        await setDoc(doc(firestoreDb, "terms", term.id), term);
+        await withTimeout(setDoc(doc(firestoreDb, "terms", term.id), term), 1500, "saveTerm");
       } catch (e) {
         console.error("Firestore saveTerm failed:", e);
       }
@@ -517,7 +543,7 @@ async function startServer() {
           chunk.forEach((t) => {
             batch.set(doc(firestoreDb, "terms", t.id), t);
           });
-          await batch.commit();
+          await withTimeout(batch.commit(), 2000, "saveTermsBatch");
         }
       } catch (e) {
         console.error("Firestore saveTerms batch failed:", e);
@@ -539,7 +565,7 @@ async function startServer() {
 
     if (firestoreDb) {
       try {
-        await deleteDoc(doc(firestoreDb, "terms", id));
+        await withTimeout(deleteDoc(doc(firestoreDb, "terms", id)), 1500, "deleteTerm");
       } catch (e) {
         console.error("Firestore deleteTerm failed:", e);
       }
@@ -549,8 +575,8 @@ async function startServer() {
 
   const distPath = path.join(process.cwd(), 'dist');
   
-  // Make production the default mode and only run in development mode if explicitly set
-  const isProduction = process.env.NODE_ENV !== 'development';
+  // Make development mode the default unless explicitly running in production
+  const isProduction = process.env.NODE_ENV === 'production';
 
   if (!isProduction) {
     console.log("Starting server in development mode...");

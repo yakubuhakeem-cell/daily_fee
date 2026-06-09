@@ -5,3 +5,208 @@
   --font-sans: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "Space Mono", ui-monospace, SFMono-Regular, monospace;
 }
+
+/* HIGH-FIDELITY ADMINISTRATIVE PRINT MEDIA QUERY */
+@media print {
+  /* 1. Hide navigations, user alerts, sidebars, interactive controls & floating buttons */
+  header,
+  aside,
+  footer,
+  nav,
+  input,
+  select,
+  textarea,
+  button,
+  .no-print,
+  #sync-tutorial-overlay,
+  #btn-reopen-sync-tutorial,
+  #admin-security-badge-indicator,
+  #admin-security-badge-indicator-mobile {
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    width: 0 !important;
+    height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    pointer-events: none !important;
+  }
+
+  /* 2. Override container backgrounds, margins and absolute alignments on critical components */
+  html,
+  body,
+  #root,
+  main,
+  div {
+    background: transparent !important;
+    background-color: #ffffff !important;
+    color: #000000 !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border-color: transparent !important;
+  }
+
+  /* Bring back visibility specifically for the print friendly area container and children */
+  #print-friendly-area,
+  #print-friendly-area * {
+    visibility: visible !important;
+    display: block !important;
+  }
+
+  /* Keep table components structured like tabulations */
+  #print-friendly-area table,
+  #print-friendly-area th,
+  #print-friendly-area td {
+    display: table !important;
+  }
+
+  #print-friendly-area tr {
+    display: table-row !important;
+  }
+
+  #print-friendly-area thead {
+    display: table-header-group !important;
+  }
+
+  #print-friendly-area tbody {
+    display: table-row-group !important;
+  }
+
+  #print-friendly-area td,
+  #print-friendly-area th {
+    display: table-cell !important;
+    border: 1px solid #7f7f7f !important;
+    padding: 6px 8px !important;
+    font-size: 10px !important;
+    color: #000000 !important;
+  }
+
+  #print-friendly-area th {
+    background-color: #f3f4f6 !important;
+    font-weight: bold !important;
+  }
+
+  #print-friendly-area {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 15mm !important;
+    border: none !important;
+    box-shadow: none !important;
+    float: none !important;
+  }
+
+  /* Ensure page breaks are handled gracefully */
+  tr {
+    page-break-inside: avoid !important;
+  }
+
+  /* Ensure background colors are preserved in color of print configuration */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}
+
+/* HIGH-CONTRAST 'DAYLIGHT' MODE OVERRIDES FOR SUNNY OUTDOOR SCHOOL HOURS */
+.daylight {
+  /* Dynamic mapping of Tailwind v4 core color variables */
+  --color-neutral-950: #ffffff !important;
+  --color-neutral-900: #f8fafc !important; /* light slate background */
+  --color-neutral-850: #f1f5f9 !important;
+  --color-neutral-800: #e2e8f0 !important; /* solid borders */
+  --color-neutral-750: #cbd5e1 !important;
+  --color-neutral-700: #94a3b8 !important;
+  --color-neutral-600: #475569 !important;
+  --color-neutral-500: #334155 !important;
+  --color-neutral-450: #1e293b !important;
+  --color-neutral-400: #0f172a !important; /* maximum readability text */
+  --color-neutral-300: #020617 !important;
+  --color-white: #000000 !important;
+  --color-black: #ffffff !important;
+
+  color: #0f172a !important;
+  background-color: #ffffff !important;
+}
+
+/* Base elements within daylight theme */
+.daylight main, .daylight div, .daylight footer, .daylight header {
+  background-color: var(--color-neutral-950) !important;
+  color: var(--color-neutral-400) !important;
+}
+
+.daylight h1, .daylight h2, .daylight h3, .daylight h4, .daylight p,
+.daylight span, .daylight th, .daylight td, .daylight button, .daylight label, .daylight strong {
+  color: #0f172a !important;
+}
+
+/* Card components & background panels */
+.daylight .bg-neutral-900,
+.daylight [class*="bg-neutral-900"] {
+  background-color: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+}
+
+.daylight .bg-neutral-950 {
+  background-color: #ffffff !important;
+}
+
+.daylight .bg-neutral-800,
+.daylight [class*="bg-neutral-800"] {
+  background-color: #f1f5f9 !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+}
+
+.daylight .text-neutral-400,
+.daylight .text-neutral-500,
+.daylight .text-neutral-600 {
+  color: #334155 !important;
+}
+
+.daylight .text-neutral-300 {
+  color: #0f172a !important;
+}
+
+.daylight .border-neutral-800 {
+  border-color: #cbd5e1 !important;
+}
+
+.daylight input,
+.daylight select,
+.daylight textarea {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border-color: #94a3b8 !important;
+}
+
+.daylight input::placeholder {
+  color: #64748b !important;
+}
+
+/* Ensure contrasting yellow/amber for texts & elements */
+.daylight .text-amber-400 {
+  color: #b45309 !important; /* High-contrast darker warm amber */
+}
+
+.daylight .bg-amber-400 {
+  background-color: #f59e0b !important;
+  color: #ffffff !important;
+}
+
+/* Keep critical green/red indicator colors fully visible */
+.daylight .text-emerald-400 {
+  color: #166534 !important;
+}
+
+.daylight .text-red-500, .daylight .text-red-400 {
+  color: #991b1b !important;
+}
+

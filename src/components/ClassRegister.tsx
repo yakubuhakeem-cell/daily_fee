@@ -3,11 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useApp, PendingAlert } from '../context/AppContext';
 import { StudentClass, Student, SchoolCategory } from '../types';
-import { Check, X, Search, Landmark, BellRing, ChevronRight, ChevronLeft, CheckSquare, Users, MessageSquareCode, CalendarDays, CalendarPlus, CalendarX, Plus, ChevronDown, Trash2, Coins, History, Printer, Camera, Upload, Copy, Pencil } from 'lucide-react';
+import { Check, X, Search, Landmark, BellRing, ChevronRight, ChevronLeft, CheckSquare, Users, MessageSquareCode, CalendarDays, CalendarPlus, CalendarX, Plus, ChevronDown, Trash2, Coins, History, Printer, Camera, Upload, Copy, Pencil, QrCode, AlertCircle, User, Phone, Award, ShieldAlert, CheckCircle2, TrendingUp } from 'lucide-react';
 import { motion } from 'motion/react';
+import { Html5Qrcode } from 'html5-qrcode';
 
 export const ClassRegister: React.FC = () => {
   const { 
@@ -32,7 +33,9 @@ export const ClassRegister: React.FC = () => {
     removePublicHoliday,
     users,
     updateStudent,
-    deleteStudent
+    deleteStudent,
+    audioMuted,
+    playFeedbackSound
   } = useApp();
 
   // Pick initial class based on teacher assignment or default B1
@@ -59,6 +62,203 @@ export const ClassRegister: React.FC = () => {
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const videoRef = React.useRef<HTMLVideoElement>(null);
+
+  // QR code scanner states
+  const [isQrModalOpen, setIsQrModalOpen] = useState(false);
+  const [scannerError, setScannerError] = useState<string | null>(null);
+  const [qrFeedbacks, setQrFeedbacks] = useState<{ id: string; text: string; type: 'success' | 'warning' | 'error' }[]>([]);
+  const [autoPayScanned, setAutoPayScanned] = useState(true);
+  const [scanHistoryList, setScanHistoryList] = useState<{ id: string; studentName: string; rollNumber: string; class: string; timestamp: string; statusText: string; success: boolean }[]>([]);
+  const lastScanTimeRef = React.useRef<{ code: string; time: number } | null>(null);
+
+  const addQrFeedback = (text: string, type: 'success' | 'warning' | 'error') => {
+    const id = Math.random().toString(36).substring(2, 9);
+    setQrFeedbacks(prev => [{ id, text, type }, ...prev].slice(0, 5));
+  };
+
+  const playBeep = (type: 'success' | 'warning' | 'error' = 'success') => {
+    if (audioMuted) return;
+    if (type === 'success') {
+      playFeedbackSound('success');
+    } else if (type === 'error') {
+      playFeedbackSound('error');
+    } else {
+      playFeedbackSound('warning');
+    }
+  };
+
+  const handleQrCodeScanned = (decodedText: string) => {
+    const trimmedText = decodedText.trim();
+    if (!trimmedText) return;
+
+    const now = Date.now();
+    if (lastScanTimeRef.current && lastScanTimeRef.current.code === trimmedText && (now - lastScanTimeRef.current.time) < 2500) {
+      return;
+    }
+    lastScanTimeRef.current = { code: trimmedText, time: now };
+
+    let parsedText = trimmedText;
+    try {
+      const parsed = JSON.parse(trimmedText);
+      if (parsed.id) parsedText = String(parsed.id);
+      else if (parsed.rollNumber) parsedText = String(parsed.rollNumber);
+    } catch (e) {
+      if (trimmedText.includes('?id=')) {
+        const urlParams = new URLSearchParams(trimmedText.split('?')[1]);
+        const pId = urlParams.get('id');
+        if (pId) parsedText = pId;
+      }
+    }
+
+    const cleanedText = parsedText.trim().toLowerCase();
+
+    // Match with student catalog
+    const student = students.find(s => 
+      s.id.toLowerCase() === cleanedText ||
+      s.rollNumber.toLowerCase() === cleanedText
+    );
+
+    if (!student) {
+      playBeep('error');
+      addQrFeedback(`⚠️ Code unrecognized: "${trimmedText}"`, 'error');
+      return;
+    }
+
+    if (!student.active) {
+      playBeep('warning');
+      addQrFeedback(`⚠️ Pupil "${student.name}" is marked as inactive!`, 'warning');
+      setScanHistoryList(prev => [{
+        id: Math.random().toString(),
+        studentName: student.name,
+        rollNumber: student.rollNumber,
+        class: student.class,
+        timestamp: new Date().toLocaleTimeString(),
+        statusText: 'Inactive Account',
+        success: false
+      }, ...prev].slice(0, 8));
+      return;
+    }
+
+    const isPaidToday = payments.some(p => p.studentId === student.id && p.date === currentDate && !p.id.endsWith('_debt'));
+
+    if (isPaidToday) {
+      playBeep('error');
+      addQrFeedback(`⚠️ Already Registered: "${student.name}" (${student.class}) has checked in.`, 'warning');
+      setScanHistoryList(prev => [{
+        id: Math.random().toString(),
+        studentName: student.name,
+        rollNumber: student.rollNumber,
+        class: student.class,
+        timestamp: new Date().toLocaleTimeString(),
+        statusText: 'Already Paid Today',
+        success: false
+      }, ...prev].slice(0, 8));
+      return;
+    }
+
+    const dailyRate = Math.max(0, 5.00 - (student.discount || 0));
+
+    if (autoPayScanned) {
+      recordPayment(student.id, true);
+      playBeep('success');
+      addQrFeedback(`✅ Checked in: "${student.name}" (Class: ${student.class}) • Fee GHC ${dailyRate.toFixed(2)} logged!`, 'success');
+      setScanHistoryList(prev => [{
+        id: Math.random().toString(),
+        studentName: student.name,
+        rollNumber: student.rollNumber,
+        class: student.class,
+        timestamp: new Date().toLocaleTimeString(),
+        statusText: `GHC ${dailyRate.toFixed(2)} logged`,
+        success: true
+      }, ...prev].slice(0, 8));
+    } else {
+      playBeep('success');
+      addQrFeedback(`🔍 Identified: "${student.name}" (Class: ${student.class}). Ready to record GHC ${dailyRate.toFixed(2)}.`, 'success');
+      setScanHistoryList(prev => [{
+        id: Math.random().toString(),
+        studentName: student.name,
+        rollNumber: student.rollNumber,
+        class: student.class,
+        timestamp: new Date().toLocaleTimeString(),
+        statusText: 'Awaiting manual entry',
+        success: true
+      }, ...prev].slice(0, 8));
+    }
+  };
+
+  useEffect(() => {
+    if (!isQrModalOpen) {
+      setQrFeedbacks([]);
+      return;
+    }
+
+    const html5QrCode = new Html5Qrcode("qr-scanner-viewport");
+    let isScanning = false;
+
+    const startScanner = async () => {
+      try {
+        setScannerError(null);
+        await html5QrCode.start(
+          { facingMode: "environment" },
+          {
+            fps: 10,
+            qrbox: (width, height) => {
+              const min = Math.min(width, height);
+              const size = Math.floor(min * 0.7);
+              return { width: size, height: size };
+            }
+          },
+          (decodedText) => {
+            handleQrCodeScanned(decodedText);
+          },
+          () => {} // silent parse failure callbacks to stay quiet
+        );
+        isScanning = true;
+      } catch (err: any) {
+        console.warn("Retrying scanner with camera enumeration:", err);
+        try {
+          const devices = await Html5Qrcode.getCameras();
+          if (devices && devices.length > 0) {
+            await html5QrCode.start(
+              devices[0].id,
+              {
+                fps: 10,
+                qrbox: (width, height) => {
+                  const min = Math.min(width, height);
+                  const size = Math.floor(min * 0.7);
+                  return { width: size, height: size };
+                }
+              },
+              (decodedText) => {
+                handleQrCodeScanned(decodedText);
+              },
+              () => {}
+            );
+            isScanning = true;
+          } else {
+            setScannerError("No digital cameras detected. Ensure camera permissions are granted.");
+          }
+        } catch (innerErr: any) {
+          setScannerError(innerErr.message || "Failed to initialize video input streaming.");
+        }
+      }
+    };
+
+    const timer = setTimeout(() => {
+      startScanner();
+    }, 200);
+
+    return () => {
+      clearTimeout(timer);
+      if (isScanning) {
+        html5QrCode.stop().then(() => {
+          html5QrCode.clear();
+        }).catch(err => {
+          console.error("Scanner stop cleanup error:", err);
+        });
+      }
+    };
+  }, [isQrModalOpen]);
 
   // Success toast notification states
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -180,10 +380,12 @@ export const ClassRegister: React.FC = () => {
   // Debt backward payment modal states
   const [debtStudent, setDebtStudent] = useState<Student | null>(null);
   const [debtAmount, setDebtAmount] = useState<number>(5);
+  const [includeTodayInDebtSettle, setIncludeTodayInDebtSettle] = useState<boolean>(true);
   const [debtSuccess, setDebtSuccess] = useState(false);
 
   // Transaction History modal states
   const [historyStudent, setHistoryStudent] = useState<Student | null>(null);
+  const [historyModalTab, setHistoryModalTab] = useState<'profile' | 'ledger' | 'print'>('profile');
   const [paymentToDelete, setPaymentToDelete] = useState<{ id: string; label: string; studentName: string } | null>(null);
 
   const isHoliday = useMemo(() => {
@@ -193,6 +395,58 @@ export const ClassRegister: React.FC = () => {
   // Manual payment state for individual student row inline input
   const [manualAmountStudentId, setManualAmountStudentId] = useState<string | null>(null);
   const [manualAmountValue, setManualAmountValue] = useState<string>('');
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'dirty' | 'saving' | 'saved' | 'failed'>('idle');
+  const lastSavedValueRef = React.useRef<string>('');
+  const autoSaveTimerRef = React.useRef<NodeJS.Timeout | null>(null);
+
+  // Automated debounced save for check-in manual amount fee input
+  useEffect(() => {
+    if (!manualAmountStudentId) {
+      if (autoSaveTimerRef.current) {
+        clearTimeout(autoSaveTimerRef.current);
+        autoSaveTimerRef.current = null;
+      }
+      return;
+    }
+
+    const amt = parseFloat(manualAmountValue);
+    if (isNaN(amt) || amt < 0) {
+      setSaveStatus('failed');
+      return; // Do not auto-save invalid amounts
+    }
+
+    // If the input value matches the last saved value, do nothing (keep status as idle / saved)
+    if (manualAmountValue === lastSavedValueRef.current) {
+      return;
+    }
+
+    setSaveStatus('dirty');
+
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current);
+    }
+
+    autoSaveTimerRef.current = setTimeout(async () => {
+      setSaveStatus('saving');
+      try {
+        await recordPayment(manualAmountStudentId, true, amt);
+        lastSavedValueRef.current = manualAmountValue;
+        setSaveStatus('saved');
+        const matchingStudent = students.find(s => s.id === manualAmountStudentId);
+        const sName = matchingStudent ? matchingStudent.name : 'student';
+        showToast(`Auto-saved GHC ${amt.toFixed(2)} payment for ${sName}!`);
+      } catch (error) {
+        console.error('Auto-save payment failed:', error);
+        setSaveStatus('failed');
+      }
+    }, 1000); // 1-second debounce for comfortable user entry speed
+
+    return () => {
+      if (autoSaveTimerRef.current) {
+        clearTimeout(autoSaveTimerRef.current);
+      }
+    };
+  }, [manualAmountValue, manualAmountStudentId, recordPayment, students]);
 
   // Grouped classes lists for selection
   const preSchoolClasses: StudentClass[] = ['Nursery', 'KG1', 'KG2'];
@@ -223,15 +477,17 @@ export const ClassRegister: React.FC = () => {
 
   // All active students in selected class
   const classStudents = useMemo(() => {
-    return students.filter(s => s.class === selectedClass && s.active);
+    return students
+      .filter(s => s.class === selectedClass && s.active)
+      .sort((a, b) => (a.rollNumber || '').localeCompare(b.rollNumber || '', undefined, { numeric: true, sensitivity: 'base' }));
   }, [students, selectedClass]);
 
   // Today's paid student ids in this class
   const paidStudentMap = useMemo(() => {
-    const paidList = payments.filter(p => p.class === selectedClass && p.date === currentDate);
-    const map = new Map<string, { paymentId: string; verified: boolean; collectedBy: string; isAbsent?: boolean }>();
+    const paidList = payments.filter(p => p.class === selectedClass && p.date === currentDate && !p.id.endsWith('_debt'));
+    const map = new Map<string, { paymentId: string; verified: boolean; collectedBy: string; isAbsent?: boolean; amount?: number; notes?: string }>();
     paidList.forEach(p => {
-      map.set(p.studentId, { paymentId: p.id, verified: p.verified, collectedBy: p.collectedBy, isAbsent: p.isAbsent });
+      map.set(p.studentId, { paymentId: p.id, verified: p.verified, collectedBy: p.collectedBy, isAbsent: p.isAbsent, amount: p.amount, notes: p.notes });
     });
     return map;
   }, [payments, selectedClass, currentDate]);
@@ -245,11 +501,33 @@ export const ClassRegister: React.FC = () => {
     const pastSchoolDays = activeTerm.schoolDays.filter(d => d < currentDate && !holidays.includes(d));
 
     students.forEach(student => {
-      const unpaidDays = pastSchoolDays.filter(dStr => {
-        return !payments.some(p => p.studentId === student.id && p.date === dStr);
+      const dailyRate = Math.max(0.01, 5.00 - (student.discount || 0));
+      const studentPayments = payments.filter(p => p.studentId === student.id);
+      
+      const billableDays = pastSchoolDays.filter(dStr => {
+        const isAbsentOnDay = studentPayments.some(p => p.date === dStr && p.isAbsent);
+        return !isAbsentOnDay;
       });
-      const totalDebt = unpaidDays.length * 5;
-      map.set(student.id, { pastUnpaidDays: unpaidDays, totalDebt });
+
+      const totalRequired = billableDays.length * dailyRate;
+      const totalPaid = studentPayments
+        .filter(p => !p.isAbsent)
+        .reduce((sum, p) => sum + p.amount, 0);
+
+      const totalDebt = Math.max(0, totalRequired - totalPaid);
+
+      let runningPaid = totalPaid;
+      const pastUnpaidDays: string[] = [];
+      billableDays.forEach(dStr => {
+        if (runningPaid >= dailyRate) {
+          runningPaid -= dailyRate;
+        } else {
+          runningPaid = 0;
+          pastUnpaidDays.push(dStr);
+        }
+      });
+
+      map.set(student.id, { pastUnpaidDays, totalDebt });
     });
 
     return map;
@@ -322,6 +600,16 @@ export const ClassRegister: React.FC = () => {
       .reduce((acc, p) => acc + p.amount, 0);
   }, [payments, selectedClass, currentDate]);
 
+  const globalCollectionTotal = useMemo(() => {
+    return payments
+      .filter(p => p.date === currentDate && !p.isAbsent)
+      .reduce((acc, p) => acc + p.amount, 0);
+  }, [payments, currentDate]);
+
+  const globalPaidCount = useMemo(() => {
+    return payments.filter(p => p.date === currentDate && !p.isAbsent).length;
+  }, [payments, currentDate]);
+
   // Group school days of activeTerm into weeks of Mon-Fri
   const weeksOfTerm = useMemo(() => {
     if (!activeTerm || !activeTerm.schoolDays || !activeTerm.schoolDays.length) return [];
@@ -349,7 +637,8 @@ export const ClassRegister: React.FC = () => {
   const advanceCalculatedDays = useMemo(() => {
     if (!advanceStudent || !activeTerm || !activeTerm.schoolDays || activeTerm.schoolDays.length === 0) return [];
     
-    const daysToCover = Math.floor(advanceAmount / 5);
+    const dailyRate = Math.max(0.01, 5.00 - (advanceStudent.discount || 0));
+    const daysToCover = Math.floor(advanceAmount / dailyRate);
     if (daysToCover <= 0) return [];
 
     const schoolDays = activeTerm.schoolDays;
@@ -393,7 +682,8 @@ export const ClassRegister: React.FC = () => {
   const debtCalculatedDays = useMemo(() => {
     if (!debtStudent || !activeTerm) return [];
     
-    const daysToCover = Math.floor(debtAmount / 5);
+    const dailyRate = Math.max(0.01, 5.00 - (debtStudent.discount || 0));
+    const daysToCover = Math.floor(debtAmount / dailyRate);
     if (daysToCover <= 0) return [];
 
     const debtInfo = studentDebtMap.get(debtStudent.id);
@@ -405,14 +695,59 @@ export const ClassRegister: React.FC = () => {
   // Memoized transaction list for history student
   const studentPayments = useMemo(() => {
     if (!historyStudent) return [];
-    return payments
-      .filter(p => p.studentId === historyStudent.id)
-      .sort((a, b) => {
-        if (a.date !== b.date) {
-          return b.date.localeCompare(a.date);
-        }
-        return b.timestamp.localeCompare(a.timestamp);
-      });
+    
+    // Get all raw payments of this student
+    const studentRaw = payments.filter(p => p.studentId === historyStudent.id);
+    
+    // Find all debt payments
+    const debtPayments = studentRaw.filter(p => p.id.endsWith('_debt'));
+    
+    // Map of cleared date -> settled daily amount, and a map of cleared date -> debt payment ID/notes
+    const clearedDatesMap = new Map<string, { settledAmount: number; debtRef: string; datePaid: string }>();
+    
+    debtPayments.forEach(dp => {
+      const dates = dp.clearedDates || [];
+      if (dates.length > 0) {
+        const dailyPortion = dp.amount / dates.length;
+        dates.forEach(d => {
+          clearedDatesMap.set(d, {
+            settledAmount: dailyPortion,
+            debtRef: dp.id,
+            datePaid: dp.date
+          });
+        });
+      }
+    });
+
+    const displayList = studentRaw.map(p => {
+      // If it is the joint debt payment itself, display with amount: 0 (and a descriptive label)
+      // to avoid double-accounting, since its amount has been fully distributed back to the cleared dates!
+      if (p.id.endsWith('_debt')) {
+        return {
+          ...p,
+          amount: 0,
+          notes: p.notes ? `${p.notes} [Arrears settlement: GHC ${p.amount.toFixed(2)} distributed to historical dates]` : undefined
+        };
+      }
+      
+      const clearedInfo = clearedDatesMap.get(p.date);
+      if (clearedInfo) {
+        return {
+          ...p,
+          amount: clearedInfo.settledAmount,
+          notes: `Arrears Cleared (GHC ${clearedInfo.settledAmount.toFixed(2)} portion paid/settled on ${clearedInfo.datePaid})`
+        };
+      }
+      
+      return p;
+    });
+
+    return displayList.sort((a, b) => {
+      if (a.date !== b.date) {
+        return b.date.localeCompare(a.date);
+      }
+      return b.timestamp.localeCompare(a.timestamp);
+    });
   }, [payments, historyStudent]);
 
   // Memoized calculations for history modal student
@@ -466,9 +801,28 @@ export const ClassRegister: React.FC = () => {
     e.preventDefault();
     if (!debtStudent || debtAmount < 5) return;
     
+    // 1. Record backward past arrears clearance
     recordBackwardPayment(debtStudent.id, debtAmount, true);
+
+    const isTodayUnpaid = !paidStudentMap.has(debtStudent.id);
+    const shouldRecordToday = includeTodayInDebtSettle && isTodayUnpaid;
+    const discountAmount = debtStudent.discount || 0;
+    const todayFee = Math.max(0, 5.00 - discountAmount);
+
+    // 2. Record today's standard payment if checked & unpaid
+    if (shouldRecordToday) {
+      recordPayment(debtStudent.id, true);
+    }
+
     setDebtSuccess(true);
-    showToast(`Successfully registered GHC ${debtAmount.toFixed(2)} arrears clearance payment for ${debtStudent.name}!`);
+    
+    if (shouldRecordToday) {
+      const grandTotal = debtAmount + todayFee;
+      showToast(`Settled GHC ${debtAmount.toFixed(2)} arrears and logged GHC ${todayFee.toFixed(2)} today's fee for ${debtStudent.name} (Total GHC ${grandTotal.toFixed(2)})!`);
+    } else {
+      showToast(`Successfully registered GHC ${debtAmount.toFixed(2)} arrears clearance payment for ${debtStudent.name}!`);
+    }
+
     setTimeout(() => {
       setDebtStudent(null);
       setDebtSuccess(false);
@@ -484,6 +838,13 @@ export const ClassRegister: React.FC = () => {
     const studentName = student ? student.name : "Student";
     const paidInfo = paidStudentMap.get(studentId);
     if (paidInfo && !paidInfo.isAbsent) {
+      // Check if it's prepaid
+      const isPrepaid = paidInfo.amount === 0 && (paidInfo.notes?.toLowerCase().includes('covered') || paidInfo.notes?.toLowerCase().includes('prepaid') || paidInfo.notes?.toLowerCase().includes('advance'));
+      if (isPrepaid) {
+        if (!window.confirm(`Warning: ${studentName}'s attendance today is covered by an ADVANCE PAYMENT (GHC 0.00 cash today). Deactivating this will remove their prepaid clearance for today and place them in DEBT. Are you sure you want to deactivate today's prepaid status?`)) {
+          return;
+        }
+      }
       // Already paid: toggle it off (remove payment record)
       deletePayment(paidInfo.paymentId);
       showToast(`Removed today's payment record for ${studentName}.`);
@@ -512,7 +873,7 @@ export const ClassRegister: React.FC = () => {
     } else {
       // Unmarked, or marked as paid: mark as absent
       recordAbsent(studentId);
-      showToast(`Marked ${studentName} as absent today (treated as debt).`);
+      showToast(`Marked ${studentName} as absent today (excused from fee).`);
       scrollToNextUnpaid(studentId);
     }
   };
@@ -1100,16 +1461,27 @@ export const ClassRegister: React.FC = () => {
       {/* Main Student Check-In Section */}
       <div className="bg-neutral-900 border-4 border-neutral-800 overflow-hidden">
         {/* Table Header Filter tools */}
-        <div className="p-6 bg-neutral-950 border-b-2 border-neutral-800 flex flex-col sm:flex-row justify-between items-center gap-4">
-          <div className="relative w-full sm:max-w-sm">
-            <Search className="absolute left-4 top-3.5 text-neutral-500" size={16} />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="SEARCH STUDENT NAME OR ROLL..."
-              className="w-full bg-neutral-900 border-2 border-neutral-800 py-3 pl-11 pr-4 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600 tracking-wide"
-            />
+        <div className="p-6 bg-neutral-950 border-b-2 border-neutral-800 flex flex-col lg:flex-row justify-between items-center gap-4">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full lg:max-w-lg">
+            <div className="relative flex-1">
+              <Search className="absolute left-4 top-3.5 text-neutral-500" size={16} />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="SEARCH STUDENT NAME OR ROLL..."
+                className="w-full bg-neutral-900 border-2 border-neutral-800 py-3 pl-11 pr-4 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600 tracking-wide"
+              />
+            </div>
+            <button
+              id="qr-scanner-trigger"
+              onClick={() => setIsQrModalOpen(true)}
+              className="bg-amber-400 hover:bg-amber-300 text-black py-3 px-4 text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 border-2 border-amber-400 transition-colors cursor-pointer shrink-0"
+              title="Open QR scanner camera station"
+            >
+              <QrCode size={14} className="stroke-[3]" />
+              <span>Camera Scan</span>
+            </button>
           </div>
 
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 w-full sm:w-auto">
@@ -1156,8 +1528,8 @@ export const ClassRegister: React.FC = () => {
               <span className="text-[9px] bg-amber-400/10 border border-amber-400/25 px-2 py-0.5 text-amber-300 font-mono tracking-widest font-black uppercase shrink-0">INTELLIGENT GATEWAY</span>
             </div>
 
-            {isHoliday && (
-              <div className="bg-red-950/20 border-b border-red-500/30 p-6 text-center text-red-400 space-y-1.5 select-none font-mono">
+            {isHoliday && activeTerm && (
+              <div className="bg-red-950/20 border-b border-red-500/30 p-6 text-center text-red-400 space-y-3 select-none font-mono">
                 <div className="flex items-center justify-center gap-2 text-red-500">
                   <Landmark size={20} className="stroke-[2.5]" />
                   <span className="text-sm font-black uppercase tracking-wider">OFFICIAL PUBLIC HOLIDAY DETECTED</span>
@@ -1168,6 +1540,18 @@ export const ClassRegister: React.FC = () => {
                 <p className="text-[10px] uppercase text-neutral-400 tracking-wide leading-relaxed">
                   * GATE SYSTEM OVERRIDE: Payment check-ins and absence logs are halted for this calendar block. No pupils are marked owing.
                 </p>
+                <div className="pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      removePublicHoliday(activeTerm.id, currentDate);
+                      showToast(`Removed holiday status: marked ${currentDate} as a fee collection day.`);
+                    }}
+                    className="px-5 py-2.5 bg-amber-400 hover:bg-amber-300 text-black text-[10px] font-mono font-black uppercase tracking-widest transition-colors cursor-pointer inline-flex items-center gap-2"
+                  >
+                    <span>CONVERT TO FEE COLLECTION DAY</span>
+                  </button>
+                </div>
               </div>
             )}
             {filteredStudents.map(student => {
@@ -1176,6 +1560,8 @@ export const ClassRegister: React.FC = () => {
               const isAbsent = !!paidInfo && !!paidInfo.isAbsent;
               const debtInfo = studentDebtMap.get(student.id);
               const hasArrearsAtRisk = debtInfo && debtInfo.pastUnpaidDays.length > 5;
+              const isPrepaid = isPaid && paidInfo && paidInfo.amount === 0 && (paidInfo.notes?.toLowerCase().includes('covered') || paidInfo.notes?.toLowerCase().includes('prepaid') || paidInfo.notes?.toLowerCase().includes('advance'));
+              const isScholarship = isPaid && paidInfo && paidInfo.amount === 0 && !isPrepaid;
 
               return (
                 <div 
@@ -1238,7 +1624,7 @@ export const ClassRegister: React.FC = () => {
                         <span 
                           title={hasArrearsAtRisk 
                             ? `CRITICAL ARREARS: Student has ${debtInfo.pastUnpaidDays.length} unpaid school days (exceeds 5 days limit). Standing access at risk.`
-                            : `PAST DUE DEBT: Student owes GHC ${debtInfo.totalDebt.toFixed(2)} for ${debtInfo.pastUnpaidDays.length} past days. Click "SETTLE DEBT" or view transactions to handle.`
+                            : `PAST DUE DEBT: Student owes GHC ${debtInfo.totalDebt.toFixed(2)} for ${debtInfo.pastUnpaidDays.length} past days. Any incoming payment automatically settles these arrears first.`
                           }
                           className={`text-[9px] font-black px-2.5 py-0.5 font-mono tracking-widest uppercase cursor-help rounded-xs flex items-center gap-1 ${
                             hasArrearsAtRisk 
@@ -1280,14 +1666,20 @@ export const ClassRegister: React.FC = () => {
                         const accessLevel = (collector?.assignedClasses && collector.assignedClasses.length > 0) 
                           ? collector.assignedClasses.join(', ') 
                           : (collector?.assignedClass || ((collector?.role === 'Administrator' || collector?.role === 'Headmaster') ? 'ALL CORE' : collector?.role === 'Accountant' ? 'ACCOUNT DECK' : 'OFFICE'));
+                        const isPrepaid = paidInfo.amount === 0 && (paidInfo.notes?.toLowerCase().includes('covered') || paidInfo.notes?.toLowerCase().includes('prepaid') || paidInfo.notes?.toLowerCase().includes('advance'));
+                        const isScholarship = paidInfo.amount === 0 && !isPrepaid;
                         return (
                           <>
                             <span className="hidden sm:inline w-1 h-1 bg-neutral-700" />
                             <span className="flex items-center gap-1.5 text-emerald-400">
-                              COLLECTED BY: <strong className="text-emerald-300 uppercase">{paidInfo.collectedBy}</strong>
+                              STATUS: <strong className="text-emerald-300 uppercase">{isPrepaid ? 'PREPAID COVERED' : isScholarship ? 'SCHOLARSHIP' : 'PAID'}</strong>
                               <span className="text-[9px] font-black font-mono bg-emerald-950/40 border border-emerald-900/50 text-emerald-400 px-1.5 py-0.5 tracking-wider uppercase rounded-xs">
-                                {accessLevel}
+                                {isPrepaid ? '0 CASH OUT' : isScholarship ? 'FREE' : `GHC ${(paidInfo.amount ?? 5).toFixed(2)}`}
                               </span>
+                            </span>
+                            <span className="hidden sm:inline w-1 h-1 bg-neutral-700" />
+                            <span className="flex items-center gap-1.5 text-neutral-400">
+                              BY: <strong className="text-neutral-300 uppercase">{paidInfo.collectedBy}</strong>
                             </span>
                           </>
                         );
@@ -1342,7 +1734,7 @@ export const ClassRegister: React.FC = () => {
                   {/* Scrollable Container with buttons */}
                   <div 
                     id={`action-scroll-${student.id}`}
-                    className="flex-grow flex items-center gap-2 justify-start sm:justify-end overflow-x-auto whitespace-nowrap max-w-full pb-1 scroll-smooth scrollbar-thin scrollbar-thumb-amber-400/20"
+                    className="flex-grow flex items-center gap-2 justify-start sm:justify-end overflow-x-auto whitespace-nowrap sm:flex-wrap sm:whitespace-normal sm:overflow-visible max-w-full pb-1 scroll-smooth scrollbar-thin scrollbar-thumb-amber-400/20"
                     style={{ scrollbarWidth: 'thin' }}
                   >
                     {/* Transaction History Button */}
@@ -1362,22 +1754,6 @@ export const ClassRegister: React.FC = () => {
                     >
                       <BellRing size={16} />
                     </button>
-
-                    {/* Settle Debt button */}
-                    {studentDebtMap.get(student.id) && studentDebtMap.get(student.id)!.totalDebt > 0 && (
-                      <button
-                        onClick={() => {
-                          setDebtStudent(student);
-                          setDebtAmount(Math.min(studentDebtMap.get(student.id)!.totalDebt, 25)); // default up to 5 days
-                          setDebtSuccess(false);
-                        }}
-                        title="Settle unpaid days backwards"
-                        className="p-2.5 text-red-400 hover:text-red-300 hover:border-red-400 border-2 border-red-950 bg-neutral-950 transition-colors cursor-pointer flex items-center gap-1.5 px-4"
-                      >
-                        <Coins size={14} className="text-red-400" />
-                        <span className="text-[10px] font-mono font-black uppercase tracking-widest text-neutral-300">SETTLE DEBT</span>
-                      </button>
-                    )}
 
                     {/* Advance Custom Pay trigger */}
                     <button
@@ -1424,6 +1800,29 @@ export const ClassRegister: React.FC = () => {
                             }
                           }}
                         />
+
+                        {/* Real-time Debounced Auto-Save Status Badge */}
+                        {saveStatus === 'saving' && (
+                          <span className="text-[9px] font-mono font-black text-amber-400 uppercase tracking-widest px-1 animate-pulse shrink-0">
+                            Saving...
+                          </span>
+                        )}
+                        {saveStatus === 'saved' && (
+                          <span className="text-[9px] font-mono font-black text-emerald-400 uppercase tracking-widest px-1 shrink-0 animate-bounce">
+                            Saved ✔️
+                          </span>
+                        )}
+                        {saveStatus === 'dirty' && (
+                          <span className="text-[9px] font-mono font-black text-neutral-400 uppercase tracking-widest px-1 shrink-0">
+                            Typing...
+                          </span>
+                        )}
+                        {saveStatus === 'failed' && (
+                          <span className="text-[9px] font-mono font-black text-red-500 uppercase tracking-widest px-1 shrink-0">
+                            Err ⚠️
+                          </span>
+                        )}
+
                         <button
                           type="button"
                           onClick={() => {
@@ -1466,13 +1865,24 @@ export const ClassRegister: React.FC = () => {
                           onClick={() => handleTogglePayment(student.id)}
                           className={`flex items-center gap-2 px-5 py-2.5 text-xs font-black uppercase tracking-widest transition-all w-full sm:w-40 justify-center border-2 cursor-pointer ${
                             isPaid 
-                              ? 'bg-amber-400 text-black border-amber-400 shadow-[2px_2px_0px_0px_rgba(255,255,255,0.1)]'
+                              ? isPrepaid
+                                ? 'bg-sky-500/10 text-sky-400 border-sky-500 hover:border-sky-400 hover:bg-sky-500/20 shadow-none'
+                                : isScholarship
+                                  ? 'bg-purple-500/10 text-purple-400 border-purple-500 hover:border-purple-400 hover:bg-purple-500/20 shadow-none'
+                                  : 'bg-amber-400 text-black border-amber-400 shadow-[2px_2px_0px_0px_rgba(255,255,255,0.1)]'
                               : 'bg-neutral-950 text-neutral-455 border-neutral-800 hover:border-neutral-600 hover:text-white'
                           }`}
                         >
                           {isPaid ? (
                             <>
-                              <Check size={14} className="stroke-[3]" /> PAID GHC {(5.00 - (student.discount || 0)).toFixed(2)}
+                              <Check size={14} className="stroke-[3]" />
+                              {isPrepaid ? (
+                                <span>PREPAID (GHC 0)</span>
+                              ) : isScholarship ? (
+                                <span>SCHOLARSHIP (GHC 0)</span>
+                              ) : (
+                                <span>PAID GHC {((paidInfo?.amount !== undefined) ? paidInfo.amount : (5.00 - (student.discount || 0))).toFixed(2)}</span>
+                              )}
                             </>
                           ) : (
                             <>
@@ -1516,10 +1926,13 @@ export const ClassRegister: React.FC = () => {
                               } else if (action === 'manual') {
                                 setManualAmountStudentId(student.id);
                                 const currentAmt = isPaid && paidInfo ? (payments.find(p => p.id === paidInfo.paymentId)?.amount ?? 5) : Math.max(0, 5 - (student.discount ?? 0));
-                                setManualAmountValue(currentAmt.toString());
+                                const amtStr = currentAmt.toString();
+                                setManualAmountValue(amtStr);
+                                lastSavedValueRef.current = amtStr;
+                                setSaveStatus('idle');
                               } else if (action === 'absent') {
                                 recordAbsent(student.id);
-                                showToast(`Marked ${student.name} as absent today (treated as debt).`);
+                                showToast(`Marked ${student.name} as absent today (excused from fee).`);
                                 scrollToNextUnpaid(student.id);
                               } else if (action === 'unpaid') {
                                 if (paidInfo) {
@@ -1656,9 +2069,193 @@ export const ClassRegister: React.FC = () => {
               </div>
               );
             })}
+
+            {/* ACCOUNTANT RECONCILIATION SUMMARY DECK */}
+            <div className="bg-neutral-950 p-6 sm:p-8 border-t-2 border-neutral-800 space-y-6">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+                <div className="space-y-1.5 flex-1">
+                  <div className="flex items-center gap-2 text-amber-400 font-mono text-[10px] uppercase font-black tracking-widest">
+                    <Coins size={14} className="stroke-[2.5]" />
+                    <span>DAILY COHORT COLLECTED VALUE</span>
+                  </div>
+                  <h3 className="text-lg sm:text-xl font-mono font-black text-white uppercase tracking-tight">
+                    CLASS {selectedClass}: <span className="text-emerald-400">GHC {collectionTotal.toFixed(2)}</span>
+                  </h3>
+                  <p className="text-[11px] font-mono font-bold text-neutral-450 uppercase leading-none">
+                    Checked In: <strong className="text-white">{paidCount}</strong> paid, <strong className="text-red-400">{absentCount}</strong> absent of <strong className="text-white">{classStudents.length}</strong> total active
+                  </p>
+                </div>
+
+                <div className="hidden lg:block h-12 w-px bg-neutral-800" />
+
+                <div className="space-y-1.5 flex-1">
+                  <div className="flex items-center gap-2 text-amber-400 font-mono text-[10px] uppercase font-black tracking-widest">
+                    <Landmark size={14} className="stroke-[2.5]" />
+                    <span>GLOBAL SCHOOL-WIDE CASH DECK</span>
+                  </div>
+                  <h3 className="text-lg sm:text-xl font-mono font-black text-white tracking-tight">
+                    TOTAL SCHOOL: <span className="text-amber-400">GHC {globalCollectionTotal.toFixed(2)}</span>
+                  </h3>
+                  <p className="text-[11px] font-mono font-bold text-neutral-450 uppercase leading-none">
+                    Verified collections globally today: <strong className="text-white">{globalPaidCount}</strong> payments
+                  </p>
+                </div>
+
+                <div className="hidden lg:block h-12 w-px bg-neutral-800" />
+
+                <div className="bg-neutral-900 border border-neutral-850 p-4 shrink-0 flex-1 lg:max-w-xs">
+                  <div className="flex items-start gap-3">
+                    <div className="w-8 h-8 rounded-xs bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 font-bold shrink-0 font-mono text-[10px]">
+                      GHC
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-[9px] font-mono font-black text-emerald-400 uppercase tracking-widest">CASH STATUS</p>
+                      <p className="text-[10px] font-mono font-bold text-neutral-400 uppercase leading-snug">
+                        Match <span className="text-white">GHC {globalCollectionTotal.toFixed(2)}</span> cash-in-hand under date <span className="text-amber-400 font-black">{currentDate}</span>.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         )}
       </div>
+
+      {/* Pupil QR Scanner Station Modal Overlay */}
+      {isQrModalOpen && (
+        <div id="qr-scanner-modal-overlay" className="fixed inset-0 bg-neutral-950/90 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-neutral-900 border-4 border-neutral-800 max-w-4xl w-full p-6 md:p-8 shadow-[8px_8px_0px_0px_#fbbf24] flex flex-col lg:flex-row gap-6 overflow-y-auto max-h-[90vh]">
+            
+            {/* Left side: Camera View & controls */}
+            <div className="flex-1 space-y-4">
+              <div className="flex items-center gap-3 pb-3 border-b-2 border-neutral-850">
+                <QrCode size={22} className="text-amber-500 stroke-[2.5]" />
+                <div>
+                  <h3 className="text-sm font-black uppercase tracking-widest text-white">Pupil QR Scanner Station</h3>
+                  <p className="text-[9px] font-mono text-neutral-500 uppercase tracking-wider font-bold">SAAKO HOLY CHILD ACADEMY Gate Entry</p>
+                </div>
+              </div>
+
+              {/* Viewport wrapper with relative scanner overlay */}
+              <div className="relative aspect-square md:aspect-video w-full max-w-md mx-auto bg-neutral-950 border-4 border-neutral-800 overflow-hidden flex flex-col items-center justify-center">
+                <div id="qr-scanner-viewport" className="w-full h-full object-cover"></div>
+                
+                {/* Scanner visual guide lines */}
+                <div className="absolute inset-0 pointer-events-none border-2 border-dashed border-amber-500/20 flex items-center justify-center">
+                  <div className="w-48 h-48 border-2 border-amber-400 absolute opacity-70 animate-pulse rounded-md flex items-center justify-center">
+                    {/* Retro corner bracket styles */}
+                    <div className="absolute top-0 left-0 w-4 h-4 border-t-4 border-l-4 border-amber-400 -mt-1 -ml-1"></div>
+                    <div className="absolute top-0 right-0 w-4 h-4 border-t-4 border-r-4 border-amber-400 -mt-1 -mr-1"></div>
+                    <div className="absolute bottom-0 left-0 w-4 h-4 border-b-4 border-l-4 border-amber-400 -mb-1 -ml-1"></div>
+                    <div className="absolute bottom-0 right-0 w-4 h-4 border-b-4 border-r-4 border-amber-400 -mb-1 -mr-1"></div>
+                    {/* Animated horizontal scanning laser beam */}
+                    <div className="w-full h-1 bg-amber-400 absolute shadow-[0_0_8px_2px_rgba(251,191,36,0.5)] animate-bounce"></div>
+                  </div>
+                </div>
+
+                {scannerError && (
+                  <div className="absolute inset-0 bg-neutral-950/90 flex flex-col items-center justify-center p-6 text-center space-y-4">
+                    <AlertCircle size={32} className="text-red-500 animate-bounce" />
+                    <p className="text-[10px] font-mono font-black text-red-500 uppercase tracking-widest">
+                      ⚠️ Camera Access Blocked!
+                    </p>
+                    <p className="text-[9.5px] font-mono font-semibold text-neutral-400 uppercase leading-relaxed max-w-xs">
+                      {scannerError}
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Toggle configuration panel */}
+              <div className="bg-neutral-950 p-4 border border-neutral-850 flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <span className="text-[10px] font-mono uppercase font-black text-white tracking-widest block">Auto-Log Daily Fee</span>
+                  <span className="text-[9px] font-mono uppercase font-bold text-neutral-500 block">Record GHC 5.00 dynamically on scan detection</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAutoPayScanned(!autoPayScanned)}
+                  className={`px-3 py-1.5 font-mono text-[9px] font-black uppercase tracking-widest border transition-all ${
+                    autoPayScanned 
+                      ? 'bg-emerald-950/40 text-emerald-400 border-emerald-500' 
+                      : 'bg-neutral-950 text-neutral-500 border-neutral-800 hover:text-white'
+                  }`}
+                >
+                  {autoPayScanned ? "Enabled" : "Disabled (View Only)"}
+                </button>
+              </div>
+
+              {/* Feedbacks Panel */}
+              <div className="space-y-2">
+                <h4 className="text-[9px] font-mono uppercase font-black text-neutral-500 tracking-wider">Live Log Output</h4>
+                <div className="bg-neutral-950 p-3.5 border border-neutral-850 h-28 overflow-y-auto font-mono text-[9px] space-y-1.5 divide-y divide-neutral-900/60 animate-none">
+                  {qrFeedbacks.length === 0 ? (
+                    <div className="text-neutral-600 flex items-center justify-center h-full gap-1.5 uppercase font-black tracking-widest">
+                      <span>Waiting for scanning input...</span>
+                    </div>
+                  ) : (
+                    qrFeedbacks.map(f => (
+                      <div 
+                        key={f.id} 
+                        className={`pt-1.5 first:pt-0 leading-relaxed font-bold uppercase tracking-wide ${
+                          f.type === 'success' ? 'text-emerald-400' : f.type === 'warning' ? 'text-amber-400' : 'text-red-500'
+                        }`}
+                      >
+                        {f.text}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Right side: Session statistics & Checked-in pupil ledger */}
+            <div className="w-full lg:w-80 flex flex-col border-t-2 lg:border-t-0 lg:border-l-2 border-neutral-800 lg:pl-6 pt-6 lg:pt-0 justify-between">
+              <div className="space-y-4 flex-1">
+                <div className="space-y-1">
+                  <h4 className="text-[10px] font-mono uppercase font-black text-amber-400 tracking-widest">Session Ledger</h4>
+                  <p className="text-[9px] text-neutral-400 uppercase font-bold font-mono">Students scanned in this scan cycle</p>
+                </div>
+
+                <div className="bg-neutral-950 border border-neutral-850 h-64 lg:h-96 overflow-y-auto divide-y divide-neutral-900">
+                  {scanHistoryList.length === 0 ? (
+                    <div className="h-full flex flex-col items-center justify-center text-center p-4 text-neutral-600 uppercase font-mono text-[9px] font-black tracking-widest">
+                      <span>No pupils scanned yet</span>
+                    </div>
+                  ) : (
+                    scanHistoryList.map(item => (
+                      <div key={item.id} className="p-3 hover:bg-neutral-900/40 transition-colors space-y-1 font-mono">
+                        <div className="flex justify-between items-start text-[9.5px]">
+                          <span className="font-mono font-black uppercase text-white truncate max-w-[130px]" title={item.studentName}>{item.studentName}</span>
+                          <span className="text-[8.5px] font-mono text-neutral-500 font-bold bg-neutral-900 px-1 py-0.5 rounded-xs">{item.timestamp}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-[8.5px] font-mono">
+                          <span className="text-neutral-500">Roll: {item.rollNumber} • {item.class}</span>
+                          <span className={`font-black uppercase tracking-wider ${item.success ? 'text-emerald-400' : 'text-amber-500'}`}>
+                            {item.statusText}
+                          </span>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div className="pt-4 border-t border-neutral-850 mt-4">
+                <button
+                  type="button"
+                  onClick={() => setIsQrModalOpen(false)}
+                  className="w-full bg-neutral-950 hover:bg-neutral-850 border-2 border-neutral-800 text-neutral-400 hover:text-white py-3.5 px-4 font-mono font-black text-[10px] uppercase tracking-widest transition-all hover:border-amber-400 hover:text-amber-400 cursor-pointer text-center"
+                >
+                  Shutdown Scanner Terminal
+                </button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      )}
 
       {/* SMS Guardian Notification Modal Overlay */}
       {guardianSmsStudent && (
@@ -1783,60 +2380,67 @@ export const ClassRegister: React.FC = () => {
               </div>
 
               {/* Standard presets blocks */}
-              <div className="space-y-1.5">
-                <label className="text-[10px] uppercase font-mono font-black text-neutral-500">Quick Standard Presets (GHC 5/day)</label>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  {[
-                    { label: '1 Week (5 Days)', val: 25 },
-                    { label: '2 Weeks (10 Days)', val: 50 },
-                    { label: '3 Weeks (15 Days)', val: 75 },
-                    { label: '4 Weeks (20 Days)', val: 100 }
-                  ].map(preset => (
-                    <button
-                      key={preset.val}
-                      type="button"
-                      onClick={() => setAdvanceAmount(preset.val)}
-                      className={`py-2 px-1 text-center font-mono font-black text-[10px] transition-all border-2 ${
-                        advanceAmount === preset.val
-                          ? 'bg-emerald-500 border-emerald-500 text-black'
-                          : 'bg-neutral-950 border-neutral-800 text-neutral-400 hover:text-white'
-                      }`}
-                    >
-                      {preset.label}
-                      <span className="block text-[11px] mt-0.5 text-inherit">GHC {preset.val}.00</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
+              {(() => {
+                const dailyRate = Math.max(0.01, 5.00 - (advanceStudent.discount || 0));
+                return (
+                  <>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] uppercase font-mono font-black text-neutral-500">Quick Standard Presets (GHC {dailyRate.toFixed(2)}/day)</label>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        {[
+                          { label: '1 Week (5 Days)', val: dailyRate * 5 },
+                          { label: '2 Weeks (10 Days)', val: dailyRate * 10 },
+                          { label: '3 Weeks (15 Days)', val: dailyRate * 15 },
+                          { label: '4 Weeks (20 Days)', val: dailyRate * 20 }
+                        ].map(preset => (
+                          <button
+                            key={preset.val}
+                            type="button"
+                            onClick={() => setAdvanceAmount(preset.val)}
+                            className={`py-2 px-1 text-center font-mono font-black text-[10px] transition-all border-2 ${
+                              Math.abs(advanceAmount - preset.val) < 0.01
+                                ? 'bg-emerald-500 border-emerald-500 text-black'
+                                : 'bg-neutral-950 border-neutral-800 text-neutral-400 hover:text-white'
+                            }`}
+                          >
+                            {preset.label}
+                            <span className="block text-[11px] mt-0.5 text-inherit">GHC {preset.val.toFixed(2)}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
 
-              {/* Custom amount input field */}
-              <div className="space-y-1.5">
-                <div className="flex justify-between items-center">
-                  <label className="text-[10px] uppercase font-mono font-black text-neutral-500">Custom Amount (GHC Cedis)</label>
-                  <span className="text-[10px] uppercase font-mono font-black text-emerald-400 font-mono">
-                    COVERS {Math.floor(advanceAmount / 5)} DAYS
-                  </span>
-                </div>
-                
-                <div className="relative">
-                  <span className="absolute left-4 top-2.5 text-xs font-mono font-black text-neutral-500">GHC</span>
-                  <input
-                    type="number"
-                    required
-                    min="5"
-                    max="1000"
-                    step="5"
-                    value={advanceAmount}
-                    onChange={(e) => setAdvanceAmount(parseInt(e.target.value, 10) || 5)}
-                    className="w-full bg-neutral-950 border-2 border-neutral-800 py-2.5 pl-14 pr-4 text-xs font-mono font-black text-white focus:outline-none focus:border-emerald-400"
-                  />
-                </div>
-                {advanceAmount % 5 !== 0 && (
-                  <p className="text-[9px] font-mono text-amber-500 uppercase font-bold">
-                    * NOTICE: Amount is rounded down to standard GHC 5.00 daily chunks. Change of GHC {advanceAmount % 5}.00 will be refunded or must be re-entered.
-                  </p>
-                )}
-              </div>
+                    {/* Custom amount input field */}
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between items-center">
+                        <label className="text-[10px] uppercase font-mono font-black text-neutral-500">Custom Amount (GHC Cedis)</label>
+                        <span className="text-[10px] uppercase font-mono font-black text-emerald-400 font-mono">
+                          COVERS {Math.floor(advanceAmount / dailyRate)} DAYS
+                        </span>
+                      </div>
+                      
+                      <div className="relative">
+                        <span className="absolute left-4 top-2.5 text-xs font-mono font-black text-neutral-500">GHC</span>
+                        <input
+                          type="number"
+                          required
+                          min={dailyRate}
+                          max="1000"
+                          step={dailyRate}
+                          value={advanceAmount}
+                          onChange={(e) => setAdvanceAmount(parseFloat(e.target.value) || dailyRate)}
+                          className="w-full bg-neutral-950 border-2 border-neutral-800 py-2.5 pl-14 pr-4 text-xs font-mono font-black text-white focus:outline-none focus:border-emerald-400"
+                        />
+                      </div>
+                      {Math.abs(advanceAmount % dailyRate) > 0.01 && (
+                        <p className="text-[9px] font-mono text-amber-500 uppercase font-bold">
+                          * NOTICE: Amount is rounded down to standard GHC {dailyRate.toFixed(2)} daily chunks. Change of GHC {(advanceAmount % dailyRate).toFixed(2)} will be refunded or must be re-entered.
+                        </p>
+                      )}
+                    </div>
+                  </>
+                );
+              })()}
 
               {/* Anticipated coverage dates schedule list */}
               <div className="space-y-2">
@@ -1939,65 +2543,72 @@ export const ClassRegister: React.FC = () => {
               </div>
 
               {/* Quick debt presets */}
-              <div className="space-y-1.5">
-                <label className="text-[10px] uppercase font-mono font-black text-neutral-500">Amount To Pay (GHC 5 per past day)</label>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  {[
-                    { label: 'GHC 5 (1 Day)', val: 5 },
-                    { label: 'GHC 10 (2 Days)', val: 10 },
-                    { label: 'GHC 25 (5 Days)', val: 25 },
-                    { label: 'Clear All Arrears', val: studentDebtMap.get(debtStudent.id)?.totalDebt || 5 }
-                  ].map((preset, idx) => {
-                    const totalArr = studentDebtMap.get(debtStudent.id)?.totalDebt || 5;
-                    // Clamp preset value if it's larger than remaining arrears
-                    if (preset.val > totalArr && idx < 3) return null;
-                    return (
-                      <button
-                        key={idx}
-                        type="button"
-                        onClick={() => setDebtAmount(preset.val)}
-                        className={`py-2 px-1 text-center font-mono font-black text-[10px] transition-all border-2 ${
-                          debtAmount === preset.val
-                            ? 'bg-red-500 border-red-500 text-black'
-                            : 'bg-neutral-950 border-neutral-800 text-neutral-400 hover:text-white'
-                        }`}
-                      >
-                        {preset.label}
-                        <span className="block text-[11px] mt-0.5 text-inherit">GHC {preset.val}.00</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
+              {(() => {
+                const dailyRate = Math.max(0.01, 5.00 - (debtStudent.discount || 0));
+                const totalArr = studentDebtMap.get(debtStudent.id)?.totalDebt || dailyRate;
+                return (
+                  <>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] uppercase font-mono font-black text-neutral-500">Amount To Pay (GHC {dailyRate.toFixed(2)} per past day)</label>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        {[
+                          { label: `GHC ${dailyRate.toFixed(2)} (1 Day)`, val: dailyRate },
+                          { label: `GHC ${(dailyRate * 2).toFixed(2)} (2 Days)`, val: dailyRate * 2 },
+                          { label: `GHC ${(dailyRate * 5).toFixed(2)} (5 Days)`, val: dailyRate * 5 },
+                          { label: 'Clear All Arrears', val: totalArr }
+                        ].map((preset, idx) => {
+                          // Clamp preset value if it's larger than remaining arrears
+                          if (preset.val > totalArr && idx < 3) return null;
+                          return (
+                            <button
+                              key={idx}
+                              type="button"
+                              onClick={() => setDebtAmount(preset.val)}
+                              className={`py-2 px-1 text-center font-mono font-black text-[10px] transition-all border-2 ${
+                                Math.abs(debtAmount - preset.val) < 0.01
+                                  ? 'bg-red-500 border-red-500 text-black'
+                                  : 'bg-neutral-950 border-neutral-800 text-neutral-400 hover:text-white'
+                              }`}
+                            >
+                              {preset.label}
+                              <span className="block text-[11px] mt-0.5 text-inherit">GHC {preset.val.toFixed(2)}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
 
-              {/* Custom amount field */}
-              <div className="space-y-1.5">
-                <div className="flex justify-between items-center">
-                  <label className="text-[10px] uppercase font-mono font-black text-neutral-500">Custom Amount (GHC Cedis)</label>
-                  <span className="text-[10px] uppercase font-mono font-black text-red-400 font-mono">
-                    COVERS {Math.floor(debtAmount / 5)} ARREARS DAYS
-                  </span>
-                </div>
-                
-                <div className="relative">
-                  <span className="absolute left-4 top-2.5 text-xs font-mono font-black text-neutral-500">GHC</span>
-                  <input
-                    type="number"
-                    required
-                    min="5"
-                    max={studentDebtMap.get(debtStudent.id)?.totalDebt || 5}
-                    step="5"
-                    value={debtAmount}
-                    onChange={(e) => setDebtAmount(Math.min(parseInt(e.target.value, 10) || 5, studentDebtMap.get(debtStudent.id)?.totalDebt || 5))}
-                    className="w-full bg-neutral-950 border-2 border-neutral-800 py-2.5 pl-14 pr-4 text-xs font-mono font-black text-white focus:outline-none focus:border-red-400"
-                  />
-                </div>
-                {debtAmount % 5 !== 0 && (
-                  <p className="text-[9px] font-mono text-amber-500 uppercase font-bold">
-                    * NOTICE: Amount is rounded down to standard GHC 5.00 daily chunks.
-                  </p>
-                )}
-              </div>
+                    {/* Custom amount field */}
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between items-center">
+                        <label className="text-[10px] uppercase font-mono font-black text-neutral-500">Custom Amount (GHC Cedis)</label>
+                        <span className="text-[10px] uppercase font-mono font-black text-red-400 font-mono">
+                          COVERS {Math.floor(debtAmount / dailyRate)} ARREARS DAYS
+                        </span>
+                      </div>
+                      
+                      <div className="relative">
+                        <span className="absolute left-4 top-2.5 text-xs font-mono font-black text-neutral-500">GHC</span>
+                        <input
+                          type="number"
+                          required
+                          min={dailyRate}
+                          max={totalArr}
+                          step={dailyRate}
+                          value={debtAmount}
+                          onChange={(e) => setDebtAmount(Math.min(parseFloat(e.target.value) || dailyRate, totalArr))}
+                          className="w-full bg-neutral-950 border-2 border-neutral-800 py-2.5 pl-14 pr-4 text-xs font-mono font-black text-white focus:outline-none focus:border-red-400"
+                        />
+                      </div>
+                      {Math.abs(debtAmount % dailyRate) > 0.01 && (
+                        <p className="text-[9px] font-mono text-amber-500 uppercase font-bold">
+                          * NOTICE: Amount is rounded down to standard GHC {dailyRate.toFixed(2)} daily chunks.
+                        </p>
+                      )}
+                    </div>
+                  </>
+                );
+              })()}
 
               {/* Anticipated coverage dates schedule list */}
               <div className="space-y-2">
@@ -2034,6 +2645,35 @@ export const ClassRegister: React.FC = () => {
                 )}
               </div>
 
+              {/* Option to also pay today's regular attendance fee */}
+              {!paidStudentMap.has(debtStudent.id) && (
+                <div className="bg-neutral-950 p-4 border border-indigo-900/40 space-y-2">
+                  <div className="flex items-center gap-3">
+                    <input
+                      id="include-today-fee"
+                      type="checkbox"
+                      checked={includeTodayInDebtSettle}
+                      onChange={(e) => setIncludeTodayInDebtSettle(e.target.checked)}
+                      className="w-4 h-4 text-indigo-500 bg-neutral-900 border-neutral-800 rounded focus:ring-0 focus:ring-offset-0 cursor-pointer accent-indigo-500 animate-none"
+                    />
+                    <label htmlFor="include-today-fee" className="text-[10px] font-mono font-black text-neutral-300 uppercase select-none cursor-pointer">
+                      ALSO PAY TODAY'S GATE ATTENDANCE (+ GHC {(5.00 - (debtStudent.discount || 0)).toFixed(2)})
+                    </label>
+                  </div>
+                  <p className="text-[9px] font-mono font-bold text-neutral-550 uppercase pl-7 leading-normal">
+                    Registers today's daily gate attendance payment so that it is captured as cash today.
+                  </p>
+                </div>
+              )}
+
+              {/* Total cash collected summary */}
+              <div className="bg-neutral-950 p-4 border border-dashed border-emerald-900/40 flex justify-between items-center text-[11px] font-mono font-bold">
+                <span className="text-neutral-400">TOTAL MONEY TO SUBMIT TO ACCOUNTANT:</span>
+                <span className="text-emerald-450 font-black text-sm">
+                  GHC {(debtAmount + (includeTodayInDebtSettle && !paidStudentMap.has(debtStudent.id) ? (5.00 - (debtStudent.discount || 0)) : 0)).toFixed(2)}
+                </span>
+              </div>
+
               {/* Action submission buttons */}
               <div className="flex gap-3 pt-2">
                 <button
@@ -2045,15 +2685,15 @@ export const ClassRegister: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  disabled={debtCalculatedDays.length === 0 || debtSuccess}
-                  className="w-2/3 text-xs bg-red-600 hover:bg-red-500 disabled:bg-neutral-800 disabled:text-neutral-500 text-white py-3.5 font-black flex items-center justify-center gap-2 uppercase tracking-widest transition-colors cursor-pointer"
+                  disabled={(debtCalculatedDays.length === 0 && (paidStudentMap.has(debtStudent.id) || !includeTodayInDebtSettle)) || debtSuccess}
+                  className="w-2/3 text-xs bg-red-600 hover:bg-red-500 disabled:bg-neutral-800 disabled:text-neutral-500 text-white py-3.5 font-black flex items-center justify-center gap-2 uppercase tracking-widest transition-colors cursor-pointer animate-none"
                 >
                   {debtSuccess ? (
                     <>
                       <Check size={14} className="stroke-[3]" /> ARREARS PROCESSING SUCCESS!
                     </>
                   ) : (
-                    `SETTLE GHC ${debtAmount}.00 OF CORES`
+                    `SUBMIT GHC ${(debtAmount + (includeTodayInDebtSettle && !paidStudentMap.has(debtStudent.id) ? (5.00 - (debtStudent.discount || 0)) : 0)).toFixed(2)}`
                   )}
                 </button>
               </div>
@@ -2065,229 +2705,574 @@ export const ClassRegister: React.FC = () => {
       {/* TRANSACTION HISTORY MODAL OVERLAY */}
       {historyStudent && (
         <div className="fixed inset-0 bg-neutral-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-neutral-900 border-4 border-neutral-800 max-w-2xl w-full p-8 shadow-[8px_8px_0px_0px_#f59e0b] space-y-6 max-h-[90vh] overflow-y-auto">
+          <div className="bg-neutral-900 border-4 border-neutral-800 max-w-3xl w-full p-6 md:p-8 shadow-[8px_8px_0px_0px_#f59e0b] space-y-6 max-h-[92vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b-2 border-neutral-800">
               <div className="flex items-center gap-3">
-                <History size={20} className="text-amber-400 animate-none" />
-                <h3 className="text-sm font-black uppercase tracking-widest text-white">Student Transaction Ledger</h3>
+                <History size={20} className="text-amber-400" />
+                <h3 className="text-sm font-black uppercase tracking-widest text-white">Pupil Profile & Financial Folder</h3>
               </div>
               <button
                 type="button"
                 onClick={() => setHistoryStudent(null)}
-                className="text-neutral-500 hover:text-white transition-colors"
+                className="text-neutral-500 hover:text-white transition-colors cursor-pointer p-1"
                 title="Close"
               >
                 <X size={18} />
               </button>
             </div>
 
-            {/* Profile Summary Header */}
-            <div className="bg-neutral-950 p-4 border border-neutral-850 space-y-2 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div className="space-y-2 flex-grow">
-                <p className="text-[10px] uppercase font-mono font-black text-neutral-500">Student Profile</p>
-                <div className="flex flex-col sm:flex-row sm:items-start gap-2 sm:gap-4">
-                  <span className="text-base font-black text-white uppercase">{historyStudent.name}</span>
-                  <span className="font-mono text-xs text-amber-400 whitespace-nowrap">ROLL: {historyStudent.rollNumber} • {historyStudent.class} • {historyStudent.category}</span>
-                </div>
-                <p className="text-[10px] text-neutral-400 font-bold">
-                  GUARDIAN PHONE: <span className="font-mono text-neutral-300">{historyStudent.guardianPhone}</span>
-                </p>
-                
-                {/* Real-time calculated status badge based on the active term schedule */}
-                <div className="flex flex-wrap gap-2 pt-1">
-                  {histArrears > 0 ? (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[9px] font-mono font-black uppercase tracking-widest bg-red-950/80 text-red-400 border border-red-900 rounded-sm">
-                      <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-                      ARREARS DETECTED: GHC {histArrears.toFixed(2)}
-                    </span>
-                  ) : histSchoolOwes > 0 ? (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[9px] font-mono font-black uppercase tracking-widest bg-blue-950/80 text-blue-400 border border-blue-900 rounded-sm">
-                      <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
-                      PREPAID BALANCE: GHC {histSchoolOwes.toFixed(2)}
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[9px] font-mono font-black uppercase tracking-widest bg-emerald-950/80 text-emerald-400 border border-emerald-900 rounded-sm">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                      SETTLED / IN GOOD STANDING
-                    </span>
-                  )}
-                </div>
-              </div>
-              {!paidStudentMap.has(historyStudent.id) && (() => {
-                const discountAmount = historyStudent.discount || 0;
-                const payAmount = Math.max(0, 5.00 - discountAmount);
-                return (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      recordPayment(historyStudent.id, true);
-                      showToast(`Successfully logged GHC ${payAmount.toFixed(2)} payment for ${historyStudent.name}!`);
-                    }}
-                    className="w-full sm:w-auto bg-emerald-500 hover:bg-emerald-400 text-black px-4 py-2.5 text-[10px] font-mono font-black uppercase tracking-widest transition-all shrink-0 flex items-center justify-center gap-2 border-2 border-emerald-600 hover:border-emerald-400 hover:scale-[1.02] active:scale-[0.98] shadow-[4px_4px_0px_0px_rgba(16,185,129,0.2)] cursor-pointer"
-                    title={`Quick Record Today's GHC ${payAmount.toFixed(2)} Payment`}
-                  >
-                    <Coins size={14} className="stroke-[2.5]" />
-                    <span>PAY TODAY (GHC {payAmount.toFixed(2)})</span>
-                  </button>
-                );
-              })()}
+            {/* Interactive Tab Selector Bar */}
+            <div className="flex border-b border-neutral-800 font-mono text-[9px] sm:text-xs">
+              <button
+                type="button"
+                onClick={() => setHistoryModalTab('profile')}
+                className={`flex-1 py-3 px-1 text-center uppercase tracking-wider font-extrabold border-b-2 flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                  historyModalTab === 'profile'
+                    ? 'border-amber-400 text-amber-400 bg-neutral-950/50'
+                    : 'border-transparent text-neutral-500 hover:text-neutral-300'
+                }`}
+              >
+                <User size={14} className="shrink-0" />
+                <span>Pupil Overview</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setHistoryModalTab('ledger')}
+                className={`flex-1 py-3 px-1 text-center uppercase tracking-wider font-extrabold border-b-2 flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                  historyModalTab === 'ledger'
+                    ? 'border-amber-400 text-amber-400 bg-neutral-950/50'
+                    : 'border-transparent text-neutral-500 hover:text-neutral-300'
+                }`}
+              >
+                <Coins size={14} className="shrink-0" />
+                <span>Payment History logs</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setHistoryModalTab('print')}
+                className={`flex-1 py-3 px-1 text-center uppercase tracking-wider font-extrabold border-b-2 flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                  historyModalTab === 'print'
+                    ? 'border-amber-400 text-amber-400 bg-neutral-950/50'
+                    : 'border-transparent text-neutral-500 hover:text-neutral-300'
+                }`}
+              >
+                <Printer size={14} className="shrink-0" />
+                <span>Invoice View</span>
+              </button>
             </div>
 
-            {/* Numeric Stats Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div className="bg-neutral-950 p-4 border border-neutral-850">
-                <p className="text-[9px] font-black uppercase font-mono text-neutral-500">Total Paid Contribution</p>
-                <p className="text-lg font-black font-mono text-emerald-400 mt-1">
-                  GHC {payments.filter(p => p.studentId === historyStudent.id).reduce((sum, p) => sum + p.amount, 0).toFixed(2)}
-                </p>
-              </div>
-              <div className="bg-neutral-950 p-4 border border-neutral-850">
-                <p className="text-[9px] font-black uppercase font-mono text-neutral-500">Active Days Cleared</p>
-                <p className="text-lg font-black font-mono text-white mt-1">
-                  {payments.filter(p => p.studentId === historyStudent.id).length} Days
-                </p>
-              </div>
-              <div className="bg-neutral-950 p-4 border border-neutral-850">
-                <p className="text-[9px] font-black uppercase font-mono text-neutral-500">Total Arrears Owed</p>
-                <p className="text-lg font-black font-mono text-red-500 mt-1">
-                  GHC {(studentDebtMap.get(historyStudent.id)?.totalDebt || 0).toFixed(2)}
-                </p>
-              </div>
-            </div>
-
-            {/* Verification and double payment prevention desk banner */}
-            <div className="bg-neutral-950 p-4 border border-neutral-800 space-y-3">
-              <div className="flex justify-between items-center text-[10px] uppercase font-mono font-black text-neutral-500">
-                <span>GATE DESK CHECK: {currentDate}</span>
-                <span className="text-neutral-400 font-mono">STATUS: {paidStudentMap.has(historyStudent.id) ? "PAID" : "OUTSTANDING"}</span>
-              </div>
-
-              {paidStudentMap.has(historyStudent.id) ? (
-                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 bg-amber-400/10 border-2 border-amber-400/30 p-3.5">
-                  <div className="flex items-start gap-3 flex-1">
-                    <Check className="text-amber-400 stroke-[3] mt-0.5 shrink-0" size={18} />
-                    <div>
-                      <p className="text-xs font-black text-amber-400 uppercase tracking-wide">STUDENT CLEARANCE RECOGNIZED</p>
-                      <p className="text-[10px] text-neutral-400 font-bold uppercase mt-0.5">
-                        Clearance for {currentDate} has already been registered in the system ledger. Gate payment is locked to prevent duplicate entry records.
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const paidInfo = paidStudentMap.get(historyStudent.id);
-                      if (paidInfo) {
-                        setPaymentToDelete({
-                          id: paidInfo.paymentId,
-                          label: currentDate,
-                          studentName: historyStudent.name
-                        });
-                      }
-                    }}
-                    className="w-full sm:w-auto bg-neutral-900 hover:bg-neutral-850 border border-neutral-800 text-neutral-300 hover:text-white px-3 py-2 text-[10px] font-black font-mono uppercase tracking-wider transition-colors shrink-0"
-                  >
-                    DELETE ENTRY
-                  </button>
-                </div>
-              ) : (
-                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 bg-red-400/5 border-2 border-red-500/10 p-3.5">
-                  <div className="flex items-start gap-3 flex-1">
-                    <X className="text-red-500 stroke-[3] mt-0.5 shrink-0" size={18} />
-                    <div>
-                      <p className="text-xs font-black text-red-400 uppercase tracking-wide">CLEARANCE OUTSTANDING</p>
-                      <p className="text-[10px] text-neutral-400 font-bold uppercase mt-0.5">
-                        No check-in record has been registered for {currentDate}. A secure Gate Ingress Receipt can be generated safely here.
-                      </p>
-                    </div>
-                  </div>
-                  {(() => {
-                    const discountAmount = historyStudent.discount || 0;
-                    const payAmount = Math.max(0, 5.00 - discountAmount);
-                    return (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          recordPayment(historyStudent.id, true);
-                          showToast(`Successfully logged GHC ${payAmount.toFixed(2)} payment for ${historyStudent.name}!`);
-                        }}
-                        className="w-full sm:w-auto bg-emerald-500 hover:bg-emerald-400 text-black px-4 py-2.5 text-[10px] font-black uppercase tracking-widest transition-colors shrink-0"
-                      >
-                        RECORD GHC {payAmount.toFixed(2)} PAYMENT
-                      </button>
-                    );
-                  })()}
-                </div>
-              )}
-            </div>
-
-            {/* List of recent payments */}
-            <div className="space-y-3">
-              <h4 className="text-[10px] font-black uppercase tracking-widest text-neutral-400 font-mono">
-                Recent Transaction History Logs
-              </h4>
-
-              {studentPayments.length === 0 ? (
-                <div className="text-center py-8 bg-neutral-950 border border-neutral-850 text-neutral-500 uppercase tracking-wider text-[11px] font-bold">
-                  No previous records registered in standard checkout ledger.
-                </div>
-              ) : (
-                <div className="border border-neutral-850 divide-y divide-neutral-900 bg-neutral-950 max-h-48 overflow-y-auto pr-1">
-                  {studentPayments.map((p) => {
-                    // format date nicely
-                    const dateParts = p.date.split('-');
-                    const dayLabel = dateParts.length === 3 ? `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}` : p.date;
-                    
-                    return (
-                      <div key={p.id} className="flex justify-between items-center p-3 text-xs font-mono">
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2">
-                            <span className="text-white font-bold">{dayLabel}</span>
-                            <span className="text-[9px] px-1.5 py-0.5 bg-neutral-900 border border-neutral-800 text-emerald-400 font-black">
-                              GHC {p.amount.toFixed(2)}
-                            </span>
-                          </div>
-                          <p className="text-[9px] text-neutral-500 font-bold">Ref: {p.id} • Auditor: {p.collectedBy}</p>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <span className="text-[9px] font-black uppercase px-2 py-0.5 bg-emerald-950/50 text-emerald-400 border border-emerald-900/40 font-sans tracking-widest">
-                            VERIFIED
-                          </span>
-                          {(currentUser?.role === 'Administrator' || currentUser?.role === 'Headmaster' || currentUser?.role === 'Accountant') && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setPaymentToDelete({
-                                  id: p.id,
-                                  label: dayLabel,
-                                  studentName: historyStudent.name
-                                });
-                              }}
-                              className="p-1.5 text-neutral-600 hover:text-red-500 hover:bg-red-500/10 transition-colors"
-                              title="Delete transaction record"
-                            >
-                              <Trash2 size={13} />
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            {/* Footer Buttons */}
+            {/* Tab Panels */}
             {(() => {
               const arrearsInfo = studentDebtMap.get(historyStudent.id);
               const unpaidDaysList = arrearsInfo?.pastUnpaidDays || [];
               const totalPaidAccumulated = payments
                 .filter(p => p.studentId === historyStudent.id && p.verified)
                 .reduce((sum, p) => sum + p.amount, 0);
-              
+
+              const discountValue = historyStudent.discount || 0;
+              const finalDailyFee = Math.max(0, 5.00 - discountValue);
+              const totalArrearsGhc = histArrears;
+
+              // Calculate core attendance percentage
+              const elapsedDaysStr = activeTerm ? activeTerm.schoolDays.filter(d => d <= currentDate && !(activeTerm.publicHolidays || []).includes(d)) : [];
+              const elapsedDays = elapsedDaysStr.length;
+              const clearedDays = payments.filter(p => p.studentId === historyStudent.id && p.date <= currentDate && !p.id.endsWith('_debt')).length;
+              const attendancePct = elapsedDays > 0 ? Math.min(100, Math.round((clearedDays / elapsedDays) * 100)) : 100;
+
               return (
                 <>
-                  {/* STYLESHEET OVERRIDES FOR INDIVIDUAL PRINTER SYSTEM */}
+                  {historyModalTab === 'profile' && (
+                    <div className="space-y-6">
+                      {/* Flex grid containing profile badge & core facts */}
+                      <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-start">
+                        {/* Column 1: Pupil Smartcard Card (4/12 width) */}
+                        <div className="md:col-span-4 flex flex-col items-center bg-neutral-950 p-6 border-2 border-neutral-800 rounded-sm space-y-4 shadow-[4px_4px_0px_0px_rgba(0,0,0,0.5)] relative overflow-hidden">
+                          {/* Holographic school emblem decorative element */}
+                          <div className="absolute right-0 top-0 w-24 h-24 bg-amber-400/5 rotate-45 transform translate-x-12 -translate-y-12 border-l border-b border-amber-400/20 pointer-events-none rounded-full" />
+                          
+                          {/* Profile Avatar Frame with Active Ring */}
+                          <div className="relative group/avatar">
+                            {historyStudent.photoUrl ? (
+                              <img
+                                src={historyStudent.photoUrl}
+                                alt={historyStudent.name}
+                                className="w-24 h-24 rounded-full object-cover border-4 border-neutral-800 group-hover/avatar:border-amber-400 transition-colors"
+                                referrerPolicy="no-referrer"
+                              />
+                            ) : (
+                              <div className="w-24 h-24 rounded-full bg-neutral-900 border-4 border-neutral-800 flex items-center justify-center text-3xl font-black text-amber-400 tracking-tighter uppercase font-mono">
+                                {historyStudent.name.slice(0, 2).toUpperCase()}
+                              </div>
+                            )}
+                            
+                            {/* Ingress Active Indicator Badge */}
+                            <span className={`absolute bottom-1 right-1 w-5 h-5 rounded-full border-4 border-neutral-950 flex items-center justify-center ${
+                              historyStudent.active ? 'bg-emerald-500' : 'bg-red-500'
+                            }`} title={historyStudent.active ? "Registered Active Ingress Student" : "Deactivated Student Account"} />
+                          </div>
+
+                          <div className="text-center space-y-1">
+                            <span className="text-[9px] font-mono font-black uppercase tracking-widest text-amber-500 py-0.5 px-2 bg-amber-955 border border-amber-800 inline-block rounded-xs">
+                              {historyStudent.rollNumber}
+                            </span>
+                            <h4 className="text-base font-black text-white uppercase tracking-tight truncate max-w-xs">{historyStudent.name}</h4>
+                            <p className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest font-bold">
+                              {historyStudent.class} • {historyStudent.category}
+                            </p>
+                          </div>
+
+                          {/* Action links */}
+                          <div className="w-full pt-4 border-t border-neutral-900 flex flex-col gap-2">
+                            {historyStudent.guardianPhone ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+                                      navigator.clipboard.writeText(historyStudent.guardianPhone || '');
+                                      showToast(`Copied Guardian Phone: ${historyStudent.guardianPhone}`);
+                                    }
+                                  }}
+                                  className="w-full bg-neutral-900 hover:bg-neutral-850 text-neutral-300 py-2.5 px-3 text-[9px] font-mono font-black uppercase tracking-wider flex items-center justify-center gap-1.5 border border-neutral-800 transition-colors cursor-pointer"
+                                  title="Copy Guardian Contact"
+                                >
+                                  <Copy size={12} />
+                                  <span>Copy Guard: {historyStudent.guardianPhone}</span>
+                                </button>
+                                
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setGuardianSmsStudent(historyStudent);
+                                  }}
+                                  className="w-full bg-amber-400/10 hover:bg-amber-400/20 text-amber-400 py-2.5 px-3 text-[9px] font-mono font-black uppercase tracking-wider flex items-center justify-center gap-1.5 border border-amber-400/20 hover:border-amber-400/40 transition-all cursor-pointer"
+                                  title="Open SMS Desk helper"
+                                >
+                                  <BellRing size={12} />
+                                  <span>Guardian SMS Alert</span>
+                                </button>
+                              </>
+                            ) : (
+                              <div className="text-center p-2 border border-dashed border-neutral-800 bg-neutral-950 text-[9px] font-mono text-neutral-600 uppercase font-black tracking-wider">
+                                No verified guardian contact
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Column 2: Detailed Personal Records (8/12 width) */}
+                        <div className="md:col-span-8 space-y-5">
+                          <div>
+                            <h4 className="text-[10px] font-mono uppercase font-black tracking-widest text-neutral-500 mb-2">Student Credentials & Registration File</h4>
+                            
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                              <div className="bg-neutral-950 p-3 border border-neutral-850">
+                                <span className="text-[9px] font-mono uppercase text-neutral-550 block font-bold">Cohorted Segment Grade</span>
+                                <span className="text-sm font-black text-white">{historyStudent.class} ({historyStudent.category})</span>
+                              </div>
+                              <div className="bg-neutral-950 p-3 border border-neutral-850">
+                                <span className="text-[9px] font-mono uppercase text-neutral-550 block font-bold">System ID / Roll Number</span>
+                                <span className="text-sm font-bold text-amber-400 font-mono tracking-wide">{historyStudent.rollNumber}</span>
+                              </div>
+                              <div className="bg-neutral-950 p-3 border border-neutral-850">
+                                <span className="text-[9px] font-mono uppercase text-neutral-550 block font-bold">Standard Single-Day Attendance Fee</span>
+                                <span className="text-sm font-black text-neutral-300">GHC 5.00</span>
+                              </div>
+                              <div className="bg-neutral-950 p-3 border border-neutral-850">
+                                <span className="text-[9px] font-mono uppercase text-neutral-550 block font-bold">Daily Discount / Scholarship</span>
+                                {discountValue > 0 ? (
+                                  <span className="text-sm font-black text-emerald-400 flex items-center gap-1 font-mono">
+                                    <Award size={14} className="stroke-[2.5]" />
+                                    GHC {discountValue.toFixed(2)} ({discountValue === 5 ? '100% Scholarship' : 'Special rate'})
+                                  </span>
+                                ) : (
+                                  <span className="text-sm font-bold text-neutral-500 uppercase tracking-wide">None (Standard rate)</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Attendance summary statistics */}
+                          <div className="bg-neutral-950 p-4 border border-neutral-850 space-y-3">
+                            <div className="flex justify-between items-center text-[10px] uppercase font-mono font-black">
+                              <span className="text-neutral-500">Attendance Clear Rate</span>
+                              <span className="text-white font-mono">{attendancePct}%</span>
+                            </div>
+                            
+                            {/* Graphic high-contrast loading bar */}
+                            <div className="w-full bg-neutral-900 border border-neutral-800 h-3 p-0.5 rounded-none overflow-hidden flex items-stretch">
+                              <div 
+                                className={`h-full transition-all duration-500 rounded-none ${
+                                  attendancePct >= 85 ? 'bg-emerald-500' : attendancePct >= 65 ? 'bg-amber-400' : 'bg-red-500'
+                                }`}
+                                style={{ width: `${attendancePct}%` }}
+                              />
+                            </div>
+
+                            <div className="flex justify-between items-center text-[8.5px] text-neutral-500 uppercase font-mono leading-tight font-bold">
+                              <span>Term days elapsed: {elapsedDays} days</span>
+                              <span>Cleared & Cleansed Days: {clearedDays} days</span>
+                            </div>
+                          </div>
+
+                          {/* Active Balance/Arrears Alert Notification Banner */}
+                          {unpaidDaysList.length > 0 ? (
+                            <div className="bg-red-950/40 border-2 border-red-900/60 p-4 space-y-2 relative overflow-hidden">
+                              <div className="absolute top-2 right-2 text-red-500/25 pointer-events-none">
+                                <ShieldAlert size={44} />
+                              </div>
+                              <h5 className="text-[11px] font-mono uppercase font-black text-red-400 flex items-center gap-1.5">
+                                <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-ping" />
+                                Financial Deficit Detected
+                              </h5>
+                              <p className="text-[10px] text-neutral-400 font-bold uppercase leading-relaxed max-w-md">
+                                Student has {unpaidDaysList.length} unpaid register days. Total arrears of <strong className="text-red-400">GHC {totalArrearsGhc.toFixed(2)}</strong> must be settled immediately at the Gate Desk to ensure access standing.
+                              </p>
+                              <div className="pt-1 select-none">
+                                <button
+                                  type="button"
+                                  onClick={() => setHistoryModalTab('ledger')}
+                                  className="text-[9px] font-mono font-black uppercase text-amber-400 hover:text-amber-300 hover:underline inline-flex items-center gap-1 cursor-pointer"
+                                >
+                                  Go to Ledger Action Desk <ChevronRight size={10} className="stroke-[3]" />
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="bg-emerald-950/40 border border-emerald-900 p-4 flex items-start gap-3">
+                              <CheckCircle2 size={18} className="text-emerald-400 shrink-0 mt-0.5" />
+                              <div className="space-y-0.5">
+                                <h5 className="text-[11px] font-mono uppercase font-black text-emerald-450">Good Standing Account Profile</h5>
+                                <p className="text-[9.5px] text-neutral-550 uppercase font-bold leading-normal">
+                                  All attendance checking periods for this student are fully settled. Student profile is fully verified and cleared.
+                                </p>
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="bg-neutral-950 p-3.5 border border-neutral-900">
+                            <p className="text-[8.5px] text-neutral-650 uppercase font-bold text-center leading-relaxed font-mono">
+                              * Core credential modifications like student deletion, active/inactive toggles, photo replacements should be completed in pupils panel list.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {historyModalTab === 'ledger' && (
+                    <div className="space-y-5">
+                      {/* Numeric Stats Grid */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div className="bg-neutral-950 p-4 border border-neutral-850">
+                          <p className="text-[9px] font-black uppercase font-mono text-neutral-500">Total Paid Contribution</p>
+                          <p className="text-lg font-black font-mono text-emerald-400 mt-1">
+                            GHC {payments.filter(p => p.studentId === historyStudent.id).reduce((sum, p) => sum + p.amount, 0).toFixed(2)}
+                          </p>
+                        </div>
+                        <div className="bg-neutral-950 p-4 border border-neutral-850">
+                          <p className="text-[9px] font-black uppercase font-mono text-neutral-500">Active Days Cleared</p>
+                          <p className="text-lg font-black font-mono text-white mt-1">
+                            {payments.filter(p => p.studentId === historyStudent.id).length} Days
+                          </p>
+                        </div>
+                        <div className="bg-neutral-950 p-4 border border-neutral-850">
+                          <p className="text-[9px] font-black uppercase font-mono text-neutral-500">Total Arrears Owed</p>
+                          <p className="text-lg font-black font-mono text-red-500 mt-1">
+                            GHC {totalArrearsGhc.toFixed(2)}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Verification and double payment prevention desk banner */}
+                      <div className="bg-neutral-950 p-4 border border-neutral-800 space-y-3">
+                        <div className="flex justify-between items-center text-[10px] uppercase font-mono font-black text-neutral-500">
+                          <span>GATE DESK CHECK: {currentDate}</span>
+                          <span className="text-neutral-400 font-mono">STATUS: {paidStudentMap.has(historyStudent.id) ? "PAID" : "OUTSTANDING"}</span>
+                        </div>
+
+                        {paidStudentMap.has(historyStudent.id) ? (
+                          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 bg-amber-400/10 border-2 border-amber-400/30 p-3.5">
+                            <div className="flex items-start gap-3 flex-1">
+                              <Check className="text-amber-400 stroke-[3] mt-0.5 shrink-0" size={18} />
+                              <div>
+                                <p className="text-xs font-black text-amber-400 uppercase tracking-wide">STUDENT CLEARANCE RECOGNIZED</p>
+                                <p className="text-[10px] text-neutral-400 font-bold uppercase mt-0.5">
+                                  Clearance for {currentDate} has already been registered in the system ledger. Gate payment is locked to prevent duplicate entry records.
+                                </p>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const paidInfo = paidStudentMap.get(historyStudent.id);
+                                if (paidInfo) {
+                                  setPaymentToDelete({
+                                    id: paidInfo.paymentId,
+                                    label: currentDate,
+                                    studentName: historyStudent.name
+                                  });
+                                }
+                              }}
+                              className="w-full sm:w-auto bg-neutral-900 hover:bg-neutral-850 border border-neutral-800 text-neutral-300 hover:text-white px-3 py-2 text-[10px] font-black font-mono uppercase tracking-wider transition-colors shrink-0 cursor-pointer"
+                            >
+                              DELETE ENTRY
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 bg-red-400/5 border-2 border-red-500/10 p-3.5">
+                            <div className="flex items-start gap-3 flex-1">
+                              <X className="text-red-500 stroke-[3] mt-0.5 shrink-0" size={18} />
+                              <div>
+                                <p className="text-xs font-black text-red-500 uppercase tracking-wide">CLEARANCE OUTSTANDING</p>
+                                <p className="text-[10px] text-neutral-400 font-bold uppercase mt-0.5">
+                                  No check-in record has been registered for {currentDate}. A secure Gate Ingress Receipt can be generated safely here.
+                                </p>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                recordPayment(historyStudent.id, true);
+                                showToast(`Successfully logged GHC ${finalDailyFee.toFixed(2)} payment for ${historyStudent.name}!`);
+                              }}
+                              className="w-full sm:w-auto bg-emerald-500 hover:bg-emerald-400 text-black px-4 py-2.5 text-[10px] font-bold uppercase tracking-widest transition-colors shrink-0 cursor-pointer text-center"
+                            >
+                              RECORD GHC {finalDailyFee.toFixed(2)} PAYMENT
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* List of recent payments */}
+                      <div className="space-y-3">
+                        <h4 className="text-[10px] font-black uppercase tracking-widest text-neutral-400 font-mono">
+                          Recent Transaction History Logs
+                        </h4>
+
+                        {studentPayments.length === 0 ? (
+                          <div className="text-center py-8 bg-neutral-950 border border-neutral-850 text-neutral-500 uppercase tracking-wider text-[11px] font-bold">
+                            No previous records registered in standard checkout ledger.
+                          </div>
+                        ) : (
+                          <div className="border border-neutral-850 divide-y divide-neutral-900 bg-neutral-950 max-h-48 overflow-y-auto pr-1">
+                            {studentPayments.map((p) => {
+                              // format date nicely
+                              const dateParts = p.date.split('-');
+                              const dayLabel = dateParts.length === 3 ? `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}` : p.date;
+                              
+                              return (
+                                <div key={p.id} className="flex justify-between items-center p-3 text-xs font-mono">
+                                  <div className="space-y-1">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-white font-bold">{dayLabel}</span>
+                                      <span className="text-[9px] px-1.5 py-0.5 bg-neutral-900 border border-neutral-800 text-emerald-400 font-black">
+                                        GHC {p.amount.toFixed(2)}
+                                      </span>
+                                    </div>
+                                    <p className="text-[9px] text-neutral-500 font-bold">Ref: {p.id} • Auditor: {p.collectedBy} {p.notes ? `• ${p.notes}` : ''}</p>
+                                  </div>
+                                  <div className="flex items-center gap-3">
+                                    <span className="text-[9px] font-black uppercase px-2 py-0.5 bg-emerald-950/50 text-emerald-400 border border-emerald-900/40 font-sans tracking-widest">
+                                      VERIFIED
+                                    </span>
+                                    {(currentUser?.role === 'Administrator' || currentUser?.role === 'Headmaster' || currentUser?.role === 'Accountant') && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setPaymentToDelete({
+                                            id: p.id,
+                                            label: dayLabel,
+                                            studentName: historyStudent.name
+                                          });
+                                        }}
+                                        className="p-1.5 text-neutral-600 hover:text-red-500 hover:bg-red-500/10 transition-colors"
+                                        title="Delete transaction record"
+                                      >
+                                        <Trash2 size={13} />
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {historyModalTab === 'print' && (
+                    <div className="space-y-4">
+                      <div className="bg-neutral-950 p-3 border border-neutral-800 text-center">
+                        <span className="text-[10px] font-mono text-neutral-450 uppercase font-black tracking-widest block mb-1">DOCKET DIGITAL DESKTOP PREVIEW</span>
+                        <p className="text-[9px] text-neutral-555 font-bold uppercase">Below is a rendering of the physical statement docket printable via export</p>
+                      </div>
+
+                      {/* Screen rendering replica of printer area */}
+                      <div className="bg-white text-black p-6 md:p-10 border border-neutral-350 shadow-inner font-sans text-xs max-h-[50vh] overflow-y-auto">
+                        <div className="space-y-6 animate-none">
+                          
+                          {/* School Letterhead */}
+                          <div className="border-b-4 border-black pb-4 flex justify-between items-start">
+                            <div className="space-y-1">
+                              <span className="text-[9px] md:text-[11px] font-black uppercase tracking-wider text-black bg-neutral-200 px-2 font-mono">
+                                SAAKO HOLY CHILD ACADEMY
+                              </span>
+                              <h2 className="text-sm md:text-base font-black uppercase tracking-tight leading-none mt-2">OFFICIAL STUDENT FEE STATEMENT</h2>
+                              <p className="text-[8px] text-neutral-600 font-black uppercase tracking-widest font-mono">
+                                GATE INGRESS COLLECTION LEDGER • AUDITING CHECK POINT
+                              </p>
+                            </div>
+                            
+                            <div className="text-right space-y-1 font-mono">
+                              <span className="text-[9px] md:text-[11px] font-black uppercase px-2 py-0.5 bg-black text-white inline-block">
+                                FEE RECEIPT DOCKET
+                              </span>
+                              <div className="text-[7.5px] text-neutral-500 uppercase font-black mt-1">
+                                REF: SHC-ST-{currentDate.replace(/-/g, '')}-{historyStudent.id.substring(0,6).toUpperCase()}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Profile Grid */}
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-[10px] leading-relaxed border-b border-neutral-300 pb-4">
+                            <div>
+                              <span className="text-[8px] font-black uppercase text-neutral-505 block">STUDENT BENEFICIARY</span>
+                              <div className="text-[11px] font-black text-black uppercase">{historyStudent.name}</div>
+                              <div className="font-mono mt-0.5 text-neutral-700 font-bold">Roll / ID: {historyStudent.rollNumber || 'SHC-' + historyStudent.id.substring(0, 5).toUpperCase()}</div>
+                              <div className="font-bold mt-0.5">Cohort Group: {historyStudent.class} ({historyStudent.category})</div>
+                            </div>
+
+                            <div className="border-t md:border-t-0 md:border-l pt-3 md:pt-0 md:pl-4 border-neutral-200 font-mono text-[9px]">
+                              <span className="text-[8px] font-black uppercase text-neutral-505 block font-sans">FINANCIAL BALANCES</span>
+                              <div className="flex justify-between font-bold text-neutral-800">
+                                <span>Total Deposited:</span>
+                                <span className="text-emerald-700 font-black">GHC {totalPaidAccumulated.toFixed(2)}</span>
+                              </div>
+                              <div className="flex justify-between font-bold text-neutral-800">
+                                <span>Total Arrears (Debt):</span>
+                                <span className="text-red-700 font-black">GHC {totalArrearsGhc.toFixed(2)} {unpaidDaysList.length > 0 ? `(${unpaidDaysList.length} days)` : ''}</span>
+                              </div>
+                              <div className="flex justify-between font-bold text-neutral-800">
+                                <span>Prepaid Balance:</span>
+                                <span className="text-blue-700 font-black font-sans bg-transparent">GHC {histSchoolOwes.toFixed(2)}</span>
+                              </div>
+                            </div>
+
+                            <div className="text-right border-t md:border-t-0 md:border-l pt-3 md:pt-0 md:pl-4 border-neutral-200">
+                              <span className="text-[8px] font-black uppercase text-neutral-505 block">STATEMENT ISSUANCE INFO</span>
+                              <div className="font-bold text-neutral-800">Date Audited: {currentDate}</div>
+                              <div className="font-mono text-neutral-600 text-[9px]">Guardian Contact: {historyStudent.guardianPhone || 'No SMS Verified Contact'}</div>
+                              <div className="mt-0.5 text-neutral-600 uppercase font-bold text-right text-[9px]">
+                                Audit Officer: {currentUser ? currentUser.name : 'Authorized Gate Officer'}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Print details: Ledger column comparison */}
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-1 text-[10px]">
+                            {/* Verified gate deposits */}
+                            <div className="space-y-3 font-sans">
+                              <span className="text-[8.5px] font-black uppercase tracking-wider text-black font-mono border-b border-black pb-1.5 block">
+                                ✔️ HISTORIC CHECKS CLEARED ({studentPayments.length} DAYS)
+                              </span>
+                              {studentPayments.length === 0 ? (
+                                <p className="text-neutral-505 italic">No payment logs found on standard checkout ledger.</p>
+                              ) : (
+                                <table className="w-full text-[9px]">
+                                  <thead>
+                                    <tr className="border-b border-neutral-300 text-left uppercase text-neutral-400 font-bold font-mono">
+                                      <th className="py-1">DATE</th>
+                                      <th className="py-1">REF CODE</th>
+                                      <th className="py-1 text-right">FEES</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-neutral-100 font-mono">
+                                    {studentPayments.slice(0, 10).map(record => (
+                                      <tr key={record.id} className="text-neutral-800">
+                                        <td className="py-1 font-semibold">{record.date}</td>
+                                        <td className="py-1 text-[8px] text-neutral-505 uppercase">{record.id.substring(0, 10)}...</td>
+                                        <td className="py-1 text-right font-bold text-black">GHC {record.amount.toFixed(2)}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              )}
+                              {studentPayments.length > 10 && (
+                                <p className="text-[8px] font-mono text-neutral-505 text-center italic mt-1 pb-1">
+                                  * Showing latest 10 transactions. Export contains complete chronological registers.
+                                </p>
+                              )}
+                            </div>
+
+                            {/* Arrears deficit log */}
+                            <div className="space-y-3 md:border-l md:pl-6 border-neutral-200">
+                              <span className="text-[8.5px] font-black uppercase tracking-wider text-red-700 font-mono border-b border-red-200 pb-1.5 block">
+                                ❌ GENERAL OUTSTANDING ARREARS ({unpaidDaysList.length} d)
+                              </span>
+                              {unpaidDaysList.length === 0 ? (
+                                <div className="p-3 border border-emerald-200 bg-emerald-50/50 text-emerald-800 text-[9px] font-bold uppercase tracking-wide flex items-center justify-center gap-1.5 rounded-sm">
+                                  <span>Student has zero deficit. Account fully cleared!</span>
+                                </div>
+                              ) : (
+                                <div className="space-y-2">
+                                  <p className="text-[8px] text-neutral-505 tracking-normal font-medium leading-relaxed">
+                                    The following scheduled core school sessions are marked as overdue. Standard registration rate GHC 5.00 applies.
+                                  </p>
+                                  <table className="w-full text-[9px]">
+                                    <thead>
+                                      <tr className="border-b border-neutral-300 text-left uppercase text-neutral-400 font-bold font-mono">
+                                        <th className="py-1">ARREARS DATE</th>
+                                        <th className="py-1 text-right">BALANCE DUE</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-neutral-100 font-mono text-red-700">
+                                      {unpaidDaysList.slice(0, 8).map((day, idx) => {
+                                        const cumulativeDues = (idx + 1) * finalDailyFee;
+                                        return (
+                                          <tr key={day} className="font-semibold">
+                                            <td className="py-1 font-mono">{day}</td>
+                                            <td className="py-1 text-right font-bold">GHC {cumulativeDues.toFixed(2)}</td>
+                                          </tr>
+                                        );
+                                      })}
+                                    </tbody>
+                                  </table>
+                                  {unpaidDaysList.length > 8 && (
+                                    <p className="text-[8px] font-mono text-red-500 text-center italic mt-1 pb-1">
+                                      * Showing first 8 arrears dockets. Statement records total {unpaidDaysList.length} d.
+                                    </p>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Bottom Signature Area */}
+                          <div className="mt-10 pt-4 border-t border-neutral-300">
+                            <div className="grid grid-cols-2 gap-4 items-end">
+                              <div className="space-y-1 p-2 bg-neutral-50 border border-neutral-200 text-neutral-555 leading-relaxed rounded-none text-[7.5px] uppercase font-semibold font-mono">
+                                <span>Verification certification</span>
+                                <p className="leading-normal">Certified invoice receipts generated via decentralized registrar nodes. Retain physical copy for admission validation.</p>
+                              </div>
+
+                              <div className="text-right space-y-2">
+                                <div className="inline-block border-b border-black w-32 h-6" />
+                                <div className="text-[7.5px] font-black uppercase text-neutral-700 tracking-wider font-sans">
+                                  Yakubu Hakeem (Headmaster)
+                                  <span className="text-[7px] text-neutral-400 block mt-0.5">SAAKO HOLY CHILD ACADEMY CHECKPOINT</span>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Absolute Printable Layout (Visible only in physical media print engine) */}
                   <style dangerouslySetInnerHTML={{ __html: `
                     @media print {
                       /* Hide standard app UI */
@@ -2298,16 +3283,16 @@ export const ClassRegister: React.FC = () => {
                         box-shadow: none !important;
                       }
                       /* Show ONLY the single printable invoice container */
-                      #print-single-invoice-area, #print-single-invoice-area * {
+                      #print-single-invoice-area-upgrade, #print-single-invoice-area-upgrade * {
                         visibility: visible !important;
                       }
-                      #print-single-invoice-area {
+                      #print-single-invoice-area-upgrade {
                         position: absolute !important;
                         left: 0 !important;
                         top: 0 !important;
                         width: 100% !important;
                         margin: 0 !important;
-                        padding: 10mm !important;
+                        padding: 15mm !important;
                         background: white !important;
                         display: block !important;
                       }
@@ -2318,7 +3303,7 @@ export const ClassRegister: React.FC = () => {
                   `}} />
 
                   {/* PRINTER FRIENDLY PORTRAIT SINGLE INVOICE SHEET (HIDDEN ON SCREEN, VISIBLE ON PRINT) */}
-                  <div id="print-single-invoice-area" className="hidden print:block bg-white text-black p-10 max-w-[210mm] mx-auto text-sans leading-relaxed">
+                  <div id="print-single-invoice-area-upgrade" className="hidden print:block bg-white text-black p-12 max-w-[210mm] mx-auto text-sans leading-relaxed">
                     <div className="space-y-6">
                       
                       {/* School Letterhead */}
@@ -2327,7 +3312,7 @@ export const ClassRegister: React.FC = () => {
                           <span className="text-[11px] font-black uppercase tracking-wider text-black bg-neutral-200 px-2.5 py-1 font-mono">
                             SAAKO HOLY CHILD ACADEMY
                           </span>
-                          <h2 className="text-xl font-black uppercase tracking-tight leading-none mt-2 font-sans">OFFICIAL STUDENT FEE STATEMENT</h2>
+                          <h2 className="text-xl font-black uppercase tracking-tight leading-none mt-2 font-sans font-bold">OFFICIAL STUDENT FEE STATEMENT</h2>
                           <p className="text-[9px] text-neutral-600 font-black uppercase tracking-widest font-mono">
                             GATE INGRESS COLLECTION LEDGER • DIGITAL SECURITY DELEGATE
                           </p>
@@ -2348,19 +3333,19 @@ export const ClassRegister: React.FC = () => {
                         <div className="font-sans">
                           <span className="text-[8.5px] font-black uppercase text-neutral-500 block">STUDENT BENEFICIARY</span>
                           <div className="text-xs font-black text-black uppercase">{historyStudent.name}</div>
-                          <div className="font-mono mt-0.5 text-neutral-700 font-bold">Roll / ID: {historyStudent.rollNumber || 'SHC-' + historyStudent.id.substring(0, 5).toUpperCase()}</div>
+                          <div className="font-mono mt-0.5 text-neutral-750 font-bold">Roll / ID: {historyStudent.rollNumber || 'SHC-' + historyStudent.id.substring(0, 5).toUpperCase()}</div>
                           <div className="font-bold mt-0.5">Cohort Group: {historyStudent.class} ({historyStudent.category})</div>
                         </div>
 
                         <div className="border-l pl-6 border-neutral-200 font-mono">
-                          <span className="text-[8.5px] font-black uppercase text-neutral-500 block font-sans">FINANCIAL BALANCES</span>
+                          <span className="text-[8.5px] font-black uppercase text-neutral-505 block font-sans">FINANCIAL BALANCES</span>
                           <div className="flex justify-between mt-1 font-bold">
                             <span className="text-neutral-500 uppercase text-[9px] font-sans">Total Deposited:</span>
                             <span className="text-emerald-700 font-black">GHC {totalPaidAccumulated.toFixed(2)}</span>
                           </div>
                           <div className="flex justify-between mt-0.5 font-bold">
                             <span className="text-neutral-500 uppercase text-[9px] font-sans">Total Arrears (Debt):</span>
-                            <span className="text-red-700 font-black">GHC {histArrears.toFixed(2)} {histArrears > 0 ? `(${unpaidDaysList.length} days)` : ''}</span>
+                            <span className="text-red-700 font-black">GHC {totalArrearsGhc.toFixed(2)} {unpaidDaysList.length > 0 ? `(${unpaidDaysList.length} days)` : ''}</span>
                           </div>
                           <div className="flex justify-between mt-0.5 font-bold">
                             <span className="text-neutral-500 uppercase text-[9px] font-sans">Prepaid Balance:</span>
@@ -2397,20 +3382,15 @@ export const ClassRegister: React.FC = () => {
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-neutral-100">
-                                {studentPayments.slice(0, 15).map(record => (
+                                {studentPayments.map(record => (
                                   <tr key={record.id} className="text-neutral-800">
                                     <td className="py-1.5 font-mono text-black font-semibold">{record.date}</td>
-                                    <td className="py-1.5 font-mono text-[8.5px] text-neutral-600 uppercase">{record.id.substring(0, 12)}...</td>
+                                    <td className="py-1.5 font-mono text-[8.5px] text-neutral-605 uppercase">{record.id.substring(0, 12)}...</td>
                                     <td className="py-1.5 text-right font-mono font-bold text-black">GHC {record.amount.toFixed(2)}</td>
                                   </tr>
                                 ))}
                               </tbody>
                             </table>
-                          )}
-                          {studentPayments.length > 15 && (
-                            <p className="text-[8px] font-mono text-neutral-500 text-center italic mt-1 font-sans">
-                              * Showing latest 15 transactions. Total {studentPayments.length} payments recorded across active term.
-                            </p>
                           )}
                         </div>
 
@@ -2427,7 +3407,7 @@ export const ClassRegister: React.FC = () => {
                           ) : (
                             <div className="space-y-2">
                               <p className="text-[9px] text-neutral-500 font-medium leading-relaxed font-sans">
-                                The following scheduled school days have missing fee check-ins. Daily rate of <strong>GHC 5.00</strong> applies per school day.
+                                The following scheduled school days have missing fee check-ins. Daily rate of <strong>GHC {finalDailyFee.toFixed(2)}</strong> applies per school day.
                               </p>
                               <table className="w-full text-[9.5px]">
                                 <thead>
@@ -2437,24 +3417,19 @@ export const ClassRegister: React.FC = () => {
                                     <th className="py-1 text-right font-normal">BALANCE DUE</th>
                                   </tr>
                                 </thead>
-                                <tbody className="divide-y divide-neutral-100 font-mono">
-                                  {unpaidDaysList.slice(0, 12).map((day, idx) => {
-                                    const cumulativeDues = (idx + 1) * 5;
+                                <tbody className="divide-y divide-neutral-100 font-mono text-red-700">
+                                  {unpaidDaysList.map((day, idx) => {
+                                    const cumulativeDues = (idx + 1) * finalDailyFee;
                                     return (
-                                      <tr key={day} className="text-red-700 font-medium">
+                                      <tr key={day} className="font-semibold">
                                         <td className="py-1.5 font-mono">{day}</td>
-                                        <td className="py-1.5 font-mono">GHC 5.00</td>
-                                        <td className="py-1.5 text-right font-bold">GHC {cumulativeDues.toFixed(2)}</td>
+                                        <td className="py-1.5 font-mono">GHC {finalDailyFee.toFixed(2)}</td>
+                                        <td className="py-1.5 text-right font-bold font-mono">GHC {cumulativeDues.toFixed(2)}</td>
                                       </tr>
                                     );
                                   })}
                                 </tbody>
                               </table>
-                              {unpaidDaysList.length > 12 && (
-                                <p className="text-[8px] font-mono text-red-500 text-center italic mt-1 font-sans">
-                                  * Showing first 12 arrears dates. Total {unpaidDaysList.length} outstanding days.
-                                </p>
-                              )}
                             </div>
                           )}
                         </div>
@@ -2462,32 +3437,33 @@ export const ClassRegister: React.FC = () => {
 
                       {/* Bottom Signature Section */}
                       <div className="mt-14 pt-4 border-t border-neutral-300 space-y-6">
-                        <div className="grid grid-cols-2 gap-8 items-end">
-                          <div className="space-y-2 bg-neutral-50 p-3.5 border border-neutral-200 rounded-xs font-sans">
-                            <span className="text-[8px] font-black uppercase text-neutral-600 font-mono block">VERIFICATION STATEMENT</span>
-                            <p className="text-[8px] text-neutral-550 leading-normal font-sans font-medium">
+                        <div className="grid grid-cols-2 gap-8 items-end font-sans font-bold">
+                          <div className="space-y-2 bg-neutral-50 p-3.5 border border-neutral-200 rounded-xs font-sans font-medium">
+                            <span className="text-[8px] font-black uppercase text-neutral-605 font-mono block">VERIFICATION STATEMENT</span>
+                            <p className="text-[8px] text-neutral-550 leading-normal font-sans">
                               Official statement of Saako Holy Child Academy daily gate receipt collections. Verified against local database nodes under the Saako Holy Child Educational Trust. Please retain this physical docket for credentials validation.
                             </p>
                           </div>
 
-                          <div className="text-right space-y-4 font-sans">
-                            <div className="inline-block border-b-2 border-black w-48 h-10"></div>
+                          <div className="text-right space-y-4 font-sans font-bold">
+                            <div className="inline-block border-b-2 border-black w-48 h-10" />
                             <div className="text-[8.5px] font-black uppercase text-neutral-700 tracking-wider">
                               Yakubu Hakeem (Headmaster)
-                              <span className="text-[8px] text-neutral-500 font-mono font-bold block mt-0.5 font-sans">SAAKO HOLY CHILD ACADEMY CHECKPOINT</span>
+                              <span className="text-[8px] text-neutral-500 font-mono font-bold block mt-0.5 font-sans font-bold">SAAKO HOLY CHILD ACADEMY CHECKPOINT</span>
                             </div>
                           </div>
                         </div>
 
-                        <div className="text-center text-[8px] font-mono text-neutral-400 font-bold uppercase tracking-widest pt-4 border-t border-neutral-100">
-                          Saako Holy Child Trust • Audited Statement System Release V1.4
+                        <div className="text-center text-[8px] font-mono text-neutral-400 font-bold uppercase tracking-widest pt-4 border-t border-neutral-100 animate-none">
+                          Saako Holy Child Trust • Audited Statement System Upgrade Release V1.5
                         </div>
                       </div>
 
                     </div>
                   </div>
 
-                  <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3 pt-2">
+                  {/* Foot Action Buttons */}
+                  <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3 pt-4 border-t border-neutral-800">
                     <button
                       type="button"
                       onClick={() => {
@@ -2498,7 +3474,7 @@ export const ClassRegister: React.FC = () => {
                       className="flex items-center justify-center gap-2 px-5 py-3 bg-amber-400 hover:bg-amber-300 hover:scale-[1.01] active:scale-[0.99] transition-all text-black font-mono text-xs font-black uppercase tracking-widest cursor-pointer"
                     >
                       <Printer size={15} className="stroke-[2.5]" />
-                      <span>EXPORT STATEMENT (PDF)</span>
+                      <span>PRINT & EXPORT STATEMENT (PDF)</span>
                     </button>
                     
                     <button

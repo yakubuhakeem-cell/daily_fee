@@ -22,7 +22,10 @@ import {
   Menu, 
   X, 
   ShieldCheck, 
-  GraduationCap 
+  GraduationCap,
+  Printer,
+  Sun,
+  Moon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -38,7 +41,9 @@ function NavigationWrapper() {
     seedFirebaseFromLocal,
     students,
     users,
-    payments
+    payments,
+    theme,
+    setTheme
   } = useApp();
 
   // Compute unassigned pupils & missing registration records for the current day
@@ -155,7 +160,7 @@ function NavigationWrapper() {
   };
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-white flex flex-col font-sans selection:bg-amber-400 selection:text-black">
+    <div className={`min-h-screen ${theme === 'daylight' ? 'daylight bg-white text-neutral-900' : 'bg-neutral-950 text-white'} flex flex-col font-sans selection:bg-amber-400 selection:text-black`}>
       {/* Dynamic Top Workspace Ribbon */}
       <header className="bg-neutral-900 shrink-0 border-b-4 border-neutral-800">
         <div className="px-8 py-4 flex items-center justify-between">
@@ -201,6 +206,14 @@ function NavigationWrapper() {
             <div className="h-8 w-[1px] bg-neutral-800" />
 
             <div className="flex gap-2">
+              <button
+                onClick={() => setTheme(theme === 'daylight' ? 'dark' : 'daylight')}
+                className="bg-neutral-800 hover:bg-amber-400 hover:text-black text-neutral-400 p-2 border border-neutral-700 hover:border-amber-400 transition-colors cursor-pointer"
+                title={theme === 'daylight' ? "Switch to Dark Night Mode" : "Switch to Daylight High-Contrast Mode"}
+                id="btn-desktop-theme-toggle"
+              >
+                {theme === 'daylight' ? <Moon size={16} /> : <Sun size={16} className="text-amber-400" />}
+              </button>
               <button 
                 onClick={logout}
                 className="bg-neutral-800 hover:bg-amber-400 hover:text-black text-neutral-400 p-2 border border-neutral-700 hover:border-amber-400 transition-colors"
@@ -402,12 +415,22 @@ function NavigationWrapper() {
                   <p className="text-xs font-black uppercase text-white">{currentUser.name}</p>
                   <p className="text-[10px] font-mono text-amber-400 uppercase tracking-widest font-bold">{currentUser.role} Session</p>
                 </div>
-                <button 
-                  onClick={logout}
-                  className="bg-neutral-850 hover:bg-amber-400 hover:text-black border border-neutral-700 text-white px-3 py-1.5 font-black text-xs transition-all uppercase tracking-widest"
-                >
-                  Log Out
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setTheme(theme === 'daylight' ? 'dark' : 'daylight')}
+                    className="bg-neutral-800 hover:bg-amber-400 hover:text-black border border-neutral-700 text-white p-2 transition-all cursor-pointer"
+                    title={theme === 'daylight' ? 'Switch to Dark Mode' : 'Switch to Daylight Mode'}
+                    id="btn-mobile-theme-toggle"
+                  >
+                    {theme === 'daylight' ? <Moon size={14} /> : <Sun size={14} className="text-amber-400" />}
+                  </button>
+                  <button 
+                    onClick={logout}
+                    className="bg-neutral-850 hover:bg-amber-400 hover:text-black border border-neutral-700 text-white px-3 py-1.5 font-black text-xs transition-all uppercase tracking-widest"
+                  >
+                    Log Out
+                  </button>
+                </div>
               </div>
 
               <nav className="space-y-3 py-2">
@@ -462,6 +485,28 @@ function NavigationWrapper() {
             <span className="text-[9px] font-black uppercase tracking-widest text-neutral-400">Ver 2.6.0-Pro</span>
           </div>
         </div>
+
+        {currentUser?.role === 'Administrator' && (
+          <button
+            onClick={() => {
+              if (activeTab !== 'reports') {
+                setActiveTab('reports');
+                setTimeout(() => {
+                  window.print();
+                }, 250);
+              } else {
+                window.print();
+              }
+            }}
+            className="no-print bg-neutral-900 hover:bg-neutral-800 text-neutral-200 border-2 border-neutral-800 hover:border-amber-400 px-3 py-1 font-mono text-[9px] font-black uppercase tracking-widest flex items-center gap-2 transition-colors cursor-pointer"
+            id="btn-global-admin-print"
+            title="Generate Clean Audit Reports (Administrators Only)"
+          >
+            <Printer size={12} className="text-amber-400" />
+            <span>Print Report</span>
+          </button>
+        )}
+
         <div className="text-[9px] font-black text-neutral-600 uppercase tracking-wider hidden sm:block">
           &copy; {new Date().getFullYear()} SAAKO HOLY CHILD ACADEMY • Saako Holy Child Ledger Authority
         </div>

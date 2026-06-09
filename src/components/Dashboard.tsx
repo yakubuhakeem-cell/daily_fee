@@ -8,6 +8,7 @@ import { useApp } from '../context/AppContext';
 import { SchoolCategory, StudentClass } from '../types';
 import { 
   TrendingUp, 
+  TrendingDown,
   Award, 
   AlertTriangle, 
   Coins, 
@@ -82,7 +83,7 @@ export const Dashboard: React.FC = () => {
   };
 
   // Active Layout perspective state
-  const [activeLayout, setActiveLayout] = useState<'bento' | 'class-perf' | 'alerts-desk'>('bento');
+  const [activeLayout, setActiveLayout] = useState<'bento' | 'class-perf' | 'alerts-desk' | 'weekly-aggregate'>('bento');
 
   // Confirmation state for resetting revenue or pupils list
   const [resetConfirming, setResetConfirming] = useState<'none' | 'payments' | 'both'>('none');
@@ -239,6 +240,197 @@ export const Dashboard: React.FC = () => {
 
   // Chart active view mode switch: 'trends' for manual SVG, 'recharts' for Recharts Line Chart
   const [chartView, setChartView] = useState<'trends' | 'recharts'>('recharts');
+
+  // Helper to shift the selected week by -7 or +7 days
+  const handleShiftWeek = (direction: 'prev' | 'next') => {
+    const parts = dateFilter.split('-');
+    const year = parseInt(parts[0], 10);
+    const month = parseInt(parts[1], 10) - 1;
+    const day = parseInt(parts[2], 10);
+    
+    const d = new Date(year, month, day);
+    d.setDate(d.getDate() + (direction === 'prev' ? -7 : 7));
+    
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const val = `${yyyy}-${mm}-${dd}`;
+    setDateFilter(val);
+    setCurrentDate(val);
+  };
+
+  // Memoized weekly aggregate collections per class
+  const weeklyCollectionsData = useMemo(() => {
+    // 1. Get the week's dates
+    // Compute Monday of the week containing `dateFilter`
+    const parts = dateFilter.split('-');
+    const year = parseInt(parts[0], 10);
+    const month = parseInt(parts[1], 10) - 1;
+    const day = parseInt(parts[2], 10);
+    const targetDate = new Date(year, month, day);
+    
+    const dayOfWeek = targetDate.getDay(); // 0 Sunday, 1 Monday, ...
+    const distanceToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+    const monday = new Date(targetDate);
+    monday.setDate(targetDate.getDate() + distanceToMonday);
+
+    const weekdays: { dateStr: string; label: string; dateObj: Date }[] = [];
+    const dayLabels = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    for (let i = 0; i < 7; i++) {
+      const current = new Date(monday);
+      current.setDate(monday.getDate() + i);
+      const yyyy = current.getFullYear();
+      const mm = String(current.getMonth() + 1).padStart(2, '0');
+      const dd = String(current.getDate()).padStart(2, '0');
+      weekdays.push({
+        dateStr: `${yyyy}-${mm}-${dd}`,
+        label: dayLabels[i],
+        dateObj: current,
+      });
+    }
+
+    const classesList: StudentClass[] = [
+      'Nursery', 'KG1', 'KG2',
+      'B1', 'B2', 'B3', 'B4', 'B5', 'B6',
+      'B7', 'B8', 'B9'
+    ];
+
+    // Helper to get monday date string for grouping historical averages
+    const getMondayOfDate = (dateStr: string) => {
+      const pParts = dateStr.split('-');
+      if (pParts.length !== 3) return dateStr;
+      const yStr = parseInt(pParts[0], 10);
+      const mStr = parseInt(pParts[1], 10) - 1;
+      const dStr = parseInt(pParts[2], 10);
+      const targetD = new Date(yStr, mStr, dStr);
+      if (isNaN(targetD.getTime())) return dateStr;
+      const dOfWeek = targetD.getDay();
+      const dist = dOfWeek === 0 ? -6 : 1 - dOfWeek;
+      const mon = new Date(targetD);
+      mon.setDate(targetD.getDate() + dist);
+      return `${mon.getFullYear()}-${String(mon.getMonth() + 1).padStart(2, '0')}-${String(mon.getDate()).padStart(2, '0')}`;
+    };
+
+    // Calculate all weeks represented in verified payments
+    const verifiedPayments = payments.filter(p => p.verified && p.isAbsent !== true);
+    const uniqueWeeks: string[] = Array.from(new Set(verifiedPayments.map(p => getMondayOfDate(p.date))));
+    const historyWeeksCount = uniqueWeeks.length;
+
+    // Build the grid data: rows = classes
+    const rows = classesList.map((cls) => {
+      const dailyCollected: Record<string, number> = {};
+      let classTotal = 0;
+
+      weekdays.forEach((dayObj) => {
+        // Collect verified payments for this class on this day
+        const dayPayments = payments.filter(
+          (p) => p.class === cls && p.date === dayObj.dateStr && p.verified && p.isAbsent !== true
+        );
+        const daySum = dayPayments.reduce((acc, curr) => acc + curr.amount, 0);
+        dailyCollected[dayObj.dateStr] = daySum;
+        classTotal += daySum;
+      });
+
+      // Calculate historical average
+      const weeklyTotals: Record<string, number> = {};
+      uniqueWeeks.forEach(w => { weeklyTotals[w] = 0; });
+
+      const classPayments = verifiedPayments.filter(p => p.class === cls);
+      classPayments.forEach(p => {
+        const wk = getMondayOfDate(p.date);
+        weeklyTotals[wk] = (weeklyTotals[wk] || 0) + p.amount;
+      });
+
+      const historicalSum = Object.values(weeklyTotals).reduce((sum, val) => sum + val, 0);
+      let historicalAvg = historyWeeksCount > 0 ? (historicalSum / historyWeeksCount) : 0;
+
+      // Fallback threshold if only 1 week exists (e.g. initial demo database or fresh term starting)
+      const classStudentsCount = students ? students.filter(s => s.class === cls && s.active !== false).length : 6;
+      const expectedWeeklyTarget = classStudentsCount * 18.0; // Benchmark target GHC 18 per active student
+
+      if (historyWeeksCount <= 1) {
+        historicalAvg = expectedWeeklyTarget || 60.0;
+      }
+
+      const isTrendingBelow = classTotal < historicalAvg;
+      const percentDifference = historicalAvg > 0 ? ((classTotal - historicalAvg) / historicalAvg) * 100 : 0;
+
+      return {
+        className: cls,
+        dailyCollected,
+        classTotal,
+        historicalAvg,
+        isTrendingBelow,
+        percentDifference,
+      };
+    });
+
+    // Compute column-totals (totals per day)
+    const dayTotals: Record<string, number> = {};
+    let grandTotal = 0;
+    
+    weekdays.forEach((dayObj) => {
+      let sumForDay = 0;
+      rows.forEach((row) => {
+        sumForDay += row.dailyCollected[dayObj.dateStr] || 0;
+      });
+      dayTotals[dayObj.dateStr] = sumForDay;
+      grandTotal += sumForDay;
+    });
+
+    return {
+      weekdays, // Mon to Sun details
+      rows, // class name, daily values, class total
+      dayTotals, // daily totals
+      grandTotal, // grand total of week
+      mondayStr: weekdays[0].dateStr,
+      sundayStr: weekdays[6].dateStr,
+    };
+  }, [payments, dateFilter, students, setCurrentDate]);
+
+  const peakDayInfo = useMemo(() => {
+    const weekdays = weeklyCollectionsData.weekdays;
+    const dayTotals = weeklyCollectionsData.dayTotals;
+    let maxVal = -1;
+    let maxDayLabel = 'N/A';
+    let maxDateStr = '';
+    weekdays.forEach(d => {
+      const t = dayTotals[d.dateStr] || 0;
+      if (t > maxVal) {
+        maxVal = t;
+        maxDayLabel = d.label;
+        maxDateStr = d.dateStr;
+      }
+    });
+    return {
+      label: maxDayLabel,
+      dateStr: maxDateStr,
+      amount: maxVal,
+    };
+  }, [weeklyCollectionsData]);
+
+  const topClassInfo = useMemo(() => {
+    let maxVal = -1;
+    let maxClassName = 'N/A';
+    weeklyCollectionsData.rows.forEach(r => {
+      if (r.classTotal > maxVal) {
+        maxVal = r.classTotal;
+        maxClassName = r.className;
+      }
+    });
+    return {
+      className: maxClassName,
+      amount: maxVal,
+    };
+  }, [weeklyCollectionsData]);
+
+  const weeklyChartData = useMemo(() => {
+    return weeklyCollectionsData.weekdays.map(d => ({
+      name: d.label.substring(0, 3).toUpperCase(),
+      date: d.dateStr,
+      revenue: weeklyCollectionsData.dayTotals[d.dateStr] || 0,
+    }));
+  }, [weeklyCollectionsData]);
 
   // Custom Recharts dark-theme tooltip
   const CustomTooltip = ({ active, payload, label }: any) => {
@@ -473,10 +665,38 @@ export const Dashboard: React.FC = () => {
     );
   }, [teacherMetrics, classPerfSearch]);
 
+  const containerVariants = {
+    hidden: { opacity: 0 },
+    show: {
+      opacity: 1,
+      transition: {
+        staggerChildren: 0.05
+      }
+    }
+  };
+
+  const itemVariants = {
+    hidden: { opacity: 0, y: 15 },
+    show: { 
+      opacity: 1, 
+      y: 0,
+      transition: { 
+        type: "spring",
+        stiffness: 100,
+        damping: 15
+      }
+    }
+  };
+
   return (
-    <div className="space-y-6 font-sans">
+    <motion.div
+      variants={containerVariants}
+      initial="hidden"
+      animate="show"
+      className="space-y-6 font-sans"
+    >
       {/* Date & Layout Control Header */}
-      <div className="bg-neutral-900 border-4 border-neutral-800 p-6 flex flex-col xl:flex-row justify-between items-stretch xl:items-center gap-6">
+      <motion.div variants={itemVariants} className="bg-neutral-900 border-4 border-neutral-800 p-6 flex flex-col xl:flex-row justify-between items-stretch xl:items-center gap-6">
         
         {/* Date Selector controls */}
         <div className="flex flex-wrap items-center gap-4">
@@ -576,6 +796,16 @@ export const Dashboard: React.FC = () => {
             <Activity size={14} /> Classrooms Tracker
           </button>
           <button
+            onClick={() => setActiveLayout('weekly-aggregate')}
+            className={`px-4 py-2 text-[10px] font-black uppercase tracking-widest transition-all cursor-pointer flex items-center gap-2 ${
+              activeLayout === 'weekly-aggregate' 
+                ? 'bg-white text-black font-black' 
+                : 'text-neutral-400 hover:text-white hover:bg-neutral-900/40'
+            }`}
+          >
+            <Coins size={14} /> Weekly Collections
+          </button>
+          <button
             onClick={() => setActiveLayout('alerts-desk')}
             className={`px-4 py-2 text-[10px] font-black uppercase tracking-widest transition-all cursor-pointer flex items-center gap-2 ${
               activeLayout === 'alerts-desk' 
@@ -586,13 +816,13 @@ export const Dashboard: React.FC = () => {
             <AlertTriangle size={14} className={pendingAlerts.length > 0 ? 'text-amber-450 animate-bounce' : ''} /> Alerts Deck ({pendingAlerts.length})
           </button>
         </div>
-      </div>
+      </motion.div>
 
       {/* 5 Interactive KPI Cards - Heightened Design with Side Accent borders */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
 
         {/* Metric 1: Total Accumulated Revenue */}
-        <div className="bg-neutral-900 border-4 border-neutral-800 border-l-amber-400 p-6 flex flex-col justify-between min-h-[145px] hover:border-r-neutral-700 transition-all">
+        <motion.div variants={itemVariants} className="bg-neutral-900 border-4 border-neutral-800 border-l-amber-400 p-6 flex flex-col justify-between min-h-[145px] hover:border-r-neutral-700 transition-all">
           <div className="flex justify-between items-start">
             <span className="text-[10px] font-black text-neutral-500 uppercase tracking-widest font-mono">Accumulated Revenue</span>
             <Coins size={16} className="text-amber-400" />
@@ -670,10 +900,10 @@ export const Dashboard: React.FC = () => {
               </div>
             )}
           </div>
-        </div>
+        </motion.div>
         
         {/* Metric 2: Total Collected with Interactive Progress Ring */}
-        <div className={`bg-neutral-900 border-4 border-neutral-800 ${dailyProgressPercent >= 100 ? 'border-l-emerald-400 shadow-[inset_y_0_12px_rgba(16,185,129,0.05)]' : 'border-l-amber-400'} p-6 flex flex-col justify-between min-h-[145px] hover:border-r-neutral-700 transition-all`}>
+        <motion.div variants={itemVariants} className={`bg-neutral-900 border-4 border-neutral-800 ${dailyProgressPercent >= 100 ? 'border-l-emerald-400 shadow-[inset_y_0_12px_rgba(16,185,129,0.05)]' : 'border-l-amber-400'} p-6 flex flex-col justify-between min-h-[145px] hover:border-r-neutral-700 transition-all`}>
           <div className="flex justify-between items-start">
             <span className="text-[10px] font-black text-neutral-500 uppercase tracking-widest font-mono">Collections & progress</span>
             <Coins size={16} className={dailyProgressPercent >= 100 ? 'text-emerald-400 animate-bounce' : 'text-amber-400'} />
@@ -764,10 +994,10 @@ export const Dashboard: React.FC = () => {
               <span className={`text-[8px] font-black font-mono tracking-widest uppercase ${dailyProgressPercent >= 100 ? 'text-emerald-400' : 'text-neutral-500'}`}>Goal %</span>
             </div>
           </div>
-        </div>
+        </motion.div>
 
         {/* Metric 2: Expected vs Actual Collection Rate */}
-        <div className="bg-neutral-900 border-4 border-neutral-800 border-l-white p-6 flex flex-col justify-between min-h-[145px] hover:border-r-neutral-700 transition-all">
+        <motion.div variants={itemVariants} className="bg-neutral-900 border-4 border-neutral-800 border-l-white p-6 flex flex-col justify-between min-h-[145px] hover:border-r-neutral-700 transition-all">
           <div className="flex justify-between items-start">
             <span className="text-[10px] font-black text-neutral-500 uppercase tracking-widest font-mono">Collection Rate</span>
             <TrendingUp size={16} className="text-white" />
@@ -853,10 +1083,10 @@ export const Dashboard: React.FC = () => {
               </div>
             </div>
           </div>
-        </div>
+        </motion.div>
 
         {/* Metric 3: Total Paid Count */}
-        <div className="bg-neutral-900 border-4 border-neutral-800 border-l-neutral-400 p-6 flex flex-col justify-between min-h-[145px] hover:border-r-neutral-700 transition-all">
+        <motion.div variants={itemVariants} className="bg-neutral-900 border-4 border-neutral-800 border-l-neutral-400 p-6 flex flex-col justify-between min-h-[145px] hover:border-r-neutral-700 transition-all">
           <div className="flex justify-between items-start">
             <span className="text-[10px] font-black text-neutral-500 uppercase tracking-widest font-mono">Paid Cohort</span>
             <Users size={16} className="text-neutral-400" />
@@ -867,10 +1097,10 @@ export const Dashboard: React.FC = () => {
               Entered classrooms cleared
             </p>
           </div>
-        </div>
+        </motion.div>
 
         {/* Metric 4: Pending Alerts */}
-        <div className="bg-neutral-900 border-4 border-neutral-800 border-l-red-500 p-6 flex flex-col justify-between min-h-[145px] hover:border-r-neutral-700 transition-all">
+        <motion.div variants={itemVariants} className="bg-neutral-900 border-4 border-neutral-800 border-l-red-500 p-6 flex flex-col justify-between min-h-[145px] hover:border-r-neutral-700 transition-all">
           <div className="flex justify-between items-start">
             <span className="text-[10px] font-black text-neutral-500 uppercase tracking-widest font-mono">Pending Gate Checks</span>
             <AlertTriangle size={16} className="text-red-500 animate-pulse" />
@@ -881,14 +1111,14 @@ export const Dashboard: React.FC = () => {
               <span className="inline-block w-1.5 h-1.5 bg-red-500 animate-ping" /> Alert state active
             </p>
           </div>
-        </div>
+        </motion.div>
       </div>
 
       {/* Enrollment & Sync Health Double Banner */}
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
         
         {/* Total Enrollment Banner */}
-        <div className="lg:col-span-3 bg-neutral-900 border-4 border-neutral-800 p-4 flex flex-col sm:flex-row justify-between items-center gap-4 hover:border-neutral-700 transition-all duration-300">
+        <motion.div variants={itemVariants} className="lg:col-span-3 bg-neutral-900 border-4 border-neutral-800 p-4 flex flex-col sm:flex-row justify-between items-center gap-4 hover:border-neutral-700 transition-all duration-300">
           <div className="flex items-center gap-3">
             <div className="bg-amber-400 text-black p-2 rounded-none">
               <Users size={18} />
@@ -902,10 +1132,10 @@ export const Dashboard: React.FC = () => {
             <span className="text-[10px] font-black uppercase tracking-wider text-neutral-400 font-mono">Registered across all classes:</span>
             <span className="text-xl font-black font-mono text-amber-400" id="total-enrollment-counter">{students?.length || 0} Pupils</span>
           </div>
-        </div>
+        </motion.div>
 
         {/* Sync Health Monitor Widget */}
-        <div className={`lg:col-span-2 bg-neutral-900 border-4 border-neutral-800 ${pendingLocalEdits.length > 0 ? 'border-l-amber-500' : 'border-l-emerald-400'} p-4 flex flex-col justify-between gap-3 relative select-none hover:border-neutral-700 transition-all duration-300`}>
+        <motion.div variants={itemVariants} className={`lg:col-span-2 bg-neutral-900 border-4 border-neutral-800 ${pendingLocalEdits.length > 0 ? 'border-l-amber-500' : 'border-l-emerald-400'} p-4 flex flex-col justify-between gap-3 relative select-none hover:border-neutral-700 transition-all duration-300`}>
           <div className="flex justify-between items-center w-full">
             <div className="flex items-center gap-2">
               <span className={`w-2.5 h-2.5 rounded-none ${pendingLocalEdits.length > 0 ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'}`} />
@@ -993,7 +1223,7 @@ export const Dashboard: React.FC = () => {
               <span className="flex-1 text-left text-emerald-400">{syncStatus.successMessage}</span>
             </div>
           )}
-        </div>
+        </motion.div>
 
       </div>
 
@@ -1914,13 +2144,258 @@ export const Dashboard: React.FC = () => {
                         </span>
                       )}
                     </button>
-                  </div>
-                ))}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </motion.div>
+          )}
+
+        {/* Perspective Tab 4: Weekly Collections Aggregate Matrix */}
+        {activeLayout === 'weekly-aggregate' && (
+          <motion.div
+            key="weekly-layout"
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -15 }}
+            transition={{ duration: 0.2 }}
+            className="bg-neutral-900 border-4 border-neutral-800 p-8 space-y-6 text-left"
+          >
+            {/* Header / Week Navigation Row */}
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-4 border-b-2 border-neutral-850">
+              <div>
+                <span className="text-[9px] text-amber-500 font-mono tracking-widest font-black uppercase bg-amber-400/10 border border-amber-400/30 px-2.5 py-1 rounded-xs">
+                  Financial Summaries & Aggregates
+                </span>
+                <h3 className="text-xl font-black uppercase italic text-white tracking-tight mt-2 flex items-center gap-2">
+                  <Coins className="text-amber-400" size={18} /> Weekly Fee Collections Matrix
+                </h3>
+                <p className="text-[10px] text-neutral-500 font-mono uppercase tracking-widest mt-1 font-bold">
+                  Class-by-Class school fees log for current week calendar
+                </p>
               </div>
-            )}
+
+              {/* Selector / Stepper */}
+              <div className="flex items-center gap-2 bg-neutral-950 p-1 border border-neutral-850">
+                <button
+                  type="button"
+                  onClick={() => handleShiftWeek('prev')}
+                  className="px-3 py-1.5 text-[10px] font-mono font-black uppercase tracking-wider text-neutral-450 hover:text-white hover:bg-neutral-900 transition-colors cursor-pointer"
+                  title="Hop back 1 week"
+                >
+                  &larr; Prev Week
+                </button>
+                <span className="px-4 py-1.5 bg-neutral-900 border border-neutral-800/80 text-[10px] font-black font-mono text-white tracking-wider uppercase">
+                  {new Date(weeklyCollectionsData.mondayStr).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} - {new Date(weeklyCollectionsData.sundayStr).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleShiftWeek('next')}
+                  className="px-3 py-1.5 text-[10px] font-mono font-black uppercase tracking-wider text-neutral-450 hover:text-white hover:bg-neutral-900 transition-colors cursor-pointer"
+                  title="Hop forward 1 week"
+                >
+                  Next Week &rarr;
+                </button>
+              </div>
+            </div>
+
+            {/* Quick KPI Cards row */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="bg-neutral-950 border-2 border-neutral-850 p-5 space-y-1.5">
+                <span className="text-[9px] text-neutral-500 font-mono uppercase tracking-widest font-extrabold block">
+                  Weekly Sum Collected
+                </span>
+                <div className="text-2xl font-black text-amber-400 font-mono">
+                  GHC {weeklyCollectionsData.grandTotal.toFixed(2)}
+                </div>
+                <p className="text-[9.5px] text-neutral-500 leading-tight">
+                  Total school fees aggregated across all classes this calendar week.
+                </p>
+              </div>
+
+              <div className="bg-neutral-950 border-2 border-neutral-850 p-5 space-y-1.5">
+                <span className="text-[9px] text-neutral-500 font-mono uppercase tracking-widest font-extrabold block">
+                  Peak Collection Day
+                </span>
+                <div className="text-2xl font-black text-white font-mono uppercase tracking-tight">
+                  {peakDayInfo.amount > 0 ? peakDayInfo.label : 'None'}
+                </div>
+                <p className="text-[9.5px] text-neutral-500 leading-tight">
+                  Highest intake was <strong className="text-neutral-350">GHC {peakDayInfo.amount.toFixed(2)}</strong> on {peakDayInfo.amount > 0 ? peakDayInfo.dateStr : 'N/A'}.
+                </p>
+              </div>
+
+              <div className="bg-neutral-950 border-2 border-neutral-850 p-5 space-y-1.5">
+                <span className="text-[9px] text-neutral-500 font-mono uppercase tracking-widest font-extrabold block">
+                  Top Performing Cohort
+                </span>
+                <div className="text-2xl font-black text-emerald-400 font-mono uppercase tracking-tight">
+                  {topClassInfo.amount > 0 ? `Class ${topClassInfo.className}` : 'None'}
+                </div>
+                <p className="text-[9.5px] text-neutral-500 leading-tight">
+                  Class collected a supreme total of <strong className="text-emerald-500">GHC {topClassInfo.amount.toFixed(2)}</strong> this week.
+                </p>
+              </div>
+            </div>
+
+            {/* Collections Trend Line / Bar Chart Row */}
+            <div className="bg-neutral-950 border-2 border-neutral-850 p-6 space-y-4">
+              <div>
+                <h4 className="text-xs font-black text-white uppercase tracking-wider font-mono">Daily Inflow Velocity</h4>
+                <p className="text-[9px] text-neutral-500 font-mono uppercase tracking-widest mt-0.5">Visualizing fee revenue flow across days</p>
+              </div>
+
+              <div className="h-44 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={weeklyChartData} margin={{ top: 10, right: 10, left: 0, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1c1c1c" vertical={false} />
+                    <XAxis 
+                      dataKey="name" 
+                      stroke="#4b5563" 
+                      fontSize={9} 
+                      tickLine={false} 
+                      axisLine={false}
+                    />
+                    <YAxis 
+                      stroke="#4b5563" 
+                      fontSize={9} 
+                      tickLine={false} 
+                      axisLine={false}
+                      tickFormatter={(v) => `GHC ${v}`}
+                    />
+                    <RechartsTooltip content={<CustomTooltip />} cursor={{ stroke: '#2e2e2e', strokeWidth: 1 }} />
+                    <Line 
+                      type="monotone" 
+                      dataKey="revenue" 
+                      stroke="#fbbf24" 
+                      strokeWidth={3} 
+                      dot={{ r: 4, fill: '#fbbf24', strokeWidth: 0 }}
+                      activeDot={{ r: 6, fill: '#ffffff', strokeWidth: 0 }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            {/* The Main Excel-Style Aggregate Grid Table */}
+            <div className="bg-neutral-950 border-2 border-neutral-850 p-2 overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="border-b-2 border-neutral-850 text-[10px] font-black text-neutral-400 uppercase tracking-widest font-mono bg-neutral-900/50">
+                      <th className="py-3 px-4">Class Level</th>
+                      {weeklyCollectionsData.weekdays.map((day) => {
+                        const isToday = day.dateStr === dateFilter;
+                        return (
+                          <th 
+                            key={day.dateStr} 
+                            className={`py-3 px-3 text-center transition-colors ${
+                              isToday ? 'text-amber-400 bg-amber-450/10' : ''
+                            }`}
+                          >
+                            <span className="block text-[9.5px] font-black leading-none">{day.label.substring(0, 3)}</span>
+                            <span className="block text-[8px] text-neutral-500 font-mono mt-1 font-bold">{new Date(day.dateStr).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>
+                          </th>
+                        );
+                      })}
+                      <th className="py-3 px-4 text-right bg-neutral-900 font-extrabold text-white">Class Total</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-900">
+                    {weeklyCollectionsData.rows.map((row) => {
+                      return (
+                        <tr 
+                          key={row.className} 
+                          className={`transition-all border-b border-neutral-900 ${
+                            row.isTrendingBelow 
+                              ? 'bg-rose-950/5 hover:bg-rose-950/10 border-l-4 border-l-rose-500/60' 
+                              : 'bg-neutral-950/5 hover:bg-neutral-900/40 border-l-4 border-l-transparent'
+                          }`}
+                        >
+                          <td className="py-3 px-4 font-mono bg-neutral-950/50">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                              <span className="font-black text-white text-sm">
+                                Class {row.className}
+                              </span>
+                              {row.isTrendingBelow ? (
+                                <span className="inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-widest bg-rose-500/10 border border-rose-500/30 text-rose-400 px-1.5 py-0.5 rounded-xs">
+                                  <TrendingDown size={10} className="text-rose-400" />
+                                  Below Avg ({Math.abs(row.percentDifference).toFixed(0)}%)
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-widest bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 px-1.5 py-0.5 rounded-xs">
+                                  <TrendingUp size={10} className="text-emerald-400" />
+                                  Above Avg (+{row.percentDifference.toFixed(0)}%)
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[9px] text-neutral-500 font-mono mt-0.5 uppercase tracking-wider">
+                              Weekly Avg: <span className="text-neutral-400 font-bold">GHC {row.historicalAvg.toFixed(2)}</span>
+                            </div>
+                          </td>
+                          {weeklyCollectionsData.weekdays.map((day) => {
+                            const value = row.dailyCollected[day.dateStr] || 0;
+                            const isToday = day.dateStr === dateFilter;
+                            return (
+                              <td 
+                                key={day.dateStr} 
+                                className={`py-3 px-3 text-center font-mono font-bold transition-all ${
+                                  isToday ? 'bg-amber-450/5' : ''
+                                } ${
+                                  value > 0 ? 'text-neutral-200' : 'text-neutral-600'
+                                }`}
+                              >
+                                {value > 0 ? `GHC ${value.toFixed(2)}` : '-'}
+                              </td>
+                            );
+                          })}
+                          <td className={`py-3 px-4 text-right font-black font-mono bg-neutral-900/50 ${
+                            row.isTrendingBelow ? 'text-rose-450' : 'text-amber-450'
+                          }`}>
+                            GHC {row.classTotal.toFixed(2)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {/* The Footer column-totals Row */}
+                    <tr className="border-t-2 border-neutral-800 bg-neutral-900 font-mono text-[11px] font-extrabold text-white">
+                      <td className="py-4.5 px-4 uppercase font-black tracking-wider">Total collections</td>
+                      {weeklyCollectionsData.weekdays.map((day) => {
+                        const totalValue = weeklyCollectionsData.dayTotals[day.dateStr] || 0;
+                        const isToday = day.dateStr === dateFilter;
+                        return (
+                          <td 
+                            key={day.dateStr} 
+                            className={`py-4.5 px-3 text-center font-black ${
+                              isToday ? 'text-amber-450 bg-amber-400/10' : ''
+                            }`}
+                          >
+                            GHC {totalValue.toFixed(2)}
+                          </td>
+                        );
+                      })}
+                      <td className="py-4.5 px-4 text-right font-black text-amber-450 text-xs bg-amber-400/15 border border-amber-400/30">
+                        GHC {weeklyCollectionsData.grandTotal.toFixed(2)}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            
+            {/* Context Notice info */}
+            <div className="bg-neutral-950 p-4 border border-neutral-850 flex items-start gap-3">
+              <Info className="text-amber-400 shrink-0 mt-0.5" size={14} />
+              <div className="space-y-1">
+                <span className="text-[10px] font-black uppercase text-amber-400 tracking-wider block font-mono">Ledger Synchronization Tip</span>
+                <p className="text-[10px] text-neutral-400 leading-normal font-medium">
+                  This weekly matrix sums only processed & approved school fee payments (excluding absent cohorts). Discrepancies may appear if Gatekeepers have pending local check-ins offline. Ensure all ledger changes on the <strong className="text-white">"Sleek Bento Grid"</strong> are pushed before reporting.
+                </p>
+              </div>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
-    </div>
+    </motion.div>
   );
 };

@@ -27,7 +27,7 @@ interface AppContextType {
   login: (email: string, mfaCode?: string, password?: string) => { success: boolean; requiresMfa?: boolean; requiresPassword?: boolean; error?: string };
   logout: () => void;
   toggleMfaForUser: (userId: string) => void;
-  addStudent: (name: string, className: StudentClass, guardianPhone?: string, photoUrl?: string, discount?: number) => void;
+  addStudent: (name: string, className: StudentClass, guardianPhone?: string, photoUrl?: string, discount?: number, gender?: 'Male' | 'Female') => void;
   updateStudent: (student: Student) => void;
   deleteStudent: (studentId: string) => void;
   purgeDeactivatedStudents: () => void;
@@ -38,6 +38,7 @@ interface AppContextType {
   bulkRecordPayments: (studentIds: string[], verified?: boolean) => void;
   verifyPayment: (paymentId: string) => void;
   deletePayment: (paymentId: string) => void;
+  adjustPayment: (paymentId: string, updatedAmount: number, updatedIsAbsent: boolean, notes: string, reason: string) => void;
   registerStaff: (name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled?: boolean, passwordEnabled?: boolean, password?: string, assignedClasses?: StudentClass[]) => { success: boolean; error?: string };
   updateStaff: (userId: string, name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled?: boolean, passwordEnabled?: boolean, password?: string, assignedClasses?: StudentClass[]) => { success: boolean; error?: string };
   deleteStaff: (userId: string) => { success: boolean; error?: string };
@@ -68,6 +69,11 @@ interface AppContextType {
   deleteBackup: (backupId: string) => void;
   clearAllBackups: () => void;
   nextBackupTimeLeft: number; // in seconds
+  audioMuted: boolean;
+  setAudioMuted: (muted: boolean) => void;
+  playFeedbackSound: (type: 'success' | 'error' | 'warning') => void;
+  theme: 'dark' | 'daylight';
+  setTheme: (theme: 'dark' | 'daylight') => void;
 }
 
 export interface DailyStats {
@@ -109,8 +115,18 @@ export interface PendingAlert {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Use current date as '2026-05-30' by default to align with seeds
-  const [currentDate, setCurrentDate] = useState<string>('2026-05-29'); // Defaults to last weekday (Friday)
+  // Defaults dynamically to today's real date, ensuring the current date is the active fee collection day
+  const [currentDate, setCurrentDate] = useState<string>(() => {
+    const d = new Date();
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const todayStr = `${yyyy}-${mm}-${dd}`;
+    if (yyyy === 2026) {
+      return todayStr;
+    }
+    return '2026-06-08'; // Default fallback to current local date
+  });
   const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
   const [users, setUsers] = useState<UserAccount[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
@@ -132,6 +148,94 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const setStorageMode = (mode: 'cloud' | 'local') => {
     localStorage.setItem('s_storage_preference', mode);
     setStorageModeState(mode);
+  };
+
+  const [audioMuted, setAudioMutedState] = useState<boolean>(() => {
+    return localStorage.getItem('s_audio_muted') === 'true';
+  });
+
+  const setAudioMuted = (muted: boolean) => {
+    localStorage.setItem('s_audio_muted', String(muted));
+    setAudioMutedState(muted);
+  };
+
+  const [theme, setThemeState] = useState<'dark' | 'daylight'>(() => {
+    const saved = localStorage.getItem('s_theme');
+    return (saved === 'dark' || saved === 'daylight') ? saved : 'dark';
+  });
+
+  const setTheme = (t: 'dark' | 'daylight') => {
+    localStorage.setItem('s_theme', t);
+    setThemeState(t);
+  };
+
+  const playFeedbackSound = (type: 'success' | 'error' | 'warning') => {
+    if (audioMuted) return;
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      
+      if (type === 'success') {
+        const nowTime = ctx.currentTime;
+        const osc1 = ctx.createOscillator();
+        const osc2 = ctx.createOscillator();
+        const gainNode = ctx.createGain();
+
+        osc1.connect(gainNode);
+        osc2.connect(gainNode);
+        gainNode.connect(ctx.destination);
+
+        osc1.type = 'sine';
+        osc2.type = 'sine';
+
+        osc1.frequency.setValueAtTime(523.25, nowTime); 
+        osc2.frequency.setValueAtTime(659.25, nowTime + 0.08); 
+
+        gainNode.gain.setValueAtTime(0.06, nowTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.005, nowTime + 0.25);
+
+        osc1.start(nowTime);
+        osc1.stop(nowTime + 0.15);
+
+        osc2.start(nowTime + 0.08);
+        osc2.stop(nowTime + 0.25);
+      } else if (type === 'error') {
+        const nowTime = ctx.currentTime;
+        const osc = ctx.createOscillator();
+        const gainNode = ctx.createGain();
+
+        osc.connect(gainNode);
+        gainNode.connect(ctx.destination);
+
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(160, nowTime);
+        osc.frequency.linearRampToValueAtTime(90, nowTime + 0.25);
+
+        gainNode.gain.setValueAtTime(0.08, nowTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.005, nowTime + 0.3);
+
+        osc.start(nowTime);
+        osc.stop(nowTime + 0.3);
+      } else if (type === 'warning') {
+        const nowTime = ctx.currentTime;
+        const osc = ctx.createOscillator();
+        const gainNode = ctx.createGain();
+
+        osc.connect(gainNode);
+        gainNode.connect(ctx.destination);
+
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(330, nowTime);
+        gainNode.gain.setValueAtTime(0.06, nowTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.005, nowTime + 0.15);
+
+        osc.start(nowTime);
+        osc.stop(nowTime + 0.15);
+      }
+    } catch (e) {
+      // Audio Context locked by browser policies before gesture
+    }
   };
 
   const [pendingLocalEdits, setPendingLocalEdits] = useState<PendingEdit[]>(() => {
@@ -822,7 +926,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
-  const addStudent = (name: string, className: StudentClass, guardianPhone?: string, photoUrl?: string, discount = 0) => {
+  const addStudent = (name: string, className: StudentClass, guardianPhone?: string, photoUrl?: string, discount = 0, gender?: 'Male' | 'Female') => {
+    const isDuplicate = students.some(s => 
+      s.name.trim().toLowerCase() === name.trim().toLowerCase() && 
+      s.class === className
+    );
+    if (isDuplicate) {
+      playFeedbackSound('error');
+      return;
+    }
+
     const category = getClassCategory(className);
     const prefix = className.startsWith('KG') ? className : className.startsWith('Nursery') ? 'NS' : className;
     const year = new Date().getFullYear();
@@ -838,7 +951,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       active: true,
       guardianPhone: guardianPhone || '0500000000',
       photoUrl,
-      discount: discount
+      discount: discount,
+      gender: gender
     };
 
     const nextStudents = [...students, newStudent];
@@ -911,47 +1025,202 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const student = students.find(s => s.id === studentId);
     if (!student) return;
 
-    const existingIndex = payments.findIndex(p => p.studentId === studentId && p.date === currentDate);
-    let nextPayments = [...payments];
-    let recordToSave: PaymentRecord;
-
     const discountAmount = student.discount || 0;
     const finalAmount = customAmount !== undefined ? customAmount : Math.max(0, 5.00 - discountAmount);
 
-    if (existingIndex > -1) {
-      recordToSave = {
-        ...nextPayments[existingIndex],
-        amount: finalAmount,
-        isAbsent: false,
-        verified,
-        notes: customAmount !== undefined ? `Custom amount GHC ${finalAmount.toFixed(2)} processed` : (discountAmount > 0 ? `Applied dynamic discount of GHC ${discountAmount.toFixed(2)}` : undefined),
-        timestamp: new Date().toISOString()
-      };
-      nextPayments[existingIndex] = recordToSave;
-    } else {
-      recordToSave = {
-        id: `p_${studentId}_${currentDate}`,
-        studentId: student.id,
-        studentName: student.name,
-        class: student.class,
-        category: student.category,
-        amount: finalAmount,
-        date: currentDate,
-        timestamp: new Date().toISOString(),
-        collectedBy: currentUser ? currentUser.name : 'System Host',
-        verified,
-        isAbsent: false,
-        notes: customAmount !== undefined ? `Custom amount GHC ${finalAmount.toFixed(2)} processed` : (discountAmount > 0 ? `Applied dynamic discount of GHC ${discountAmount.toFixed(2)}` : undefined)
-      };
-      nextPayments.push(recordToSave);
+    const dailyRate = Math.max(0.01, 5.00 - discountAmount);
+
+    // Calculate billing, paid totals and outstanding debt precisely
+    const studentPayments = payments.filter(p => p.studentId === studentId);
+    
+    let billableDays: string[] = [];
+    if (activeTerm && activeTerm.schoolDays) {
+      const holidays = activeTerm.publicHolidays || [];
+      const pastSchoolDays = activeTerm.schoolDays.filter(d => d < currentDate && !holidays.includes(d));
+      billableDays = pastSchoolDays.filter(dStr => {
+        return !studentPayments.some(p => p.date === dStr && p.isAbsent);
+      });
     }
 
-    setPayments(nextPayments);
-    saveState(users, students, nextPayments);
-    if (db.isActive() && storageMode === 'cloud') {
-      db.savePayment(recordToSave);
+    const totalRequired = billableDays.length * dailyRate;
+    const totalPaid = studentPayments
+      .filter(p => !p.isAbsent)
+      .reduce((sum, p) => sum + p.amount, 0);
+
+    const totalDebt = Math.max(0, totalRequired - totalPaid);
+
+    // Filter which billable past school days are still unpaid
+    let runningPaid = totalPaid;
+    const unpaidDays: string[] = [];
+    billableDays.forEach(dStr => {
+      if (runningPaid >= dailyRate) {
+        runningPaid -= dailyRate;
+      } else {
+        runningPaid = 0;
+        unpaidDays.push(dStr);
+      }
+    });
+
+    // Check if there is past debt and we are recording a positive amount
+    if (totalDebt > 0 && finalAmount > 0) {
+      const amountToSettle = Math.min(finalAmount, totalDebt);
+      const remainder = finalAmount - amountToSettle;
+
+      let nextPayments = [...payments];
+      const recordsToSync: PaymentRecord[] = [];
+
+      if (amountToSettle > 0) {
+        const daysToCover = Math.floor(amountToSettle / dailyRate);
+        const datesToRecord = unpaidDays.slice(0, daysToCover);
+
+        const todayDebtPaymentId = `p_${studentId}_${currentDate}_debt`;
+        const existingTodayDebtIdx = nextPayments.findIndex(p => p.id === todayDebtPaymentId);
+
+        const formattedDatesList = datesToRecord.map(d => {
+          const parts = d.split('-');
+          return `${parts[2]}/${parts[1]}/${parts[0]}`;
+        }).join(', ');
+
+        const todayDebtRecord: PaymentRecord = {
+          id: todayDebtPaymentId,
+          studentId: student.id,
+          studentName: student.name,
+          class: student.class,
+          category: student.category,
+          amount: amountToSettle,
+          date: currentDate,
+          timestamp: new Date().toISOString(),
+          collectedBy: currentUser ? currentUser.name : 'System Host',
+          verified,
+          notes: datesToRecord.length > 0
+            ? `Settled Debt (Cleared GHC ${amountToSettle.toFixed(2)} arrears covering ${datesToRecord.length} days: ${formattedDatesList})`
+            : `Partial Debt Payment GHC ${amountToSettle.toFixed(2)} logged`,
+          clearedDates: datesToRecord.length > 0 ? datesToRecord : undefined
+        };
+
+        if (existingTodayDebtIdx > -1) {
+          nextPayments[existingTodayDebtIdx] = todayDebtRecord;
+        } else {
+          nextPayments.push(todayDebtRecord);
+        }
+        recordsToSync.push(todayDebtRecord);
+
+        // Create zero-amount marker records for each cleared past day to settle arrears
+        datesToRecord.forEach((dayStr) => {
+          const existingIdx = nextPayments.findIndex(p => p.studentId === studentId && p.date === dayStr);
+          
+          const record: PaymentRecord = {
+            id: existingIdx > -1 ? nextPayments[existingIdx].id : `p_${studentId}_${dayStr}`,
+            studentId: student.id,
+            studentName: student.name,
+            class: student.class,
+            category: student.category,
+            amount: 0,
+            date: dayStr,
+            timestamp: new Date().toISOString(),
+            collectedBy: currentUser ? currentUser.name : 'System Host',
+            verified,
+            notes: `Arrears Cleared (Settle Debt of GHC ${amountToSettle.toFixed(2)} processed on ${currentDate})`
+          };
+
+          if (existingIdx > -1) {
+            nextPayments[existingIdx] = record;
+          } else {
+            nextPayments.push(record);
+          }
+          recordsToSync.push(record);
+        });
+      }
+
+      // 3. Handle remainder for today's standard payment (if any)
+      if (remainder > 0) {
+        const existingIndex = nextPayments.findIndex(p => p.studentId === studentId && p.date === currentDate && !p.id.endsWith('_debt'));
+        let recordToSave: PaymentRecord;
+
+        if (existingIndex > -1) {
+          recordToSave = {
+            ...nextPayments[existingIndex],
+            amount: remainder,
+            isAbsent: false,
+            verified,
+            notes: `Remainder gate fee processed after clearing old arrears`,
+            timestamp: new Date().toISOString()
+          };
+          nextPayments[existingIndex] = recordToSave;
+        } else {
+          recordToSave = {
+            id: `p_${studentId}_${currentDate}`,
+            studentId: student.id,
+            studentName: student.name,
+            class: student.class,
+            category: student.category,
+            amount: remainder,
+            date: currentDate,
+            timestamp: new Date().toISOString(),
+            collectedBy: currentUser ? currentUser.name : 'System Host',
+            verified,
+            isAbsent: false,
+            notes: `Remainder gate fee processed after clearing old arrears`
+          };
+          nextPayments.push(recordToSave);
+        }
+        recordsToSync.push(recordToSave);
+      }
+
+      setPayments(nextPayments);
+      saveState(users, students, nextPayments);
+
+      if (db.isActive() && storageMode === 'cloud') {
+        recordsToSync.forEach(rec => {
+          db.savePayment(rec);
+        });
+      } else if (recordsToSync.length > 0) {
+        recordLocallyPendingEdit('payment', 'create', `Logged GHC ${finalAmount.toFixed(2)} payment covering arrears and/or standard fee for pupil: "${student.name}"`);
+      }
+      playFeedbackSound('success');
+
     } else {
-      recordLocallyPendingEdit('payment', 'create', `Logged GHC ${finalAmount.toFixed(2)} payment for pupil: "${student?.name || 'Pupil'}"${discountAmount > 0 && customAmount === undefined ? ` (GHC ${discountAmount.toFixed(2)} Discount applied)` : ''}`);
+      // Standard payment with NO debt
+      const existingIndex = payments.findIndex(p => p.studentId === studentId && p.date === currentDate && !p.id.endsWith('_debt'));
+      let nextPayments = [...payments];
+      let recordToSave: PaymentRecord;
+
+      if (existingIndex > -1) {
+        recordToSave = {
+          ...nextPayments[existingIndex],
+          amount: finalAmount,
+          isAbsent: false,
+          verified,
+          notes: customAmount !== undefined ? `Custom amount GHC ${finalAmount.toFixed(2)} processed` : (discountAmount > 0 ? `Applied dynamic discount of GHC ${discountAmount.toFixed(2)}` : undefined),
+          timestamp: new Date().toISOString()
+        };
+        nextPayments[existingIndex] = recordToSave;
+      } else {
+        recordToSave = {
+          id: `p_${studentId}_${currentDate}`,
+          studentId: student.id,
+          studentName: student.name,
+          class: student.class,
+          category: student.category,
+          amount: finalAmount,
+          date: currentDate,
+          timestamp: new Date().toISOString(),
+          collectedBy: currentUser ? currentUser.name : 'System Host',
+          verified,
+          isAbsent: false,
+          notes: customAmount !== undefined ? `Custom amount GHC ${finalAmount.toFixed(2)} processed` : (discountAmount > 0 ? `Applied dynamic discount of GHC ${discountAmount.toFixed(2)}` : undefined)
+        };
+        nextPayments.push(recordToSave);
+      }
+
+      setPayments(nextPayments);
+      saveState(users, students, nextPayments);
+      if (db.isActive() && storageMode === 'cloud') {
+        db.savePayment(recordToSave);
+      } else {
+        recordLocallyPendingEdit('payment', 'create', `Logged GHC ${finalAmount.toFixed(2)} payment for pupil: "${student.name}"${discountAmount > 0 && customAmount === undefined ? ` (GHC ${discountAmount.toFixed(2)} Discount applied)` : ''}`);
+      }
+      playFeedbackSound('success');
     }
   };
 
@@ -959,7 +1228,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const student = students.find(s => s.id === studentId);
     if (!student) return;
 
-    const existingIndex = payments.findIndex(p => p.studentId === studentId && p.date === currentDate);
+    const existingIndex = payments.findIndex(p => p.studentId === studentId && p.date === currentDate && !p.id.endsWith('_debt'));
     let nextPayments = [...payments];
     let recordToSave: PaymentRecord;
 
@@ -1003,8 +1272,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const student = students.find(s => s.id === studentId);
     if (!student) return;
 
-    // Standard school day rate is GHC 5.00
-    const daysToCover = Math.floor(amount / 5);
+    // Standard school day rate is GHC 5.00, minus any student custom discount
+    const dailyRate = Math.max(0.01, 5.00 - (student.discount || 0));
+    const daysToCover = Math.floor(amount / dailyRate);
     if (daysToCover <= 0) return;
 
     // Use activeTerm schoolDays
@@ -1140,101 +1410,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const recordBackwardPayment = (studentId: string, amount: number, verified = true) => {
-    const student = students.find(s => s.id === studentId);
-    if (!student) return;
-
-    // Standard school day rate is GHC 5.00
-    const daysToCover = Math.floor(amount / 5);
-    if (daysToCover <= 0) return;
-
-    // Use activeTerm schoolDays
-    if (!activeTerm || !activeTerm.schoolDays || activeTerm.schoolDays.length === 0) {
-      console.warn("No active term with generated school days found for backward calculation.");
-      return;
-    }
-
-    const schoolDays = activeTerm.schoolDays;
-    
-    // Find all past school days strictly before currentDate
-    const pastSchoolDays = schoolDays.filter(dStr => dStr < currentDate);
-
-    const datesToRecord: string[] = [];
-    
-    // Scan ascending (oldest-to-newest unpaid) to clear oldest debt first!
-    for (const dStr of pastSchoolDays) {
-      if (datesToRecord.length >= daysToCover) break;
-      const isDayPaid = payments.some(p => p.studentId === studentId && p.date === dStr);
-      if (!isDayPaid) {
-        datesToRecord.push(dStr);
-      }
-    }
-
-    if (datesToRecord.length === 0) return;
-
-    let nextPayments = [...payments];
-    const recordsToCloudSync: PaymentRecord[] = [];
-
-    // 1. Create a single payment record for currentDate with the full settled amount
-    const todayDebtPaymentId = `p_${studentId}_${currentDate}_debt`;
-    const existingTodayDebtIdx = nextPayments.findIndex(p => p.id === todayDebtPaymentId);
-
-    const todayDebtRecord: PaymentRecord = {
-      id: todayDebtPaymentId,
-      studentId: student.id,
-      studentName: student.name,
-      class: student.class,
-      category: student.category,
-      amount: amount, // Log the actual total debt clearance amount here on the payment day!
-      date: currentDate,
-      timestamp: new Date().toISOString(),
-      collectedBy: currentUser ? currentUser.name : 'System Host',
-      verified,
-      notes: `Settled Debt (Cleared GHC ${amount.toFixed(2)} arrears covering ${datesToRecord.length} days)`
-    };
-
-    if (existingTodayDebtIdx > -1) {
-      nextPayments[existingTodayDebtIdx] = todayDebtRecord;
-    } else {
-      nextPayments.push(todayDebtRecord);
-    }
-    recordsToCloudSync.push(todayDebtRecord);
-
-    // 2. Create zero-amount marker records for each cleared past day to settle arrears without spreading the money
-    datesToRecord.forEach((dayStr) => {
-      const existingIdx = nextPayments.findIndex(p => p.studentId === studentId && p.date === dayStr);
-      
-      const record: PaymentRecord = {
-        id: existingIdx > -1 ? nextPayments[existingIdx].id : `p_${studentId}_${dayStr}`,
-        studentId: student.id,
-        studentName: student.name,
-        class: student.class,
-        category: student.category,
-        amount: 0, // Put GHC 0 on those individual past days being settled
-        date: dayStr,
-        timestamp: new Date().toISOString(),
-        collectedBy: currentUser ? currentUser.name : 'System Host',
-        verified,
-        notes: `Arrears Cleared (Settle Debt of GHC ${amount.toFixed(2)} processed on ${currentDate})`
-      };
-
-      if (existingIdx > -1) {
-        nextPayments[existingIdx] = record;
-      } else {
-        nextPayments.push(record);
-      }
-      recordsToCloudSync.push(record);
-    });
-
-    setPayments(nextPayments);
-    saveState(users, students, nextPayments);
-
-    if (db.isActive() && storageMode === 'cloud') {
-      recordsToCloudSync.forEach(rec => {
-        db.savePayment(rec);
-      });
-    } else if (recordsToCloudSync.length > 0) {
-      recordLocallyPendingEdit('payment', 'create', `Retroactive arrears settlement of GHC ${amount.toFixed(2)} (${daysToCover} days) for pupil: "${student?.name || 'Pupil'}"`);
-    }
+    // Forward directly to recordPayment which automatically acts as the debt clearance and remainder-mapping pipeline
+    recordPayment(studentId, verified, amount);
   };
 
   const bulkRecordPayments = (studentIds: string[], verified = true) => {
@@ -1312,6 +1489,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     if (storageMode !== 'cloud') {
       recordLocallyPendingEdit('payment', 'delete', `Voided payment transaction entry for pupil: "${targetP?.studentName || 'Pupil'}"`);
+    }
+  };
+
+  const adjustPayment = (paymentId: string, updatedAmount: number, updatedIsAbsent: boolean, notes: string, reason: string) => {
+    let recordToSync: PaymentRecord | null = null;
+    const nextPayments = payments.map(p => {
+      if (p.id === paymentId) {
+        // Create history entry
+        const historyEntry = {
+          modifiedBy: currentUser?.name || currentUser?.email || 'Authorized Auditor',
+          modifiedAt: new Date().toISOString(),
+          oldAmount: p.amount,
+          newAmount: updatedAmount,
+          oldIsAbsent: !!p.isAbsent,
+          newIsAbsent: updatedIsAbsent,
+          reason: reason
+        };
+
+        const existingHistory = p.history || [];
+        
+        recordToSync = {
+          ...p,
+          amount: updatedAmount,
+          isAbsent: updatedIsAbsent,
+          notes: notes,
+          history: [...existingHistory, historyEntry]
+        };
+        return recordToSync;
+      }
+      return p;
+    });
+
+    setPayments(nextPayments);
+    saveState(users, students, nextPayments);
+    
+    if (db.isActive() && storageMode === 'cloud' && recordToSync) {
+      db.savePayment(recordToSync);
+    } else if (recordToSync) {
+      recordLocallyPendingEdit('payment', 'update', `Adjusted past payment for pupil: "${(recordToSync as PaymentRecord).studentName}"`);
     }
   };
 
@@ -1755,6 +1971,7 @@ School Administration Financial Audit System (MFA Secure)
       bulkRecordPayments,
       verifyPayment,
       deletePayment,
+      adjustPayment,
       registerStaff,
       updateStaff,
       deleteStaff,
@@ -1784,7 +2001,12 @@ School Administration Financial Audit System (MFA Secure)
       restoreBackup,
       deleteBackup,
       clearAllBackups,
-      nextBackupTimeLeft
+      nextBackupTimeLeft,
+      audioMuted,
+      setAudioMuted,
+      playFeedbackSound,
+      theme,
+      setTheme
     }}>
       {children}
     </AppContext.Provider>

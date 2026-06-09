@@ -9,7 +9,8 @@ import { StudentClass, SchoolCategory, PaymentRecord } from '../types';
 import { 
   FileSpreadsheet, Mail, Search, Calendar, ChevronRight, CheckCircle2, 
   HelpCircle, Settings, CheckSquare, PlusSquare, ArrowUpDown, X, Printer,
-  UserCheck, CalendarRange, AlertTriangle, TrendingUp, UserMinus, Eye
+  UserCheck, CalendarRange, AlertTriangle, TrendingUp, UserMinus, Eye,
+  ZoomIn, ZoomOut, FileText, Check
 } from 'lucide-react';
 
 export const ReportPanel: React.FC = () => {
@@ -44,6 +45,12 @@ export const ReportPanel: React.FC = () => {
   const [showExportModal, setShowExportModal] = useState(false);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [showPrintFriendlyModal, setShowPrintFriendlyModal] = useState(false);
+  const [showAppPrintPreviewModal, setShowAppPrintPreviewModal] = useState(false);
+  const [printPreviewZoom, setPrintPreviewZoom] = useState(90);
+  const [paperSize, setPaperSize] = useState<'a4' | 'letter' | 'legal'>('a4');
+  const [printMargins, setPrintMargins] = useState<'normal' | 'compact' | 'wide'>('normal');
+  const [selectedWatermark, setSelectedWatermark] = useState<'NONE' | 'DRAFT' | 'CONFIDENTIAL' | 'SAAKO AUDITED'>('SAAKO AUDITED');
+  const [showCrest, setShowCrest] = useState(true);
   const [printFriendlySignatory, setPrintFriendlySignatory] = useState('Yakubu Hakeem (Headmaster)');
   const [printFriendlyMemo, setPrintFriendlyMemo] = useState('This is an official audited transcript of Saako Holy Child Academy daily ledger. Please verify all entries and signatures.');
   const [previewPage, setPreviewPage] = useState(1);
@@ -53,6 +60,7 @@ export const ReportPanel: React.FC = () => {
   const [printDateMode, setPrintDateMode] = useState<'current' | 'custom'>('current');
   const [printStartDate, setPrintStartDate] = useState('');
   const [printEndDate, setPrintEndDate] = useState('');
+  const [printSearchQuery, setPrintSearchQuery] = useState('');
 
   // Group class categories
   const classes: StudentClass[] = [
@@ -118,8 +126,9 @@ export const ReportPanel: React.FC = () => {
     let result = [...payments];
 
     // Search query
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
+    const activeSearch = printSearchQuery.trim() ? printSearchQuery : searchQuery;
+    if (activeSearch.trim()) {
+      const query = activeSearch.toLowerCase();
       result = result.filter(p => 
         p.studentName.toLowerCase().includes(query) ||
         p.id.toLowerCase().includes(query)
@@ -151,7 +160,7 @@ export const ReportPanel: React.FC = () => {
     }
 
     return result;
-  }, [payments, searchQuery, printDateMode, printStartDate, printEndDate, dateFilter, classFilter, categoryFilter]);
+  }, [payments, searchQuery, printSearchQuery, printDateMode, printStartDate, printEndDate, dateFilter, classFilter, categoryFilter]);
 
   // Group filtered payments by student for bulk printing
   const paymentsByStudent = useMemo(() => {
@@ -363,6 +372,316 @@ export const ReportPanel: React.FC = () => {
     }
   };
 
+  const handlePrintReport = () => {
+    // Generate a dedicated window for printing audit records
+    const printWindow = window.open('', '_blank', 'width=1100,height=850');
+    if (!printWindow) {
+      alert("Popup blocker active! Please allow popups to open the dedicated print window.");
+      return;
+    }
+
+    const todayDateStr = new Date().toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
+    const tableRowsHtml = filteredPayments.length === 0
+      ? `<tr>
+          <td colspan="8" style="text-align: center; padding: 32px; color: #737373; font-style: italic;">
+            No ledger entries listed in active session.
+          </td>
+         </tr>`
+      : filteredPayments.map((p, idx) => `
+          <tr style="border-bottom: 1px solid #e5e7eb;">
+            <td style="padding: 8px 6px; border: 1px solid #d1d5db; text-align: center; font-family: monospace;">${idx + 1}</td>
+            <td style="padding: 8px 6px; border: 1px solid #d1d5db; font-family: monospace; color: #4b5563;">${p.date}</td>
+            <td style="padding: 8px 6px; border: 1px solid #d1d5db; font-weight: bold; text-transform: uppercase; color: #111827;">
+              <div>${p.studentName}</div>
+              ${p.notes ? `<div style="font-size: 8px; font-family: monospace; font-weight: 500; color: #6b7280; text-transform: none; margin-top: 3px;">(* ${p.notes})</div>` : ''}
+            </td>
+            <td style="padding: 8px 6px; border: 1px solid #d1d5db; text-align: center; font-family: monospace; font-weight: 600; color: #1f2937;">${p.class}</td>
+            <td style="padding: 8px 6px; border: 1px solid #d1d5db; text-transform: uppercase; font-family: monospace; color: #374151;">${p.category}</td>
+            <td style="padding: 8px 6px; border: 1px solid #d1d5db; text-align: right; font-family: monospace; font-weight: bold;">GHC ${p.amount.toFixed(2)}</td>
+            <td style="padding: 8px 6px; border: 1px solid #d1d5db; font-family: monospace; color: #4b5563;">${p.id.toUpperCase().substring(0, 10)}...</td>
+            <td style="padding: 8px 6px; border: 1px solid #d1d5db; text-align: center; font-family: monospace; font-size: 9px; font-weight: bold; color: ${p.verified ? '#047857' : '#d97706'}">
+              ${p.verified ? 'APPROVED' : 'PENDING'}
+            </td>
+          </tr>
+        `).join('');
+
+    const watermarkHtml = selectedWatermark !== 'NONE'
+      ? `<div style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; pointer-events: none; user-select: none; z-index: 0;">
+          <div style="font-size: 54px; font-weight: 900; letter-spacing: 0.1em; color: rgba(229, 231, 235, 0.4); text-transform: uppercase; font-family: monospace; border: 8px solid rgba(229, 231, 235, 0.4); padding: 8px 24px; border-radius: 12px; transform: rotate(-30deg); opacity: 0.35;">
+            ${selectedWatermark}
+          </div>
+         </div>`
+      : '';
+
+    const crestHtml = showCrest
+      ? `<div style="border-bottom: 4px solid #111827; padding-bottom: 16px; display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px;">
+          <div style="line-height: 1.2;">
+            <span style="font-size: 9px; font-weight: bold; color: #4b5563; font-family: monospace; letter-spacing: 0.1em; text-transform: uppercase; display: block;">
+              OFFICIAL ADMINISTRATIVE AUDIT RECORD
+            </span>
+            <h2 style="font-size: 24px; font-weight: 900; text-transform: uppercase; margin: 4px 0 0 0; color: #000; letter-spacing: -0.025em;">
+              SAAKO HOLY CHILD ACADEMY
+            </h2>
+            <p style="font-size: 10px; color: #4b5563; font-weight: bold; text-transform: uppercase; font-family: monospace; margin: 4px 0 0 0; letter-spacing: 0.05em;">
+              Holiness is our Key, P. O. Box ls15, Sawla-Savannah. Tel: +233545029200 / +2330507274133
+            </p>
+          </div>
+          <div style="text-align: right; font-family: monospace;">
+            <span style="font-size: 10px; font-weight: 900; text-transform: uppercase; padding: 4px 10px; background-color: #e5e7eb; border: 1px solid #000; display: inline-block;">
+              LEDGER STATEMENT
+            </span>
+            <div style="font-size: 8px; color: #6b7280; font-weight: bold; margin-top: 4px;">
+              RUN DATE: ${todayDateStr}
+            </div>
+          </div>
+         </div>`
+      : '';
+
+    const commentHtml = printFriendlyMemo
+      ? `<div style="background-color: #f9fafb; padding: 14px; border: 1px solid #d1d5db; font-size: 10px; line-height: 1.5; color: #4b5563; font-style: italic; margin-top: 24px;">
+          <span style="font-weight: bold; color: #111827; text-transform: uppercase; font-style: normal; display: block; margin-bottom: 4px; font-size: 8px; letter-spacing: 0.05em;">
+            AUDIT STATION COMMENTS & MEMORANDUM
+          </span>
+          ${printFriendlyMemo}
+         </div>`
+      : '';
+
+    const pageSizeString = paperSize === 'legal' ? 'legal portrait' : paperSize === 'letter' ? 'letter portrait' : 'A4 portrait';
+    const pageMarginString = printMargins === 'compact' ? '8mm' : printMargins === 'wide' ? '18mm' : '12mm';
+
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Ledger Audit Statement - Saako Holy Child Academy</title>
+        <style>
+          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&family=JetBrains+Mono:wght@400;700;800&display=swap');
+          
+          body {
+            background: white !important;
+            color: black !important;
+            margin: 0;
+            padding: 24px;
+            font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+
+          @page {
+            size: ${pageSizeString};
+            margin: ${pageMarginString};
+          }
+
+          @media print {
+            body {
+              padding: 0 !important;
+            }
+            .no-print {
+              display: none !important;
+            }
+          }
+
+          .print-card {
+            background: white;
+            color: black;
+            box-sizing: border-box;
+            width: 100%;
+            position: relative;
+            min-height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+          }
+
+          table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 10px;
+          }
+
+          th {
+            background-color: #f3f4f6 !important;
+            color: black !important;
+            font-weight: bold;
+            font-family: 'JetBrains Mono', monospace;
+            padding: 8px 6px;
+            border: 1px solid #c0c0c0;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+
+          td {
+            border: 1px solid #c0c0c0;
+            padding: 8px 6px;
+          }
+
+          /* Control frame inside the new window for helper actions before manual launch */
+          .print-controls {
+            margin-bottom: 24px;
+            padding: 16px;
+            background-color: #171717;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-radius: 4px;
+            border: 2px solid #262626;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+          }
+
+          .print-btn {
+            background-color: #f59e0b;
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            font-weight: 950;
+            cursor: pointer;
+            text-transform: uppercase;
+            font-size: 11px;
+            letter-spacing: 0.05em;
+          }
+
+          .print-btn:hover {
+            background-color: #fbbf24;
+          }
+
+          .close-btn {
+            background-color: #262626;
+            color: #a3a3a3;
+            border: 1px solid #404040;
+            padding: 10px 20px;
+            cursor: pointer;
+            font-size: 11px;
+            text-transform: uppercase;
+            font-weight: bold;
+          }
+
+          .close-btn:hover {
+            background-color: #404040;
+            color: white;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="print-controls no-print">
+          <div>
+            <strong>🖨️ DEDICATED AUDIT STATEMENT PRINTER</strong> 
+            <span style="margin-left: 12px; color: #a3a3a3; font-size: 11px;">(All non-essential admin blocks & navigation headers have been fully stripped)</span>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <button class="print-btn" onclick="window.print()">Trigger Browser Print</button>
+            <button class="close-btn" onclick="window.close()">Close</button>
+          </div>
+        </div>
+
+        <div class="print-card">
+          ${watermarkHtml}
+          
+          <div style="position: relative; z-index: 10;">
+            ${crestHtml}
+
+            <!-- Filters Grid -->
+            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; background-color: #f9fafb; padding: 12px; border: 1px solid #d1d5db; font-family: 'JetBrains Mono', monospace; font-size: 9px; text-transform: uppercase; margin-bottom: 24px; color: #374151;">
+              <div>
+                <span style="font-size: 8px; color: #6b7280; font-weight: bold; display: block;">ACADEMIC COHORT FILTER</span>
+                <span style="font-weight: 800; color: #000;">${classFilter === 'ALL' ? 'ALL GRADES' : `GRADE CLASS ${classFilter}`}</span>
+              </div>
+              <div style="border-left: 1px solid #d1d5db; padding-left: 12px;">
+                <span style="font-size: 8px; color: #6b7280; font-weight: bold; display: block;">DEMOGRAPHIC RANGE</span>
+                <span style="font-weight: 800; color: #000;">${categoryFilter === 'ALL' ? 'ALL GROUPS' : categoryFilter}</span>
+              </div>
+              <div style="border-left: 1px solid #d1d5db; padding-left: 12px;">
+                <span style="font-size: 8px; color: #6b7280; font-weight: bold; display: block;">VALUATION BALANCE</span>
+                <span style="font-weight: 800; color: #047857;">GHC ${totalsInfo.totalCollected.toFixed(2)}</span>
+              </div>
+              <div style="border-left: 1px solid #d1d5db; padding-left: 12px;">
+                <span style="font-size: 8px; color: #6b7280; font-weight: bold; display: block;">RECORD LENGTH</span>
+                <span style="font-weight: 800; color: #000;">${filteredPayments.length} ROWS</span>
+              </div>
+            </div>
+
+            <!-- Table -->
+            <div style="border: 1px solid #d1d5db; overflow: hidden; margin-bottom: 24px;">
+              <table>
+                <thead>
+                  <tr>
+                    <th style="width: 5%;">#</th>
+                    <th style="text-align: left; width: 15%;">TRANSACTION DATE</th>
+                    <th style="text-align: left; width: 25%;">PUPIL BENEFICIARY</th>
+                    <th style="width: 10%;">GRADE</th>
+                    <th style="text-align: left; width: 15%;">DEMOGRAPHIC</th>
+                    <th style="text-align: right; width: 12%;">FEE (GHC)</th>
+                    <th style="text-align: left; width: 10%;">RECEIPT REF</th>
+                    <th style="width: 8%;">STATUS</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${tableRowsHtml}
+                </tbody>
+              </table>
+            </div>
+
+            ${commentHtml}
+          </div>
+
+          <!-- Footer Seals & Signatures -->
+          <div style="border-top: 1px solid #d1d5db; padding-top: 24px; margin-top: 32px; display: flex; justify-content: space-between; align-items: flex-end; position: relative; z-index: 10;">
+            <div style="flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; font-size: 10px; line-height: 1.5;">
+              <div>
+                <span style="color: #6b7280; font-weight: 900; font-size: 8px; display: block; text-transform: uppercase;">PREPARED & VERIFIED BY:</span>
+                <div style="height: 40px; border-bottom: 1px solid #000; width: 176px; margin-bottom: 8px;"></div>
+                <div>
+                  <span style="color: #000; font-weight: 800; text-transform: uppercase;">ASSIGNED DESK OFFICER</span>
+                  <span style="color: #6b7280; display: block; font-size: 9px;">Class Gate Supervisor / Auditor</span>
+                </div>
+              </div>
+
+              <div>
+                <span style="color: #6b7280; font-weight: 900; font-size: 8px; display: block; text-transform: uppercase;">APPROVED & COUNTERSIGNED BY:</span>
+                <div style="height: 40px; border-bottom: 1px solid #000; width: 176px; margin-bottom: 8px;"></div>
+                <div>
+                  <span style="color: #000; font-weight: 800; text-transform: uppercase;">${printFriendlySignatory}</span>
+                  <span style="color: #6b7280; display: block; font-size: 9px;">Saako Holy Child Board Exec</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Seal -->
+            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100px;">
+              <div style="height: 80px; width: 80px; border-radius: 50%; border: 2px dashed #6366f1; padding: 4px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; background-color: #f5f3ff;">
+                <div style="background-color: #fff; height: 100%; width: 100%; border-radius: 50%; border: 1px solid #f59e0b; display: flex; flex-direction: column; align-items: center; justify-content: center; box-sizing: border-box; padding: 4px; line-height: 1.1;">
+                  <span style="font-size: 7px; color: #312e81; font-weight: 900; display: block;">SAAKO TRUST</span>
+                  <span style="font-size: 6px; color: #d97706; font-weight: 900; display: block; margin-top: 2px; letter-spacing: 0.05em;">VALID SEAL</span>
+                  <span style="font-size: 5px; color: #4338ca; display: block; font-weight: bold;">SAWLA-SAVANNAH</span>
+                </div>
+              </div>
+              <span style="font-size: 7px; font-family: monospace; color: #6366f1; text-transform: uppercase; letter-spacing: 0.1em; margin-top: 4px; display: block; font-weight: bold;">OFFICIAL IMPRESS</span>
+            </div>
+          </div>
+        </div>
+
+        <script>
+          // Trigger print dialog once fully painted
+          window.addEventListener('load', () => {
+            setTimeout(() => {
+              window.print();
+            }, 350);
+          });
+        </script>
+      </body>
+      </html>
+    `);
+    printWindow.document.close();
+  };
+
   // Excel Auditor Core - Client Side CSV Generator
   const triggerExcelExport = () => {
     if (filteredPayments.length === 0) {
@@ -456,7 +775,10 @@ export const ReportPanel: React.FC = () => {
 
           {/* Bulk Print button */}
           <button
-            onClick={() => setShowPrintModal(true)}
+            onClick={() => {
+              setPrintSearchQuery(searchQuery);
+              setShowPrintModal(true);
+            }}
             className="flex-1 sm:flex-initial text-[10px] font-black bg-neutral-950 hover:bg-neutral-850 hover:text-white text-amber-400 py-3.5 px-4 transition-all border-2 border-neutral-800 hover:border-amber-400 uppercase tracking-widest cursor-pointer flex items-center justify-center gap-1.5"
           >
             <Printer size={14} /> Bulk Print
@@ -481,6 +803,15 @@ export const ReportPanel: React.FC = () => {
             className="flex-1 sm:flex-initial text-[10px] font-black bg-neutral-950 hover:bg-neutral-850 hover:text-white text-blue-400 py-3.5 px-4 transition-all border-2 border-neutral-800 hover:border-blue-400 uppercase tracking-widest cursor-pointer flex items-center justify-center gap-1.5"
           >
             <Printer size={14} /> Print Friendly
+          </button>
+
+          {/* Print Report (Dedicated Window) button */}
+          <button
+            onClick={handlePrintReport}
+            className="flex-1 sm:flex-initial text-[10px] font-black bg-neutral-950 hover:bg-neutral-850 hover:text-white text-amber-500 py-3.5 px-4 transition-all border-2 border-neutral-800 hover:border-amber-500 uppercase tracking-widest cursor-pointer flex items-center justify-center gap-1.5"
+            title="Open audit ledger in stripped, print-ready dedicated browser window"
+          >
+            <Printer size={14} /> Print Report
           </button>
 
           {/* Download CSV audit core */}
@@ -1013,7 +1344,23 @@ export const ReportPanel: React.FC = () => {
                 filteredPayments.map((p) => (
                   <tr key={p.id} className="hover:bg-neutral-950/20">
                     <td className="p-4 font-mono text-neutral-450">{p.date}</td>
-                    <td className="p-4 font-black text-white uppercase text-xs tracking-wide">{p.studentName}</td>
+                    <td className="p-4 font-black text-white uppercase text-xs tracking-wide">
+                      <div>{p.studentName}</div>
+                      {p.notes && (
+                        <div className="mt-1 text-[10px] font-mono text-neutral-400 font-bold normal-case flex flex-wrap items-center gap-1.5 leading-snug">
+                          {p.notes.toLowerCase().includes('settled debt') || p.notes.toLowerCase().includes('arrears') ? (
+                            <span className="px-1.5 py-0.5 rounded-xs uppercase text-[8px] font-black bg-red-950/80 text-rose-400 border border-red-900/60 tracking-wider inline-block">
+                              DEBT CLEARANCE
+                            </span>
+                          ) : p.notes.toLowerCase().includes('prepaid') || p.notes.toLowerCase().includes('covered') || p.notes.toLowerCase().includes('advance') ? (
+                            <span className="px-1.5 py-0.5 rounded-xs uppercase text-[8px] font-black bg-sky-955 text-sky-400 border border-sky-900 tracking-wider inline-block">
+                              ADVANCE PREPAID
+                            </span>
+                          ) : null}
+                          <span className="text-neutral-450 uppercase">{p.notes}</span>
+                        </div>
+                      )}
+                    </td>
                     <td className="p-4 font-mono font-black text-amber-400 text-sm">{p.class}</td>
                     <td className="p-4 text-neutral-400 text-[11px] font-black uppercase tracking-wider">{p.category}</td>
                     <td className="p-4 text-right font-black font-mono text-white">GHC {p.amount.toFixed(2)}</td>
@@ -1203,6 +1550,31 @@ B7 to B9: GHC [SUM]`}
             {/* Quick configuration parameters */}
             <div className="space-y-4">
               <h4 className="text-[10px] font-mono uppercase font-black text-neutral-400 tracking-wider font-mono">Configure Invoices</h4>
+
+              {/* Search filter */}
+              <div className="space-y-1.5">
+                <span className="text-[10px] font-mono uppercase font-black text-neutral-400 tracking-wider">Search Student</span>
+                <div className="relative">
+                  <Search className="absolute left-3 top-2.5 text-neutral-500" size={13} />
+                  <input
+                    type="text"
+                    value={printSearchQuery}
+                    onChange={(e) => setPrintSearchQuery(e.target.value)}
+                    placeholder="Search by name or ID..."
+                    className="w-full bg-neutral-950 border-2 border-neutral-800 py-2 pl-9 pr-8 text-xs outline-none text-white focus:border-amber-400 font-mono"
+                  />
+                  {printSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setPrintSearchQuery('')}
+                      className="absolute right-2.5 top-2.5 text-neutral-500 hover:text-white cursor-pointer"
+                      title="Clear Search"
+                    >
+                      <X size={13} className="stroke-[2.5]" />
+                    </button>
+                  )}
+                </div>
+              </div>
 
               {/* Date Filter Selection Mode */}
               <div className="space-y-2">
@@ -1507,7 +1879,14 @@ B7 to B9: GHC [SUM]`}
                               {group.paymentsList.map((record) => (
                                 <tr key={record.id} className="font-medium text-neutral-800">
                                   <td className="py-2 font-mono text-black font-bold">{record.date}</td>
-                                  <td className="py-2 font-mono text-[9px] text-neutral-600 uppercase">{record.id}</td>
+                                  <td className="py-2 font-mono text-[9px] text-neutral-600 uppercase">
+                                    <div>{record.id}</div>
+                                    {record.notes && (
+                                      <div className="text-[8px] text-neutral-500 font-sans italic lowercase mt-0.5 max-w-[200px] leading-tight">
+                                        (* {record.notes})
+                                      </div>
+                                    )}
+                                  </td>
                                   <td className="py-2">
                                     <span className={`inline-block text-[8px] font-black px-1.5 py-0.5 uppercase ${
                                       record.verified 
@@ -1987,7 +2366,7 @@ B7 to B9: GHC [SUM]`}
             </div>
 
             {/* Manual actions area */}
-            <div className="pt-2 space-y-2">
+            <div className="pt-2 space-y-2.5">
               <button
                 type="button"
                 onClick={() => {
@@ -1997,15 +2376,26 @@ B7 to B9: GHC [SUM]`}
                   }
                 }}
                 disabled={filteredPayments.length === 0}
-                className="w-full py-4 text-xs font-black uppercase text-white bg-blue-600 hover:bg-blue-500 disabled:bg-neutral-800 disabled:text-neutral-550 transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg"
+                className="w-full py-4 text-xs font-black uppercase text-neutral-950 bg-amber-400 hover:bg-amber-300 disabled:bg-neutral-800 disabled:text-neutral-550 transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg font-mono"
               >
-                <Printer size={15} /> COMPILE AND PRINT PDF
+                <Printer size={15} /> PRINT DIRECTLY FROM PAGE (FAST)
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAppPrintPreviewModal(true);
+                }}
+                disabled={filteredPayments.length === 0}
+                className="w-full py-3 text-xs font-black uppercase text-white bg-blue-600 hover:bg-blue-500 disabled:bg-neutral-800 disabled:text-neutral-550 transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm font-mono"
+              >
+                <FileText size={14} /> ADAPT IN INTERACTIVE PREVIEW
               </button>
 
               <button
                 type="button"
                 onClick={() => setShowPrintFriendlyModal(false)}
-                className="w-full py-3.5 text-xs font-black uppercase text-neutral-450 hover:text-white bg-neutral-950 hover:bg-neutral-850 border border-neutral-800 transition-colors cursor-pointer"
+                className="w-full py-3 text-xs font-black uppercase text-neutral-450 hover:text-white bg-neutral-950 hover:bg-neutral-850 border border-neutral-800 transition-colors cursor-pointer font-mono"
               >
                 DISMISS SYSTEM
               </button>
@@ -2027,35 +2417,53 @@ B7 to B9: GHC [SUM]`}
             {/* PRINT PORTRAIT SKELETON CANVAS */}
             <div 
               id="print-friendly-area" 
-              className="bg-white text-black p-10 md:p-12 shadow-2xl max-w-[210mm] mx-auto min-h-[297mm] flex flex-col justify-between border border-neutral-300 font-sans"
+              className={`bg-white text-black shadow-2xl mx-auto flex flex-col justify-between border border-neutral-300 font-sans relative overflow-hidden ${
+                printMargins === 'compact' ? 'p-6 space-y-4' :
+                printMargins === 'wide' ? 'p-14 md:p-16 space-y-8' :
+                'p-10 md:p-12 space-y-6'
+              } ${
+                paperSize === 'letter' ? 'max-w-[216mm] min-h-[279mm]' :
+                paperSize === 'legal' ? 'max-w-[216mm] min-h-[356mm]' :
+                'max-w-[210mm] min-h-[297mm]'
+              }`}
             >
-              
-              {/* UPPER SECTION: Headings, Metadata, and Financial Matrix */}
-              <div className="space-y-6">
-                
-                {/* Official Crest Headings Banner */}
-                <div className="border-b-4 border-neutral-900 pb-4 flex justify-between items-start">
-                  <div className="space-y-1">
-                    <span className="text-[9px] font-bold text-neutral-600 font-mono tracking-widest uppercase block">
-                      OFFICIAL ADMINISTRATIVE AUDIT RECORD
-                    </span>
-                    <h2 className="text-2xl font-black uppercase tracking-tight leading-none text-black">
-                      SAAKO HOLY CHILD ACADEMY
-                    </h2>
-                    <p className="text-[10px] text-neutral-600 font-black uppercase tracking-widest font-mono leading-none mt-1">
-                      Holiness is our Key, P. O. Box ls15, Sawla-Savannah. Tel: +233545029200 / +2330507274133
-                    </p>
-                  </div>
-
-                  <div className="text-right space-y-1 font-mono">
-                    <span className="text-[10px] font-black uppercase px-2.5 py-1 bg-neutral-200 border border-black text-black inline-block leading-none">
-                      LEDGER STATEMENT
-                    </span>
-                    <div className="text-[8px] text-neutral-500 font-bold mt-1">
-                      RUN DATE: {new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute:'2-digit' })}
-                    </div>
+              {/* Optional diagonal watermark overlay */}
+              {selectedWatermark !== 'NONE' && (
+                <div className="absolute inset-0 flex items-center justify-center overflow-hidden pointer-events-none select-none z-0">
+                  <div className="text-[48px] md:text-[64px] font-black tracking-widest text-neutral-150/40 uppercase font-mono border-8 border-neutral-150/40 px-6 py-2 rounded-xl rotate-[-30deg] opacity-[0.25]">
+                    {selectedWatermark}
                   </div>
                 </div>
+              )}
+              
+              {/* UPPER SECTION: Headings, Metadata, and Financial Matrix */}
+              <div className="space-y-6 z-10 relative">
+                
+                {/* Official Crest Headings Banner */}
+                {showCrest && (
+                  <div className="border-b-4 border-neutral-900 pb-4 flex justify-between items-start">
+                    <div className="space-y-1">
+                      <span className="text-[9px] font-bold text-neutral-600 font-mono tracking-widest uppercase block">
+                        OFFICIAL ADMINISTRATIVE AUDIT RECORD
+                      </span>
+                      <h2 className="text-2xl font-black uppercase tracking-tight leading-none text-black">
+                        SAAKO HOLY CHILD ACADEMY
+                      </h2>
+                      <p className="text-[10px] text-neutral-600 font-black uppercase tracking-widest font-mono leading-none mt-1">
+                        Holiness is our Key, P. O. Box ls15, Sawla-Savannah. Tel: +233545029200 / +2330507274133
+                      </p>
+                    </div>
+
+                    <div className="text-right space-y-1 font-mono">
+                      <span className="text-[10px] font-black uppercase px-2.5 py-1 bg-neutral-200 border border-black text-black inline-block leading-none">
+                        LEDGER STATEMENT
+                      </span>
+                      <div className="text-[8px] text-neutral-500 font-bold mt-1">
+                        RUN DATE: {new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute:'2-digit' })}
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Scope Filters and Transaction Summary Metrics */}
                 <div className="grid grid-cols-4 gap-4 bg-neutral-50 p-4 border border-neutral-300 font-mono text-[10px] uppercase leading-relaxed text-neutral-800">
@@ -2104,7 +2512,14 @@ B7 to B9: GHC [SUM]`}
                           <tr key={p.id} className="hover:bg-neutral-50">
                             <td className="p-2 border border-neutral-300 text-center font-mono">{idx + 1}</td>
                             <td className="p-2 border border-neutral-300 font-mono text-neutral-600">{p.date}</td>
-                            <td className="p-2 border border-neutral-300 font-bold uppercase">{p.studentName}</td>
+                            <td className="p-2 border border-neutral-300 font-bold uppercase">
+                              <div>{p.studentName}</div>
+                              {p.notes && (
+                                <div className="text-[9px] font-mono font-medium text-neutral-500 uppercase leading-snug mt-0.5 whitespace-normal normal-case">
+                                  (* {p.notes})
+                                </div>
+                              )}
+                            </td>
                             <td className="p-2 border border-neutral-300 text-center font-mono font-semibold text-neutral-800">{p.class}</td>
                             <td className="p-2 border border-neutral-300 text-xs text-neutral-700 font-medium uppercase font-mono">{p.category}</td>
                             <td className="p-2 border border-neutral-300 text-right font-mono font-bold">GHC {p.amount.toFixed(2)}</td>
@@ -2131,7 +2546,7 @@ B7 to B9: GHC [SUM]`}
               </div>
 
               {/* LOWER SECTION: Signature Blocks & Security Seals */}
-              <div className="pt-8 mt-8 border-t border-neutral-300 flex justify-between items-end gap-6 shrink-0">
+              <div className="pt-8 mt-8 border-t border-neutral-300 flex justify-between items-end gap-6 shrink-0 z-10 relative">
                 
                 {/* Signatures Structure */}
                 <div className="flex-1 grid grid-cols-2 gap-6 text-[10px] leading-relaxed">
@@ -2169,6 +2584,382 @@ B7 to B9: GHC [SUM]`}
 
             </div>
           </div>
+        </div>
+      )}
+
+      {/* HIGH-FIDELITY INTERACTIVE PRINT PREVIEW MODAL DESK */}
+      {showAppPrintPreviewModal && (
+        <div className="fixed inset-0 z-[100] bg-neutral-950 flex flex-col md:flex-row overflow-hidden font-sans text-white border-2 border-neutral-850">
+          
+          {/* LEFT INTERACTIVE PANEL: Controls and Configuration Bench */}
+          <div className="w-full md:w-96 bg-neutral-900 border-r border-neutral-800 flex flex-col h-full overflow-y-auto p-5 space-y-5 shrink-0 no-print">
+            <div className="border-b border-neutral-850 pb-3">
+              <span className="text-[9px] text-amber-400 font-mono tracking-widest font-black uppercase block">Saako Auditing Suite</span>
+              <h3 className="text-base font-black text-white uppercase tracking-tight flex items-center gap-2 mt-0.5">
+                <Printer size={16} className="text-amber-400" /> PRINT PREVIEW BENCH
+              </h3>
+            </div>
+
+            {/* Document stats */}
+            <div className="bg-neutral-950 p-4 border border-neutral-850 space-y-2 rounded-xs font-mono text-[10px]">
+              <span className="text-neutral-500 font-bold block text-[8px] tracking-wide uppercase">COMPILED STATEMENT INSIGHTS</span>
+              <div className="flex justify-between border-b border-neutral-900 pb-1.5">
+                <span className="text-neutral-400">Total Rows Matched:</span>
+                <span className="text-white font-extrabold">{filteredPayments.length} entries</span>
+              </div>
+              <div className="flex justify-between border-b border-neutral-900 pb-1.5">
+                <span className="text-neutral-400">Ledger Valuation:</span>
+                <span className="text-emerald-400 font-extrabold">GHC {totalsInfo.totalCollected.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-neutral-400">System Checklist:</span>
+                <span className="text-amber-400 font-extrabold">Grayscale Safe</span>
+              </div>
+            </div>
+
+            {/* Page Setup Options */}
+            <div className="space-y-4 bg-neutral-950/40 p-4 border border-neutral-850 rounded-xs">
+              <h4 className="text-[10px] font-mono uppercase font-black text-amber-400/80 tracking-wider">Page Customizer Desk</h4>
+              
+              {/* Paper Dimension Selection */}
+              <div className="space-y-1.5">
+                <label className="text-[9px] font-mono uppercase text-neutral-450 block font-bold">Paper Dimensions</label>
+                <div className="grid grid-cols-3 gap-1">
+                  {(['a4', 'letter', 'legal'] as const).map((size) => (
+                    <button
+                      key={size}
+                      type="button"
+                      onClick={() => setPaperSize(size)}
+                      className={`py-1.5 px-2 text-[9px] font-mono font-black uppercase border transition-all cursor-pointer ${
+                        paperSize === size
+                          ? 'bg-amber-400 border-amber-400 text-black'
+                          : 'bg-neutral-900 border-neutral-800 text-neutral-450 hover:text-white'
+                      }`}
+                    >
+                      {size}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Layout Margins Selection */}
+              <div className="space-y-1.5">
+                <label className="text-[9px] font-mono uppercase text-neutral-450 block font-bold">Layout Margins</label>
+                <div className="grid grid-cols-3 gap-1">
+                  {(['compact', 'normal', 'wide'] as const).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setPrintMargins(m)}
+                      className={`py-1.5 px-2 text-[9px] font-mono font-black uppercase border transition-all cursor-pointer ${
+                        printMargins === m
+                          ? 'bg-amber-400 border-amber-400 text-black'
+                          : 'bg-neutral-900 border-neutral-800 text-neutral-450 hover:text-white'
+                      }`}
+                    >
+                      {m}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Security Watermark Stamp selection */}
+              <div className="space-y-1.5">
+                <label className="text-[9px] font-mono uppercase text-neutral-450 block font-bold">Watermark Overlay Stamp</label>
+                <select
+                  value={selectedWatermark}
+                  onChange={(e: any) => setSelectedWatermark(e.target.value)}
+                  className="w-full text-[10px] font-mono bg-neutral-900 border border-neutral-800 text-white p-2 focus:border-amber-400 outline-none uppercase font-bold"
+                >
+                  <option value="NONE">NO WATERMARK</option>
+                  <option value="DRAFT">DRAFT PREVIEW</option>
+                  <option value="CONFIDENTIAL">CONFIDENTIAL</option>
+                  <option value="SAAKO AUDITED">SAAKO AUDITED</option>
+                </select>
+              </div>
+
+              {/* Academic Crest Toggle */}
+              <div className="flex items-center justify-between pt-1 border-t border-neutral-900">
+                <span className="text-[9px] font-mono uppercase text-neutral-400 font-bold">Show School Banner</span>
+                <button
+                  type="button"
+                  onClick={() => setShowCrest(!showCrest)}
+                  className={`px-3 py-1 text-[8px] font-mono font-black uppercase transition-colors rounded-3xs border ${
+                    showCrest 
+                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 font-black' 
+                      : 'bg-neutral-900 border-neutral-800 text-neutral-500'
+                  }`}
+                >
+                  {showCrest ? 'ENABLED' : 'DISABLED'}
+                </button>
+              </div>
+            </div>
+
+            {/* Interactive Zoom Controls */}
+            <div className="space-y-2">
+              <label className="text-[9px] font-mono uppercase text-neutral-450 block font-bold flex justify-between">
+                <span>PREVIEW WORKSPACE ZOOM</span>
+                <span className="text-amber-400 font-black">{printPreviewZoom}%</span>
+              </label>
+              <div className="flex items-center gap-1.5 bg-neutral-950 p-2 border border-neutral-855">
+                <button
+                  type="button"
+                  onClick={() => setPrintPreviewZoom(Math.max(40, printPreviewZoom - 10))}
+                  className="p-1 px-2.5 bg-neutral-900 hover:bg-neutral-800 border border-neutral-855 cursor-pointer text-xs font-bold"
+                  title="Zoom Out"
+                >
+                  <ZoomOut size={12} />
+                </button>
+                <div className="flex-1 grid grid-cols-4 gap-1 text-[8px] font-mono text-center">
+                  {[55, 75, 90, 100].map((z) => (
+                    <button
+                      key={z}
+                      type="button"
+                      onClick={() => setPrintPreviewZoom(z)}
+                      className={`py-1 cursor-pointer border ${
+                        printPreviewZoom === z
+                          ? 'border-amber-400 text-amber-400 bg-amber-400/5'
+                          : 'border-transparent text-neutral-500'
+                      }`}
+                    >
+                      {z}%
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPrintPreviewZoom(Math.min(150, printPreviewZoom + 10))}
+                  className="p-1 px-2.5 bg-neutral-900 hover:bg-neutral-800 border border-neutral-855 cursor-pointer text-xs font-bold"
+                  title="Zoom In"
+                >
+                  <ZoomIn size={12} />
+                </button>
+              </div>
+            </div>
+
+            {/* Helpful instructions layout */}
+            <div className="bg-neutral-950/70 p-4 border border-dashed border-neutral-800 rounded-px space-y-2 text-[9px] text-neutral-450 font-mono tracking-wide leading-relaxed">
+              <span className="font-extrabold text-neutral-300 block uppercase">⚙️ PRINTER DISPATCH PROTOCOLS:</span>
+              <ul className="list-disc pl-3.5 space-y-1">
+                <li>Check <strong className="text-neutral-300">Background Graphics</strong> inside your OS Print Options to retain official gray tables.</li>
+                <li>Set paper destination to <strong className="text-amber-400">Save as PDF</strong> inside the native system print workflow.</li>
+                <li>Use <strong className="text-neutral-300">Grayscale Mode</strong> for high contrast physical receipt handouts.</li>
+              </ul>
+            </div>
+
+            {/* Print Confirmation Actions Panel */}
+            <div className="pt-2 space-y-2 mt-auto">
+              <button
+                type="button"
+                onClick={() => {
+                  if (typeof window !== 'undefined') {
+                    window.focus();
+                    window.print();
+                  }
+                }}
+                className="w-full py-4 text-xs font-black uppercase text-black bg-amber-400 hover:bg-amber-300 hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center justify-center gap-2 cursor-pointer shadow-xl font-mono"
+              >
+                <Printer size={15} /> DISPATCH PRINTER SYSTEM
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowAppPrintPreviewModal(false)}
+                className="w-full py-3 text-xs font-black uppercase text-neutral-450 hover:text-white bg-neutral-900 border border-neutral-800 hover:bg-neutral-850 transition-all cursor-pointer font-mono"
+              >
+                RETURN TO LEDGER BUILDER
+              </button>
+            </div>
+          </div>
+
+          {/* RIGHT VIEWPORT: Interactive Simulated Sheet Workspace */}
+          <div className="flex-1 overflow-auto bg-neutral-950 p-6 md:p-12 flex flex-col items-center">
+            
+            {/* Control stats headers banner */}
+            <div className="w-full max-w-[210mm] flex items-center justify-between no-print border-b border-neutral-855 pb-2.5 mb-8 font-mono text-[10px]">
+              <span className="font-bold text-neutral-400 flex items-center gap-2 transition-all">
+                <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                SIMULATING HIGH FIDELITY OUTPUT CANVAS ({paperSize.toUpperCase()})
+              </span>
+              <div className="flex items-center gap-2 text-neutral-500">
+                <span>SCALED AT {printPreviewZoom}%</span>
+              </div>
+            </div>
+
+            {/* A4 PORTRAIT PREVIEW PAPER SHEET CONTAINER WITH INLINE ROTATION & ZOOM SCALING */}
+            <div 
+              style={{ 
+                transform: `scale(${printPreviewZoom / 100})`,
+                transformOrigin: 'top center',
+                transition: 'transform 0.15s cubic-bezier(0.4, 0, 0.2, 1)'
+              }}
+              className="bg-white text-black shadow-2xl flex flex-col justify-between border border-neutral-300 font-sans relative overflow-hidden shrink-0"
+            >
+              
+              {/* INTERNALS CLONED PREVIEW SKELETON */}
+              <div 
+                className={`flex-1 flex flex-col justify-between h-full ${
+                  printMargins === 'compact' ? 'p-6 space-y-4' :
+                  printMargins === 'wide' ? 'p-14 md:p-16 space-y-8' :
+                  'p-10 md:p-12 space-y-6'
+                } ${
+                  paperSize === 'letter' ? 'w-[216mm] min-h-[279mm]' :
+                  paperSize === 'legal' ? 'w-[216mm] min-h-[356mm]' :
+                  'w-[210mm] min-h-[297mm]'
+                }`}
+              >
+                {/* Simulated diagonal watermark overlay inside workspace sheet */}
+                {selectedWatermark !== 'NONE' && (
+                  <div className="absolute inset-0 flex items-center justify-center overflow-hidden pointer-events-none select-none z-0">
+                    <div className="text-[48px] md:text-[64px] font-black tracking-widest text-neutral-150/40 uppercase font-mono border-8 border-neutral-150/40 px-6 py-2 rounded-xl rotate-[-30deg] opacity-[0.25]">
+                      {selectedWatermark}
+                    </div>
+                  </div>
+                )}
+
+                {/* UPPER CONTENT BLOCK */}
+                <div className="space-y-6 z-10 relative">
+                  
+                  {/* Cloned Crest Academic Banner */}
+                  {showCrest && (
+                    <div className="border-b-4 border-neutral-900 pb-4 flex justify-between items-start">
+                      <div className="space-y-1">
+                        <span className="text-[9px] font-bold text-neutral-600 font-mono tracking-widest uppercase block">
+                          OFFICIAL ADMINISTRATIVE AUDIT RECORD
+                        </span>
+                        <h2 className="text-2xl font-black uppercase tracking-tight leading-none text-black">
+                          SAAKO HOLY CHILD ACADEMY
+                        </h2>
+                        <p className="text-[10px] text-neutral-600 font-black uppercase tracking-widest font-mono leading-none mt-1">
+                          Holiness is our Key, P. O. Box ls15, Sawla-Savannah. Tel: +233545029200 / +2330507274133
+                        </p>
+                      </div>
+
+                      <div className="text-right space-y-1 font-mono">
+                        <span className="text-[10px] font-black uppercase px-2.5 py-1 bg-neutral-200 border border-black text-black inline-block leading-none">
+                          LEDGER STATEMENT
+                        </span>
+                        <div className="text-[8px] text-neutral-500 font-bold mt-1">
+                          RUN DATE: {new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute:'2-digit' })}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Summary grid */}
+                  <div className="grid grid-cols-4 gap-4 bg-neutral-50 p-4 border border-neutral-300 font-mono text-[10px] uppercase leading-relaxed text-neutral-800">
+                    <div className="space-y-0.5">
+                      <span className="text-[8px] text-neutral-500 font-black block">ACADEMIC COHORT FILTER</span>
+                      <span className="font-extrabold text-black">{classFilter === 'ALL' ? 'ALL GRADES / CLASSES' : `GRADE CLASS ${classFilter}`}</span>
+                    </div>
+                    <div className="space-y-0.5 border-l border-neutral-300 pl-3">
+                      <span className="text-[8px] text-neutral-500 font-black block">DEMOGRAPHIC RANGE</span>
+                      <span className="font-extrabold text-black">{categoryFilter === 'ALL' ? 'ALL GROUPS (BOARD/DAY)' : categoryFilter}</span>
+                    </div>
+                    <div className="space-y-0.5 border-l border-neutral-300 pl-3">
+                      <span className="text-[8px] text-neutral-500 font-black block">VALUATION BALANCE</span>
+                      <span className="font-extrabold text-emerald-700 text-xs">GHC {totalsInfo.totalCollected.toFixed(2)}</span>
+                    </div>
+                    <div className="space-y-0.5 border-l border-neutral-300 pl-3">
+                      <span className="text-[8px] text-neutral-500 font-black block">RECORD LENGTH</span>
+                      <span className="font-extrabold text-black">{filteredPayments.length} ROWS MATCHED</span>
+                    </div>
+                  </div>
+
+                  {/* Ledger Table */}
+                  <div className="overflow-hidden border border-neutral-300">
+                    <table className="w-full text-left text-[11px] border-collapse leading-normal font-sans">
+                      <thead className="bg-neutral-100 font-mono text-[9px] uppercase tracking-wider text-black border-b-2 border-neutral-400">
+                        <tr>
+                          <th className="p-2 border border-neutral-300 text-center font-bold w-10">#</th>
+                          <th className="p-2 border border-neutral-300 font-bold font-mono text-center">Ref ID</th>
+                          <th className="p-2 border border-neutral-300 font-bold font-mono">Date</th>
+                          <th className="p-2 border border-neutral-300 font-bold">Student Name</th>
+                          <th className="p-2 border border-neutral-300 font-bold font-mono text-center">Grade</th>
+                          <th className="p-2 border border-neutral-300 font-bold font-mono">Group</th>
+                          <th className="p-2 border border-neutral-300 font-bold text-right">Fee (GHC)</th>
+                          <th className="p-2 border border-neutral-300 font-bold font-mono">Receipt Index</th>
+                          <th className="p-2 border border-neutral-300 font-bold text-center font-mono">Verification</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-neutral-200">
+                        {filteredPayments.slice(0, 10).map((p, idx) => (
+                          <tr key={p.id} className="hover:bg-neutral-50 transition-colors">
+                            <td className="p-2 border border-neutral-300 text-center font-mono font-bold text-neutral-500">{idx + 1}</td>
+                            <td className="p-2 border border-neutral-300 font-mono text-[8px] text-neutral-800 text-center font-semibold">#{p.id.substring(2, 8).toUpperCase()}</td>
+                            <td className="p-2 border border-neutral-300 font-mono text-neutral-800 text-center">{p.date}</td>
+                            <td className="p-2 border border-neutral-300 text-neutral-900 font-bold text-center uppercase tracking-tight">{p.studentName}</td>
+                            <td className="p-2 border border-neutral-300 text-center font-mono font-semibold text-neutral-800">{p.class}</td>
+                            <td className="p-2 border border-neutral-300 text-xs text-neutral-700 font-medium uppercase font-mono">{p.category}</td>
+                            <td className="p-2 border border-neutral-300 text-right font-mono font-bold font-black">GHC {p.amount.toFixed(2)}</td>
+                            <td className="p-2 border border-neutral-300 font-mono text-[9px] text-neutral-600">{p.id.toUpperCase().substring(0, 10)}...</td>
+                            <td className="p-2 border border-neutral-300 text-center font-mono text-[9px]">
+                              {p.verified ? 'APPROVED' : 'PENDING'}
+                            </td>
+                          </tr>
+                        ))}
+                        {filteredPayments.length > 10 && (
+                          <tr>
+                            <td colSpan={9} className="p-3 text-center bg-neutral-50 border border-neutral-300 text-neutral-500 font-mono text-[9px] uppercase tracking-wider">
+                              ... AND {filteredPayments.length - 10} ADDITIONAL STENCILS COMPILED FOR BULK RECIPIENTS OUT ...
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Memorandum block */}
+                  {printFriendlyMemo && (
+                    <div className="bg-neutral-50 p-3.5 border border-neutral-300 rounded-px text-[10px] leading-relaxed text-neutral-600 italic">
+                      <span className="font-bold text-neutral-800 uppercase not-italic block mb-1 text-[8px] tracking-wide">
+                        AUDIT STATION COMMENTS & MEMORANDUM
+                      </span>
+                      {printFriendlyMemo}
+                    </div>
+                  )}
+                </div>
+
+                {/* SIGNATURES SEGMENT */}
+                <div className="pt-8 mt-8 border-t border-neutral-300 flex justify-between items-end gap-6 shrink-0 z-10 relative">
+                  <div className="flex-1 grid grid-cols-2 gap-6 text-[10px] leading-relaxed">
+                    <div className="space-y-4">
+                      <span className="text-neutral-500 font-black uppercase text-[8px] block">PREPARED & VERIFIED BY:</span>
+                      <div className="h-10 border-b border-black w-44"></div>
+                      <div>
+                        <span className="text-black font-extrabold uppercase">ASSIGNED DESK OFFICER</span>
+                        <span className="text-neutral-500 block text-[9px]">Class Gate Supervisor / Auditor</span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-4">
+                      <span className="text-neutral-500 font-black uppercase text-[8px] block">APPROVED & COUNTERSIGNED BY:</span>
+                      <div className="h-10 border-b border-black w-44"></div>
+                      <div>
+                        <span className="text-black font-extrabold uppercase">{printFriendlySignatory}</span>
+                        <span className="text-neutral-500 block text-[9px]">Saako Holy Child Board Exec</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="shrink-0 flex flex-col items-center justify-center">
+                    <div className="h-20 w-20 rounded-full border-2 border-dashed border-indigo-500/80 p-1 flex flex-col items-center justify-center text-center select-none font-mono bg-indigo-50/50 shadow-inner">
+                      <div className="rounded-full border border-amber-500/60 bg-white h-full w-full flex flex-col items-center justify-center p-1 font-mono uppercase text-center leading-[1.1] shadow-sm">
+                        <span className="text-[7px] text-indigo-900 font-extrabold block">SAAKO TRUST</span>
+                        <span className="text-[6px] text-amber-600 font-black block mt-0.5 tracking-wider">VALID SEAL</span>
+                        <span className="text-[5px] text-indigo-700 block font-bold">SAWLA-SAVANNAH</span>
+                      </div>
+                    </div>
+                    <span className="text-[7px] font-mono text-indigo-500 uppercase tracking-widest mt-1 block font-bold">OFFICIAL IMPRESS</span>
+                  </div>
+                </div>
+
+              </div>
+
+            </div>
+
+          </div>
+
         </div>
       )}
     </div>
