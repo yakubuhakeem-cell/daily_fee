@@ -296,6 +296,39 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // POST /api/students/bulk
+  app.post("/api/students/bulk", async (req, res) => {
+    const studentsArray = req.body;
+    if (!Array.isArray(studentsArray)) {
+      return res.status(400).json({ error: "Expected an array of students" });
+    }
+
+    const dbLocal = loadDatabase();
+    if (!dbLocal.students) dbLocal.students = [];
+
+    studentsArray.forEach(student => {
+      const idx = dbLocal.students.findIndex((s) => s.id === student.id);
+      if (idx >= 0) {
+        dbLocal.students[idx] = student;
+      } else {
+        dbLocal.students.push(student);
+      }
+    });
+    saveDatabase(dbLocal);
+
+    if (firestoreDb) {
+      try {
+        const promises = studentsArray.map(student => 
+          withTimeout(setDoc(doc(firestoreDb, "students", student.id), student), 1500, "saveStudent")
+        );
+        await Promise.all(promises);
+      } catch (e) {
+        console.error("Firestore saveStudentsBulk failed:", e);
+      }
+    }
+    res.json({ success: true });
+  });
+
   // DELETE /api/students/:id
   app.delete("/api/students/:id", async (req, res) => {
     const id = req.params.id;
@@ -435,6 +468,41 @@ async function startServer() {
         await withTimeout(deleteDoc(doc(firestoreDb, "payments", id)), 1500, "deletePayment");
       } catch (e) {
         console.error("Firestore deletePayment failed:", e);
+      }
+    }
+    res.json({ success: true });
+  });
+
+  // DELETE /api/payments/student/:studentId
+  app.delete("/api/payments/student/:studentId", async (req, res) => {
+    const studentId = req.params.studentId;
+
+    // Save to local cache backup
+    const dbLocal = loadDatabase();
+    if (dbLocal.payments) {
+      dbLocal.payments = dbLocal.payments.filter((p) => p.studentId !== studentId);
+      saveDatabase(dbLocal);
+    }
+
+    if (firestoreDb) {
+      try {
+        const paymentsRef = collection(firestoreDb, "payments");
+        const qSnaps = await withTimeout(getDocs(paymentsRef), 2000, "queryStudentPayments");
+        const batch = writeBatch(firestoreDb);
+        let docsToDeleteCount = 0;
+        
+        qSnaps.forEach((docSnap) => {
+          if (docSnap.data().studentId === studentId) {
+            batch.delete(docSnap.ref);
+            docsToDeleteCount++;
+          }
+        });
+        
+        if (docsToDeleteCount > 0) {
+          await withTimeout(batch.commit(), 2000, "deleteStudentPaymentsBatch");
+        }
+      } catch (e) {
+        console.error("Firestore deleteStudentPayments failed:", e);
       }
     }
     res.json({ success: true });

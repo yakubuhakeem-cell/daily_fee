@@ -166,6 +166,22 @@ export const db = {
     }
   },
 
+  async saveStudentsBulk(students: Student[]): Promise<boolean> {
+    try {
+      const res = await fetch("/api/students/bulk", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(students),
+      });
+      return res.ok;
+    } catch (e) {
+      console.error("Local Server API saveStudentsBulk error: ", e);
+      return false;
+    }
+  },
+
   async deleteStudent(studentId: string): Promise<boolean> {
     try {
       const res = await fetch(`/api/students/${studentId}`, {
@@ -229,6 +245,18 @@ export const db = {
       return res.ok;
     } catch (e) {
       console.error("Local Server API deletePayment error: ", e);
+      return false;
+    }
+  },
+
+  async deleteStudentPayments(studentId: string): Promise<boolean> {
+    try {
+      const res = await fetch(`/api/payments/student/${studentId}`, {
+        method: "DELETE",
+      });
+      return res.ok;
+    } catch (e) {
+      console.error("Local Server API deleteStudentPayments error: ", e);
       return false;
     }
   },

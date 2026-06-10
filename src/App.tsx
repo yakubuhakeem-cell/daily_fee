@@ -11,6 +11,7 @@ import { Dashboard } from './components/Dashboard';
 import { AdminPanel } from './components/AdminPanel';
 import { ReportPanel } from './components/ReportPanel';
 import { SchoolLogo } from './components/SchoolLogo';
+import { TermPayersTab } from './components/TermPayersTab';
 import { db } from './lib/firebase';
 import { 
   Fingerprint, 
@@ -25,7 +26,8 @@ import {
   GraduationCap,
   Printer,
   Sun,
-  Moon
+  Moon,
+  CreditCard
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -67,7 +69,7 @@ function NavigationWrapper() {
 
   const totalAdminAlerts = unassignedCount + missingRegCount;
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'register' | 'admin' | 'reports'>('register');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'register' | 'admin' | 'reports' | 'termPayers'>('register');
   const [showSyncConfirm, setShowSyncConfirm] = useState(false);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
   const [syncErrorMessage, setSyncErrorMessage] = useState('');
@@ -86,6 +88,53 @@ function NavigationWrapper() {
     localStorage.setItem('s_sync_tutorial_dismissed', 'false');
     setTutorialDismissed(false);
   };
+
+  const getSafeAppOrigin = () => {
+    try {
+      if (window.location.origin && window.location.origin !== 'null') {
+        return window.location.origin;
+      }
+      const parsed = new URL(window.location.href);
+      if (parsed.origin && parsed.origin !== 'null') {
+        return parsed.origin;
+      }
+    } catch (e) {
+      console.warn("Unable to parse origin, falling back to relative paths", e);
+    }
+    return '';
+  };
+
+  const [showPrintIframeWarning, setShowPrintIframeWarning] = useState(false);
+  const [copiedUrl, setCopiedUrl] = useState(false);
+
+  React.useEffect(() => {
+    // Intercept default window.print to handle iframe sandboxing constraints
+    const originalPrint = window.print;
+    window.print = function() {
+      const isIframe = window.self !== window.top;
+      if (isIframe) {
+        window.dispatchEvent(new CustomEvent('show-print-iframe-warning'));
+      } else {
+        try {
+          originalPrint.call(window);
+        } catch (e) {
+          console.warn("Native print interface blocked:", e);
+          window.dispatchEvent(new CustomEvent('show-print-iframe-warning'));
+        }
+      }
+    };
+
+    const handleCustomPrintWarning = () => {
+      setShowPrintIframeWarning(true);
+    };
+
+    window.addEventListener('show-print-iframe-warning', handleCustomPrintWarning);
+
+    return () => {
+      window.print = originalPrint;
+      window.removeEventListener('show-print-iframe-warning', handleCustomPrintWarning);
+    };
+  }, []);
 
   // Programmatic switch and cloud sync flow trigger helper function
   const triggerSwitchAndSyncCloud = async () => {
@@ -125,7 +174,7 @@ function NavigationWrapper() {
     const role = currentUser.role;
     if (role === 'Administrator' || role === 'Headmaster') return true;
     if (role === 'Accountant') {
-      return ['dashboard', 'register', 'reports'].includes(tab);
+      return ['dashboard', 'register', 'reports', 'termPayers'].includes(tab);
     }
     if (role === 'Teacher') {
       return ['register'].includes(tab);
@@ -136,6 +185,7 @@ function NavigationWrapper() {
   // Adjust default tab based on security access on load
   const tabs = [
     { id: 'register', label: 'Check-In GHC 5', icon: Receipt },
+    { id: 'termPayers', label: 'Term Payers Status', icon: CreditCard },
     { id: 'dashboard', label: 'Cash Flow Trends & Stats', icon: LayoutDashboard },
     { id: 'reports', label: 'Audits & Exports', icon: FolderEdit },
     { id: 'admin', label: 'Pupil Enrollment Core', icon: Settings },
@@ -150,6 +200,8 @@ function NavigationWrapper() {
         return <Dashboard />;
       case 'register':
         return <ClassRegister />;
+      case 'termPayers':
+        return <TermPayersTab />;
       case 'admin':
         return <AdminPanel />;
       case 'reports':
@@ -373,7 +425,17 @@ function NavigationWrapper() {
                           : 'text-neutral-500 hover:text-white border-transparent pl-3'
                       }`}
                     >
-                      <span className="uppercase">{tab.id === 'register' ? 'Daily Check-In' : tab.id === 'dashboard' ? 'Cash Flow Feed' : tab.id === 'reports' ? 'Audits & Exports' : 'Staff & Pupils'}</span>
+                      <span className="uppercase">
+                        {tab.id === 'register' 
+                          ? 'Daily Check-In' 
+                          : tab.id === 'termPayers' 
+                          ? 'Term Payers Status' 
+                          : tab.id === 'dashboard' 
+                          ? 'Cash Flow Feed' 
+                          : tab.id === 'reports' 
+                          ? 'Audits & Exports' 
+                          : 'Staff & Pupils'}
+                      </span>
                       {tab.id === 'admin' && totalAdminAlerts > 0 && (
                         <span 
                           id="admin-security-badge-indicator"
@@ -450,7 +512,17 @@ function NavigationWrapper() {
                           : 'text-neutral-500 hover:text-neutral-200 border-transparent pl-3'
                       }`}
                     >
-                      <span>{tab.id === 'register' ? 'DAILY CHECK-IN' : tab.id === 'dashboard' ? 'CASH FLOW FEED' : tab.id === 'reports' ? 'AUDITS & EXPORTS' : 'STAFF & PUPIL REGISTRY'}</span>
+                      <span>
+                        {tab.id === 'register' 
+                          ? 'DAILY CHECK-IN' 
+                          : tab.id === 'termPayers' 
+                          ? 'TERM PAYERS STATUS' 
+                          : tab.id === 'dashboard' 
+                          ? 'CASH FLOW FEED' 
+                          : tab.id === 'reports' 
+                          ? 'AUDITS & EXPORTS' 
+                          : 'STAFF & PUPIL REGISTRY'}
+                      </span>
                       {tab.id === 'admin' && totalAdminAlerts > 0 && (
                         <span 
                           id="admin-security-badge-indicator-mobile"
@@ -588,6 +660,123 @@ function NavigationWrapper() {
           )}
         </AnimatePresence>
       )}
+
+      {/* Iframe Sandbox Print Warning Overlay Modal */}
+      <AnimatePresence>
+        {showPrintIframeWarning && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 bg-neutral-950/85 backdrop-blur-sm flex items-center justify-center p-4 font-sans no-print"
+            id="print-iframe-warning-modal"
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0, y: 15 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: 15 }}
+              className="relative w-full max-w-lg bg-neutral-900 border-4 border-amber-400 p-6 md:p-8 space-y-6 shadow-[8px_8px_0px_0px_rgba(251,191,36,0.15)] text-white flex flex-col"
+            >
+              {/* Header */}
+              <div className="flex justify-between items-start border-b border-neutral-800 pb-4">
+                <div className="flex items-start gap-3">
+                  <div className="p-2.5 bg-amber-400/10 border border-amber-400 text-amber-300 shrink-0">
+                    <Printer size={20} className="text-amber-400" />
+                  </div>
+                  <div>
+                    <span className="text-[9px] text-amber-400 font-mono tracking-widest font-black uppercase block font-bold">Security Alert</span>
+                    <h3 className="text-base font-black uppercase tracking-tight">Print Sandbox Restriction</h3>
+                    <p className="text-[11px] text-neutral-400 mt-1">
+                      Browser security blocks the print preview screen when running inside an interactive development frame.
+                    </p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => {
+                    setShowPrintIframeWarning(false);
+                    setCopiedUrl(false);
+                  }} 
+                  className="p-1 cursor-pointer text-neutral-400 hover:text-white transition-colors"
+                  title="Close Alert"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              {/* Steps Body */}
+              <div className="space-y-4 text-xs leading-relaxed text-neutral-300 font-medium">
+                <div className="bg-neutral-950 p-3.5 border border-neutral-800 rounded font-mono text-[11px] text-amber-300">
+                  ⚡ <strong>The Solution:</strong> You must open safety-secured tabs in a standard browser window to allow direct printing.
+                </div>
+
+                <div className="space-y-3">
+                  <div className="flex gap-2 items-start">
+                    <span className="w-5 h-5 rounded-full bg-amber-400/20 text-amber-400 border border-amber-400 flex items-center justify-center font-bold text-[10px] shrink-0 font-mono">1</span>
+                    <p className="pt-0.5">
+                      Look at the <strong>top-right corner</strong> of your AI Studio preview box and click the <strong>"Open App in New Tab"</strong> icon (external link ↗ symbol).
+                    </p>
+                  </div>
+
+                  <div className="flex gap-2 items-start">
+                    <span className="w-5 h-5 rounded-full bg-amber-400/20 text-amber-400 border border-amber-400 flex items-center justify-center font-bold text-[10px] shrink-0 font-mono">2</span>
+                    <div className="pt-0.5 space-y-2 flex-1">
+                      <p>
+                        Alternatively, copy this direct application link and paste it into some regular desktop web browser tab:
+                      </p>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          readOnly
+                          value={getSafeAppOrigin()}
+                          className="flex-1 bg-neutral-950 border border-neutral-800 px-3 py-1.5 font-mono text-[10px] text-neutral-300 select-all outline-none rounded"
+                        />
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(getSafeAppOrigin());
+                            setCopiedUrl(true);
+                            setTimeout(() => setCopiedUrl(false), 2000);
+                          }}
+                          className="px-3 bg-neutral-800 hover:bg-neutral-750 font-mono text-[9px] font-black uppercase tracking-wider border border-neutral-700 hover:text-white rounded transition-all shrink-0 cursor-pointer"
+                        >
+                          {copiedUrl ? "Copied!" : "Copy"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 items-start">
+                    <span className="w-5 h-5 rounded-full bg-amber-400/20 text-amber-400 border border-amber-400 flex items-center justify-center font-bold text-[10px] shrink-0 font-mono">3</span>
+                    <p className="pt-0.5">
+                      Once opened in the new browser tab, click the <strong>Print</strong> buttons again. Your receipts, ID cards, and files will print flawlessly!
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="border-t border-neutral-800 pt-4 flex gap-3">
+                <a
+                  href={getSafeAppOrigin()}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex-1 py-3 bg-amber-400 hover:bg-amber-300 text-black font-black uppercase text-xs tracking-widest transition-all cursor-pointer text-center font-mono flex items-center justify-center gap-2"
+                >
+                  Open in New Tab Now ↗
+                </a>
+                <button
+                  onClick={() => {
+                    setShowPrintIframeWarning(false);
+                    setCopiedUrl(false);
+                  }}
+                  className="px-5 py-3 bg-neutral-950 hover:bg-neutral-850 text-neutral-400 hover:text-white font-mono uppercase text-xs tracking-wider transition-colors border border-neutral-800 cursor-pointer"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

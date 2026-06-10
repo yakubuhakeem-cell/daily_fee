@@ -23,6 +23,7 @@ export const ClassRegister: React.FC = () => {
     bulkRecordPayments,
     currentUser,
     deletePayment,
+    deleteStudentPayments,
     terms,
     activeTerm,
     addTerm,
@@ -68,7 +69,7 @@ export const ClassRegister: React.FC = () => {
   const [scannerError, setScannerError] = useState<string | null>(null);
   const [qrFeedbacks, setQrFeedbacks] = useState<{ id: string; text: string; type: 'success' | 'warning' | 'error' }[]>([]);
   const [autoPayScanned, setAutoPayScanned] = useState(true);
-  const [scanHistoryList, setScanHistoryList] = useState<{ id: string; studentName: string; rollNumber: string; class: string; timestamp: string; statusText: string; success: boolean }[]>([]);
+  const [scanHistoryList, setScanHistoryList] = useState<{ id: string; studentId: string; studentName: string; rollNumber: string; class: string; timestamp: string; statusText: string; success: boolean }[]>([]);
   const lastScanTimeRef = React.useRef<{ code: string; time: number } | null>(null);
 
   const addQrFeedback = (text: string, type: 'success' | 'warning' | 'error') => {
@@ -98,15 +99,22 @@ export const ClassRegister: React.FC = () => {
     lastScanTimeRef.current = { code: trimmedText, time: now };
 
     let parsedText = trimmedText;
-    try {
-      const parsed = JSON.parse(trimmedText);
-      if (parsed.id) parsedText = String(parsed.id);
-      else if (parsed.rollNumber) parsedText = String(parsed.rollNumber);
-    } catch (e) {
-      if (trimmedText.includes('?id=')) {
-        const urlParams = new URLSearchParams(trimmedText.split('?')[1]);
-        const pId = urlParams.get('id');
-        if (pId) parsedText = pId;
+    if (trimmedText.startsWith('SAAKOCHECK:STUDENT:')) {
+      const parts = trimmedText.split(':');
+      if (parts[2]) {
+        parsedText = parts[2];
+      }
+    } else {
+      try {
+        const parsed = JSON.parse(trimmedText);
+        if (parsed.id) parsedText = String(parsed.id);
+        else if (parsed.rollNumber) parsedText = String(parsed.rollNumber);
+      } catch (e) {
+        if (trimmedText.includes('?id=')) {
+          const urlParams = new URLSearchParams(trimmedText.split('?')[1]);
+          const pId = urlParams.get('id');
+          if (pId) parsedText = pId;
+        }
       }
     }
 
@@ -129,6 +137,7 @@ export const ClassRegister: React.FC = () => {
       addQrFeedback(`⚠️ Pupil "${student.name}" is marked as inactive!`, 'warning');
       setScanHistoryList(prev => [{
         id: Math.random().toString(),
+        studentId: student.id,
         studentName: student.name,
         rollNumber: student.rollNumber,
         class: student.class,
@@ -146,6 +155,7 @@ export const ClassRegister: React.FC = () => {
       addQrFeedback(`⚠️ Already Registered: "${student.name}" (${student.class}) has checked in.`, 'warning');
       setScanHistoryList(prev => [{
         id: Math.random().toString(),
+        studentId: student.id,
         studentName: student.name,
         rollNumber: student.rollNumber,
         class: student.class,
@@ -164,6 +174,7 @@ export const ClassRegister: React.FC = () => {
       addQrFeedback(`✅ Checked in: "${student.name}" (Class: ${student.class}) • Fee GHC ${dailyRate.toFixed(2)} logged!`, 'success');
       setScanHistoryList(prev => [{
         id: Math.random().toString(),
+        studentId: student.id,
         studentName: student.name,
         rollNumber: student.rollNumber,
         class: student.class,
@@ -176,6 +187,7 @@ export const ClassRegister: React.FC = () => {
       addQrFeedback(`🔍 Identified: "${student.name}" (Class: ${student.class}). Ready to record GHC ${dailyRate.toFixed(2)}.`, 'success');
       setScanHistoryList(prev => [{
         id: Math.random().toString(),
+        studentId: student.id,
         studentName: student.name,
         rollNumber: student.rollNumber,
         class: student.class,
@@ -387,6 +399,12 @@ export const ClassRegister: React.FC = () => {
   const [historyStudent, setHistoryStudent] = useState<Student | null>(null);
   const [historyModalTab, setHistoryModalTab] = useState<'profile' | 'ledger' | 'print'>('profile');
   const [paymentToDelete, setPaymentToDelete] = useState<{ id: string; label: string; studentName: string } | null>(null);
+  const [showDeleteAllPaymentsConfirm, setShowDeleteAllPaymentsConfirm] = useState(false);
+  const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    setSelectedStudentIds([]);
+  }, [selectedClass, currentDate]);
 
   const isHoliday = useMemo(() => {
     return !!activeTerm?.publicHolidays?.includes(currentDate);
@@ -501,6 +519,17 @@ export const ClassRegister: React.FC = () => {
     const pastSchoolDays = activeTerm.schoolDays.filter(d => d < currentDate && !holidays.includes(d));
 
     students.forEach(student => {
+      if (student.paymentType === 'Term') {
+        const termFee = student.termFee || 350;
+        const studentPayments = payments.filter(p => p.studentId === student.id);
+        const totalPaid = studentPayments
+          .filter(p => !p.isAbsent)
+          .reduce((sum, p) => sum + p.amount, 0);
+        const totalDebt = Math.max(0, termFee - totalPaid);
+        map.set(student.id, { pastUnpaidDays: [], totalDebt });
+        return;
+      }
+
       const dailyRate = Math.max(0.01, 5.00 - (student.discount || 0));
       const studentPayments = payments.filter(p => p.studentId === student.id);
       
@@ -699,50 +728,7 @@ export const ClassRegister: React.FC = () => {
     // Get all raw payments of this student
     const studentRaw = payments.filter(p => p.studentId === historyStudent.id);
     
-    // Find all debt payments
-    const debtPayments = studentRaw.filter(p => p.id.endsWith('_debt'));
-    
-    // Map of cleared date -> settled daily amount, and a map of cleared date -> debt payment ID/notes
-    const clearedDatesMap = new Map<string, { settledAmount: number; debtRef: string; datePaid: string }>();
-    
-    debtPayments.forEach(dp => {
-      const dates = dp.clearedDates || [];
-      if (dates.length > 0) {
-        const dailyPortion = dp.amount / dates.length;
-        dates.forEach(d => {
-          clearedDatesMap.set(d, {
-            settledAmount: dailyPortion,
-            debtRef: dp.id,
-            datePaid: dp.date
-          });
-        });
-      }
-    });
-
-    const displayList = studentRaw.map(p => {
-      // If it is the joint debt payment itself, display with amount: 0 (and a descriptive label)
-      // to avoid double-accounting, since its amount has been fully distributed back to the cleared dates!
-      if (p.id.endsWith('_debt')) {
-        return {
-          ...p,
-          amount: 0,
-          notes: p.notes ? `${p.notes} [Arrears settlement: GHC ${p.amount.toFixed(2)} distributed to historical dates]` : undefined
-        };
-      }
-      
-      const clearedInfo = clearedDatesMap.get(p.date);
-      if (clearedInfo) {
-        return {
-          ...p,
-          amount: clearedInfo.settledAmount,
-          notes: `Arrears Cleared (GHC ${clearedInfo.settledAmount.toFixed(2)} portion paid/settled on ${clearedInfo.datePaid})`
-        };
-      }
-      
-      return p;
-    });
-
-    return displayList.sort((a, b) => {
+    return studentRaw.sort((a, b) => {
       if (a.date !== b.date) {
         return b.date.localeCompare(a.date);
       }
@@ -1519,6 +1505,62 @@ export const ClassRegister: React.FC = () => {
           </div>
         ) : (
           <div className="divide-y-2 divide-neutral-800/80">
+            {/* SELECTION AND BULK ACTIONS CONTROL ROW */}
+            <div className="bg-neutral-950 px-6 py-4 border-b border-neutral-800 flex flex-col sm:flex-row justify-between items-center gap-4">
+              <div className="flex items-center gap-3 w-full sm:w-auto">
+                <label className="flex items-center gap-2.5 cursor-pointer select-none font-mono text-xs font-black uppercase text-neutral-300 hover:text-white">
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4 bg-neutral-900 border-2 border-neutral-700 checked:bg-amber-400 checked:border-amber-400 rounded-none focus:ring-0 text-amber-400 cursor-pointer accent-amber-400"
+                    checked={filteredStudents.length > 0 && filteredStudents.every(s => selectedStudentIds.includes(s.id))}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        const allIds = filteredStudents.map(s => s.id);
+                        setSelectedStudentIds(prev => {
+                          const otherIds = prev.filter(id => !allIds.includes(id));
+                          return [...otherIds, ...allIds];
+                        });
+                      } else {
+                        const allIds = filteredStudents.map(s => s.id);
+                        setSelectedStudentIds(prev => prev.filter(id => !allIds.includes(id)));
+                      }
+                    }}
+                  />
+                  <span>Select All ({filteredStudents.length})</span>
+                </label>
+                {selectedStudentIds.length > 0 && (
+                  <span className="text-[10px] font-mono font-black bg-amber-400/10 border border-amber-400/20 text-amber-300 px-2.5 py-1">
+                    {selectedStudentIds.length} SELECTED
+                  </span>
+                )}
+              </div>
+
+              {selectedStudentIds.length > 0 && (
+                <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      bulkRecordPayments(selectedStudentIds, true);
+                      showToast(`Successfully logged daily payments for ${selectedStudentIds.length} selected pupils!`);
+                      setSelectedStudentIds([]);
+                    }}
+                    disabled={isHoliday}
+                    className="w-full sm:w-auto text-[10px] font-mono font-black bg-amber-400 hover:bg-amber-300 text-black py-2.5 px-4 transition-colors flex items-center justify-center gap-1.5 uppercase tracking-wider disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    <CheckSquare size={13} className="stroke-[2.5]" />
+                    <span>Mark Selected Paid</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedStudentIds([])}
+                    className="text-[10px] font-mono font-bold hover:text-white text-neutral-400 uppercase tracking-widest cursor-pointer whitespace-nowrap"
+                  >
+                    Clear Selection
+                  </button>
+                </div>
+              )}
+            </div>
+
             {/* INFORMATIVE INTERACTIVE PATHWAY BANNER */}
             <div className="bg-neutral-950/40 p-4 border-b border-neutral-800/60 text-[10px] font-mono font-black text-amber-400 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 select-none">
               <span className="flex items-center gap-2 uppercase tracking-wide">
@@ -1572,6 +1614,20 @@ export const ClassRegister: React.FC = () => {
                   }  scroll-mt-24 ${hasArrearsAtRisk ? 'opacity-60 hover:opacity-100 border-l-4 border-l-red-500 bg-red-950/[0.015]' : ''}`}
                 >
                   <div className="flex items-center gap-4 w-full sm:w-auto">
+                    {/* Checkbox for selection */}
+                    <input
+                      type="checkbox"
+                      className="w-4 h-4 bg-neutral-900 border-2 border-neutral-800 checked:bg-amber-400 checked:border-amber-400 rounded-none focus:ring-0 text-amber-400 cursor-pointer accent-amber-400 shrink-0"
+                      checked={selectedStudentIds.includes(student.id)}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedStudentIds(prev => [...prev, student.id]);
+                        } else {
+                          setSelectedStudentIds(prev => prev.filter(id => id !== student.id));
+                        }
+                      }}
+                    />
+                    
                     {/* Student Avatar Widget */}
                     <div className="relative group/avatar shrink-0 w-12 h-12">
                       {student.photoUrl ? (
@@ -2225,9 +2281,23 @@ export const ClassRegister: React.FC = () => {
                     </div>
                   ) : (
                     scanHistoryList.map(item => (
-                      <div key={item.id} className="p-3 hover:bg-neutral-900/40 transition-colors space-y-1 font-mono">
+                      <div 
+                        key={item.id} 
+                        className="p-3 hover:bg-neutral-850/60 cursor-pointer transition-all space-y-1 font-mono border-l-2 border-transparent hover:border-amber-400 group"
+                        title="Click to view pupil daily logs & history"
+                        onClick={() => {
+                          const targetStudent = students.find(s => s.id === item.studentId);
+                          if (targetStudent) {
+                            setIsQrModalOpen(false);
+                            setHistoryStudent(targetStudent);
+                            showToast(`Displaying transaction ledger logs for ${targetStudent.name}`);
+                          } else {
+                            showToast("Student profile could not be loaded.");
+                          }
+                        }}
+                      >
                         <div className="flex justify-between items-start text-[9.5px]">
-                          <span className="font-mono font-black uppercase text-white truncate max-w-[130px]" title={item.studentName}>{item.studentName}</span>
+                          <span className="font-mono font-black uppercase text-white truncate max-w-[130px] group-hover:text-amber-400 transition-colors" title={item.studentName}>{item.studentName}</span>
                           <span className="text-[8.5px] font-mono text-neutral-500 font-bold bg-neutral-900 px-1 py-0.5 rounded-xs">{item.timestamp}</span>
                         </div>
                         <div className="flex justify-between items-center text-[8.5px] font-mono">
@@ -2235,6 +2305,9 @@ export const ClassRegister: React.FC = () => {
                           <span className={`font-black uppercase tracking-wider ${item.success ? 'text-emerald-400' : 'text-amber-500'}`}>
                             {item.statusText}
                           </span>
+                        </div>
+                        <div className="text-[7.5px] text-amber-500/55 uppercase font-bold tracking-widest pt-0.5 text-right font-sans opacity-0 group-hover:opacity-100 transition-opacity">
+                          View Student History Ledger ↗
                         </div>
                       </div>
                     ))
@@ -3046,9 +3119,22 @@ export const ClassRegister: React.FC = () => {
 
                       {/* List of recent payments */}
                       <div className="space-y-3">
-                        <h4 className="text-[10px] font-black uppercase tracking-widest text-neutral-400 font-mono">
-                          Recent Transaction History Logs
-                        </h4>
+                        <div className="flex justify-between items-center bg-neutral-900/40 p-1 border-b border-neutral-850">
+                          <h4 className="text-[10px] font-black uppercase tracking-widest text-neutral-400 font-mono">
+                            Recent Transaction History Logs
+                          </h4>
+                          {studentPayments.length > 0 && (currentUser?.role === 'Administrator' || currentUser?.role === 'Headmaster' || currentUser?.role === 'Accountant') && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowDeleteAllPaymentsConfirm(true);
+                              }}
+                              className="px-2.5 py-1 text-[9px] font-mono font-black uppercase text-red-500 hover:text-red-400 border border-red-500/30 hover:border-red-500/60 bg-red-950/10 hover:bg-red-950/20 transition-all cursor-pointer inline-flex items-center gap-1 shrink-0"
+                            >
+                              <Trash2 size={11} /> Delete All Logs
+                            </button>
+                          )}
+                        </div>
 
                         {studentPayments.length === 0 ? (
                           <div className="text-center py-8 bg-neutral-950 border border-neutral-850 text-neutral-500 uppercase tracking-wider text-[11px] font-bold">
@@ -3126,8 +3212,12 @@ export const ClassRegister: React.FC = () => {
                             </div>
                             
                             <div className="text-right space-y-1 font-mono">
-                              <span className="text-[9px] md:text-[11px] font-black uppercase px-2 py-0.5 bg-black text-white inline-block">
-                                FEE RECEIPT DOCKET
+                              <span className={`text-[9px] md:text-[11px] font-black uppercase px-2 py-0.5 inline-block ${
+                                historyStudent.paymentType === 'Term'
+                                  ? 'bg-amber-400 text-black border border-amber-600'
+                                  : 'bg-black text-white'
+                              }`}>
+                                {historyStudent.paymentType === 'Term' ? '👑 GOLDEN TERM FEE RECEIPT' : 'FEE RECEIPT DOCKET'}
                               </span>
                               <div className="text-[7.5px] text-neutral-500 uppercase font-black mt-1">
                                 REF: SHC-ST-{currentDate.replace(/-/g, '')}-{historyStudent.id.substring(0,6).toUpperCase()}
@@ -3141,23 +3231,44 @@ export const ClassRegister: React.FC = () => {
                               <span className="text-[8px] font-black uppercase text-neutral-505 block">STUDENT BENEFICIARY</span>
                               <div className="text-[11px] font-black text-black uppercase">{historyStudent.name}</div>
                               <div className="font-mono mt-0.5 text-neutral-700 font-bold">Roll / ID: {historyStudent.rollNumber || 'SHC-' + historyStudent.id.substring(0, 5).toUpperCase()}</div>
-                              <div className="font-bold mt-0.5">Cohort Group: {historyStudent.class} ({historyStudent.category})</div>
+                              <div className="font-bold mt-0.5">Cohort Group: {historyStudent.class} ({historyStudent.category}) {historyStudent.paymentType === 'Term' && <span className="text-[8px] font-black text-amber-600 bg-amber-50 border border-amber-300 px-1.5 py-0.5 font-sans uppercase shrink-0 rounded-sm ml-1">Term Scheme</span>}</div>
                             </div>
 
                             <div className="border-t md:border-t-0 md:border-l pt-3 md:pt-0 md:pl-4 border-neutral-200 font-mono text-[9px]">
                               <span className="text-[8px] font-black uppercase text-neutral-505 block font-sans">FINANCIAL BALANCES</span>
-                              <div className="flex justify-between font-bold text-neutral-800">
-                                <span>Total Deposited:</span>
-                                <span className="text-emerald-700 font-black">GHC {totalPaidAccumulated.toFixed(2)}</span>
-                              </div>
-                              <div className="flex justify-between font-bold text-neutral-800">
-                                <span>Total Arrears (Debt):</span>
-                                <span className="text-red-700 font-black">GHC {totalArrearsGhc.toFixed(2)} {unpaidDaysList.length > 0 ? `(${unpaidDaysList.length} days)` : ''}</span>
-                              </div>
-                              <div className="flex justify-between font-bold text-neutral-800">
-                                <span>Prepaid Balance:</span>
-                                <span className="text-blue-700 font-black font-sans bg-transparent">GHC {histSchoolOwes.toFixed(2)}</span>
-                              </div>
+                              {historyStudent.paymentType === 'Term' ? (
+                                <>
+                                  <div className="flex justify-between font-bold text-neutral-800">
+                                    <span>Fixed Term Fee:</span>
+                                    <span className="text-black font-black">GHC {(historyStudent.termFee || 350).toFixed(2)}</span>
+                                  </div>
+                                  <div className="flex justify-between font-bold text-neutral-800">
+                                    <span>Total Amount Paid:</span>
+                                    <span className="text-emerald-700 font-black">GHC {totalPaidAccumulated.toFixed(2)}</span>
+                                  </div>
+                                  <div className="flex justify-between font-bold text-neutral-800 border-t border-dashed border-neutral-300 pt-1 mt-1">
+                                    <span>Term Balance Due:</span>
+                                    <span className={`${(historyStudent.termFee || 350) - totalPaidAccumulated > 0 ? 'text-red-700 font-black' : 'text-emerald-700 font-extrabold'}`}>
+                                      GHC {Math.max(0, (historyStudent.termFee || 350) - totalPaidAccumulated).toFixed(2)}
+                                    </span>
+                                  </div>
+                                </>
+                              ) : (
+                                <>
+                                  <div className="flex justify-between font-bold text-neutral-800">
+                                    <span>Total Deposited:</span>
+                                    <span className="text-emerald-700 font-black">GHC {totalPaidAccumulated.toFixed(2)}</span>
+                                  </div>
+                                  <div className="flex justify-between font-bold text-neutral-800">
+                                    <span>Total Arrears (Debt):</span>
+                                    <span className="text-red-700 font-black">GHC {totalArrearsGhc.toFixed(2)} {unpaidDaysList.length > 0 ? `(${unpaidDaysList.length} days)` : ''}</span>
+                                  </div>
+                                  <div className="flex justify-between font-bold text-neutral-800">
+                                    <span>Prepaid Balance:</span>
+                                    <span className="text-blue-700 font-black font-sans bg-transparent">GHC {histSchoolOwes.toFixed(2)}</span>
+                                  </div>
+                                </>
+                              )}
                             </div>
 
                             <div className="text-right border-t md:border-t-0 md:border-l pt-3 md:pt-0 md:pl-4 border-neutral-200">
@@ -3208,43 +3319,65 @@ export const ClassRegister: React.FC = () => {
 
                             {/* Arrears deficit log */}
                             <div className="space-y-3 md:border-l md:pl-6 border-neutral-200">
-                              <span className="text-[8.5px] font-black uppercase tracking-wider text-red-700 font-mono border-b border-red-200 pb-1.5 block">
-                                ❌ GENERAL OUTSTANDING ARREARS ({unpaidDaysList.length} d)
-                              </span>
-                              {unpaidDaysList.length === 0 ? (
-                                <div className="p-3 border border-emerald-200 bg-emerald-50/50 text-emerald-800 text-[9px] font-bold uppercase tracking-wide flex items-center justify-center gap-1.5 rounded-sm">
-                                  <span>Student has zero deficit. Account fully cleared!</span>
-                                </div>
-                              ) : (
-                                <div className="space-y-2">
-                                  <p className="text-[8px] text-neutral-505 tracking-normal font-medium leading-relaxed">
-                                    The following scheduled core school sessions are marked as overdue. Standard registration rate GHC 5.00 applies.
+                              {historyStudent.paymentType === 'Term' ? (
+                                <div className="p-4 border-2 border-amber-300 bg-amber-50/50 text-neutral-900 rounded-sm space-y-2">
+                                  <span className="text-[9px] font-black uppercase text-amber-800 block font-mono">👑 OFFICIAL SCHOLASTIC TERM PASSPORT</span>
+                                  <p className="text-[8px] leading-relaxed font-bold uppercase font-mono text-amber-955 bg-transparent font-sans">
+                                    Pupil is fully registered under the custom Term Payer Scheme. 
+                                    He holds an all-access gate clearance pass. 
+                                    Subject to the flat GHC {(historyStudent.termFee || 350).toFixed(2)} rate, unaffected by absences, school holidays, or missing sessions.
                                   </p>
-                                  <table className="w-full text-[9px]">
-                                    <thead>
-                                      <tr className="border-b border-neutral-300 text-left uppercase text-neutral-400 font-bold font-mono">
-                                        <th className="py-1">ARREARS DATE</th>
-                                        <th className="py-1 text-right">BALANCE DUE</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-neutral-100 font-mono text-red-700">
-                                      {unpaidDaysList.slice(0, 8).map((day, idx) => {
-                                        const cumulativeDues = (idx + 1) * finalDailyFee;
-                                        return (
-                                          <tr key={day} className="font-semibold">
-                                            <td className="py-1 font-mono">{day}</td>
-                                            <td className="py-1 text-right font-bold">GHC {cumulativeDues.toFixed(2)}</td>
-                                          </tr>
-                                        );
-                                      })}
-                                    </tbody>
-                                  </table>
-                                  {unpaidDaysList.length > 8 && (
-                                    <p className="text-[8px] font-mono text-red-500 text-center italic mt-1 pb-1">
-                                      * Showing first 8 arrears dockets. Statement records total {unpaidDaysList.length} d.
-                                    </p>
+                                  {totalPaidAccumulated >= (historyStudent.termFee || 350) ? (
+                                    <div className="text-[8.5px] font-black text-emerald-800 flex items-center gap-1 font-mono">
+                                      <span>★ ACADEMIC TERM DOCKET FULLY CLEARED AND SETTLED</span>
+                                    </div>
+                                  ) : (
+                                    <div className="text-[8.5px] font-black text-amber-700 font-mono">
+                                      ★ GHC {Math.max(0, (historyStudent.termFee || 350) - totalPaidAccumulated).toFixed(2)} outstanding term balance being cleared incrementally.
+                                    </div>
                                   )}
                                 </div>
+                              ) : (
+                                <>
+                                  <span className="text-[8.5px] font-black uppercase tracking-wider text-red-700 font-mono border-b border-red-200 pb-1.5 block">
+                                    ❌ GENERAL OUTSTANDING ARREARS ({unpaidDaysList.length} d)
+                                  </span>
+                                  {unpaidDaysList.length === 0 ? (
+                                    <div className="p-3 border border-emerald-200 bg-emerald-50/50 text-emerald-800 text-[9px] font-bold uppercase tracking-wide flex items-center justify-center gap-1.5 rounded-sm">
+                                      <span>Student has zero deficit. Account fully cleared!</span>
+                                    </div>
+                                  ) : (
+                                    <div className="space-y-2">
+                                      <p className="text-[8px] text-neutral-505 tracking-normal font-medium leading-relaxed font-sans">
+                                        The following scheduled core school sessions are marked as overdue. Standard registration rate GHC 5.00 applies.
+                                      </p>
+                                      <table className="w-full text-[9px]">
+                                        <thead>
+                                          <tr className="border-b border-neutral-300 text-left uppercase text-neutral-400 font-bold font-mono">
+                                            <th className="py-1">ARREARS DATE</th>
+                                            <th className="py-1 text-right">BALANCE DUE</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-neutral-100 font-mono text-red-700">
+                                          {unpaidDaysList.slice(0, 8).map((day, idx) => {
+                                            const cumulativeDues = (idx + 1) * finalDailyFee;
+                                            return (
+                                              <tr key={day} className="font-semibold">
+                                                <td className="py-1 font-mono">{day}</td>
+                                                <td className="py-1 text-right font-bold">GHC {cumulativeDues.toFixed(2)}</td>
+                                              </tr>
+                                            );
+                                          })}
+                                        </tbody>
+                                      </table>
+                                      {unpaidDaysList.length > 8 && (
+                                        <p className="text-[8px] font-mono text-red-500 text-center italic mt-1 pb-1">
+                                          * Showing first 8 arrears dockets. Statement records total {unpaidDaysList.length} d.
+                                        </p>
+                                      )}
+                                    </div>
+                                  )}
+                                </>
                               )}
                             </div>
                           </div>
@@ -3319,8 +3452,12 @@ export const ClassRegister: React.FC = () => {
                         </div>
                         
                         <div className="text-right space-y-1 font-mono">
-                          <span className="text-[11px] font-black uppercase px-3 py-1 bg-black text-white inline-block">
-                            FEE RECEIPT DOCKET
+                          <span className={`text-[11px] font-black uppercase px-3 py-1 inline-block ${
+                            historyStudent.paymentType === 'Term'
+                              ? 'bg-amber-400 text-black border border-amber-600'
+                              : 'bg-black text-white'
+                          }`}>
+                            {historyStudent.paymentType === 'Term' ? '👑 GOLDEN TERM FEE RECEIPT' : 'FEE RECEIPT DOCKET'}
                           </span>
                           <div className="text-[8.5px] text-neutral-600 uppercase font-black mt-2">
                             STATEMENT REF: SHC-ST-{currentDate.replace(/-/g, '')}-{historyStudent.id.substring(0,6).toUpperCase()}
@@ -3334,23 +3471,44 @@ export const ClassRegister: React.FC = () => {
                           <span className="text-[8.5px] font-black uppercase text-neutral-500 block">STUDENT BENEFICIARY</span>
                           <div className="text-xs font-black text-black uppercase">{historyStudent.name}</div>
                           <div className="font-mono mt-0.5 text-neutral-750 font-bold">Roll / ID: {historyStudent.rollNumber || 'SHC-' + historyStudent.id.substring(0, 5).toUpperCase()}</div>
-                          <div className="font-bold mt-0.5">Cohort Group: {historyStudent.class} ({historyStudent.category})</div>
+                          <div className="font-bold mt-0.5">Cohort Group: {historyStudent.class} ({historyStudent.category}) {historyStudent.paymentType === 'Term' && <span className="text-[8px] font-black text-amber-600 bg-amber-50 border border-amber-300 px-1 py-0.5 font-sans uppercase shrink-0 rounded-sm ml-1">Term Scheme</span>}</div>
                         </div>
 
                         <div className="border-l pl-6 border-neutral-200 font-mono">
                           <span className="text-[8.5px] font-black uppercase text-neutral-505 block font-sans">FINANCIAL BALANCES</span>
-                          <div className="flex justify-between mt-1 font-bold">
-                            <span className="text-neutral-500 uppercase text-[9px] font-sans">Total Deposited:</span>
-                            <span className="text-emerald-700 font-black">GHC {totalPaidAccumulated.toFixed(2)}</span>
-                          </div>
-                          <div className="flex justify-between mt-0.5 font-bold">
-                            <span className="text-neutral-500 uppercase text-[9px] font-sans">Total Arrears (Debt):</span>
-                            <span className="text-red-700 font-black">GHC {totalArrearsGhc.toFixed(2)} {unpaidDaysList.length > 0 ? `(${unpaidDaysList.length} days)` : ''}</span>
-                          </div>
-                          <div className="flex justify-between mt-0.5 font-bold">
-                            <span className="text-neutral-500 uppercase text-[9px] font-sans">Prepaid Balance:</span>
-                            <span className="text-blue-700 font-black">GHC {histSchoolOwes.toFixed(2)}</span>
-                          </div>
+                          {historyStudent.paymentType === 'Term' ? (
+                            <>
+                              <div className="flex justify-between mt-1 font-bold">
+                                <span className="text-neutral-550 uppercase text-[9px] font-sans">Fixed Term Charge:</span>
+                                <span className="text-black font-black">GHC {(historyStudent.termFee || 350).toFixed(2)}</span>
+                              </div>
+                              <div className="flex justify-between mt-0.5 font-bold">
+                                <span className="text-neutral-550 uppercase text-[9px] font-sans">Total Amount Paid:</span>
+                                <span className="text-emerald-700 font-black">GHC {totalPaidAccumulated.toFixed(2)}</span>
+                              </div>
+                              <div className="flex justify-between mt-0.5 font-bold border-t border-dashed border-neutral-300 pt-1">
+                                <span className="text-neutral-550 uppercase text-[9px] font-sans">Term Balance Due:</span>
+                                <span className={`${(historyStudent.termFee || 350) - totalPaidAccumulated > 0 ? 'text-red-700 font-black' : 'text-emerald-700 font-extrabold'}`}>
+                                  GHC {Math.max(0, (historyStudent.termFee || 350) - totalPaidAccumulated).toFixed(2)}
+                                </span>
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div className="flex justify-between mt-1 font-bold">
+                                <span className="text-neutral-500 uppercase text-[9px] font-sans">Total Deposited:</span>
+                                <span className="text-emerald-700 font-black">GHC {totalPaidAccumulated.toFixed(2)}</span>
+                              </div>
+                              <div className="flex justify-between mt-0.5 font-bold">
+                                <span className="text-neutral-500 uppercase text-[9px] font-sans">Total Arrears (Debt):</span>
+                                <span className="text-red-700 font-black">GHC {totalArrearsGhc.toFixed(2)} {unpaidDaysList.length > 0 ? `(${unpaidDaysList.length} days)` : ''}</span>
+                              </div>
+                              <div className="flex justify-between mt-0.5 font-bold">
+                                <span className="text-neutral-500 uppercase text-[9px] font-sans">Prepaid Balance:</span>
+                                <span className="text-blue-700 font-black">GHC {histSchoolOwes.toFixed(2)}</span>
+                              </div>
+                            </>
+                          )}
                         </div>
 
                         <div className="text-right border-l pl-6 border-neutral-200 font-sans">
@@ -3396,41 +3554,63 @@ export const ClassRegister: React.FC = () => {
 
                         {/* Arrears / Missing Fees Days List */}
                         <div className="space-y-3 border-l pl-8 border-neutral-200">
-                          <span className="text-[9px] font-black uppercase tracking-wider text-red-700 font-mono border-b border-red-200 pb-1.5 block">
-                            ❌ OUTSTANDING ARREARS DAYS ({unpaidDaysList.length} d)
-                          </span>
-                          {unpaidDaysList.length === 0 ? (
-                            <div className="p-4 border border-emerald-200 bg-emerald-50/50 text-emerald-800 text-[10px] font-bold uppercase tracking-wide flex items-center gap-1.5 rounded-xs font-sans">
-                              <Check size={12} className="text-emerald-600 animate-none shrink-0" />
-                              <span>Student is fully cleared. Zero debt!</span>
+                          {historyStudent.paymentType === 'Term' ? (
+                            <div className="p-4 border-2 border-amber-300 bg-amber-50/50 text-neutral-900 rounded-sm space-y-2 font-sans">
+                              <span className="text-[10px] font-black uppercase text-amber-800 block font-mono">👑 OFFICIAL SCHOLASTIC TERM PASSPORT</span>
+                              <p className="text-[9px] leading-relaxed font-bold uppercase font-sans text-neutral-800">
+                                Pupil is fully registered under the custom Term Payer Scheme. 
+                                He holds an all-access gate clearance pass. 
+                                Subject to the flat GHC {(historyStudent.termFee || 350).toFixed(2)} rate, unaffected by absences, school holidays, or missing sessions.
+                              </p>
+                              {totalPaidAccumulated >= (historyStudent.termFee || 350) ? (
+                                <div className="text-[9px] font-black text-emerald-800 flex items-center gap-1 font-mono">
+                                  <span>★ ACADEMIC TERM DOCKET FULLY CLEARED AND SETTLED</span>
+                                </div>
+                              ) : (
+                                <div className="text-[9px] font-black text-amber-700 font-mono">
+                                  ★ GHC {Math.max(0, (historyStudent.termFee || 350) - totalPaidAccumulated).toFixed(2)} outstanding term balance being cleared incrementally.
+                                </div>
+                              )}
                             </div>
                           ) : (
-                            <div className="space-y-2">
-                              <p className="text-[9px] text-neutral-500 font-medium leading-relaxed font-sans">
-                                The following scheduled school days have missing fee check-ins. Daily rate of <strong>GHC {finalDailyFee.toFixed(2)}</strong> applies per school day.
-                              </p>
-                              <table className="w-full text-[9.5px]">
-                                <thead>
-                                  <tr className="border-b border-neutral-300 text-left uppercase text-neutral-505 font-bold font-mono">
-                                    <th className="py-1">ARREARS DATE</th>
-                                    <th className="py-1">DAILY FEE</th>
-                                    <th className="py-1 text-right font-normal">BALANCE DUE</th>
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-neutral-100 font-mono text-red-700">
-                                  {unpaidDaysList.map((day, idx) => {
-                                    const cumulativeDues = (idx + 1) * finalDailyFee;
-                                    return (
-                                      <tr key={day} className="font-semibold">
-                                        <td className="py-1.5 font-mono">{day}</td>
-                                        <td className="py-1.5 font-mono">GHC {finalDailyFee.toFixed(2)}</td>
-                                        <td className="py-1.5 text-right font-bold font-mono">GHC {cumulativeDues.toFixed(2)}</td>
+                            <>
+                              <span className="text-[9px] font-black uppercase tracking-wider text-red-700 font-mono border-b border-red-200 pb-1.5 block">
+                                ❌ OUTSTANDING ARREARS DAYS ({unpaidDaysList.length} d)
+                              </span>
+                              {unpaidDaysList.length === 0 ? (
+                                <div className="p-4 border border-emerald-200 bg-emerald-50/50 text-emerald-800 text-[10px] font-bold uppercase tracking-wide flex items-center gap-1.5 rounded-xs font-sans">
+                                  <Check size={12} className="text-emerald-600 animate-none shrink-0" />
+                                  <span>Student is fully cleared. Zero debt!</span>
+                                </div>
+                              ) : (
+                                <div className="space-y-2">
+                                  <p className="text-[9px] text-neutral-500 font-medium leading-relaxed font-sans">
+                                    The following scheduled school days have missing fee check-ins. Daily rate of <strong>GHC {finalDailyFee.toFixed(2)}</strong> applies per school day.
+                                  </p>
+                                  <table className="w-full text-[9.5px]">
+                                    <thead>
+                                      <tr className="border-b border-neutral-300 text-left uppercase text-neutral-505 font-bold font-mono">
+                                        <th className="py-1">ARREARS DATE</th>
+                                        <th className="py-1">DAILY FEE</th>
+                                        <th className="py-1 text-right font-normal">BALANCE DUE</th>
                                       </tr>
-                                    );
-                                  })}
-                                </tbody>
-                              </table>
-                            </div>
+                                    </thead>
+                                    <tbody className="divide-y divide-neutral-100 font-mono text-red-700">
+                                      {unpaidDaysList.map((day, idx) => {
+                                        const cumulativeDues = (idx + 1) * finalDailyFee;
+                                        return (
+                                          <tr key={day} className="font-semibold">
+                                            <td className="py-1.5 font-mono">{day}</td>
+                                            <td className="py-1.5 font-mono">GHC {finalDailyFee.toFixed(2)}</td>
+                                            <td className="py-1.5 text-right font-bold font-mono">GHC {cumulativeDues.toFixed(2)}</td>
+                                          </tr>
+                                        );
+                                      })}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              )}
+                            </>
                           )}
                         </div>
                       </div>
@@ -3544,6 +3724,64 @@ export const ClassRegister: React.FC = () => {
                 className="w-1/2 text-xs bg-red-650 hover:bg-red-650/80 border-2 border-red-700 text-white py-3 font-black uppercase tracking-widest transition-colors cursor-pointer"
               >
                 Yes, Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TRANSACTION BULK DELETION CONFIRMATION MODAL OVERLAY */}
+      {showDeleteAllPaymentsConfirm && historyStudent && (
+        <div className="fixed inset-0 bg-neutral-950/90 backdrop-blur-md flex items-center justify-center p-4 z-55" style={{ zIndex: 101 }}>
+          <div className="bg-neutral-900 border-4 border-red-650 max-w-sm w-full p-8 shadow-[8px_8px_0px_0px_#dc2626] space-y-6">
+            <div className="flex items-center gap-3 pb-3 border-b-2 border-neutral-850 text-red-500">
+              <Trash2 size={22} className="stroke-[2.5]" />
+              <h3 className="text-sm font-black uppercase tracking-widest text-white">Purge All Logs</h3>
+            </div>
+
+            <div className="space-y-4">
+              <p className="text-xs text-neutral-300 leading-relaxed font-bold font-sans">
+                Are you absolutely sure you want to delete <span className="text-red-500 underline decoration-2">all payment and attendance logs</span> for this student? This will completely clear their transaction record history.
+              </p>
+              
+              <div className="bg-neutral-950 p-4 border border-neutral-800 space-y-2 font-mono text-xs">
+                <div className="flex justify-between">
+                  <span className="text-neutral-500 uppercase font-black">Student Name:</span>
+                  <span className="text-white font-black uppercase text-right truncate pl-2">{historyStudent.name}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-neutral-500 uppercase font-black">Roll / ID:</span>
+                  <span className="text-amber-400 font-bold">{historyStudent.rollNumber || 'SHC-' + historyStudent.id.substring(0, 5).toUpperCase()}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-neutral-500 uppercase font-black">Total Logs:</span>
+                  <span className="text-white font-bold">{payments.filter(p => p.studentId === historyStudent.id).length} Entries</span>
+                </div>
+              </div>
+
+              <p className="text-[10px] text-neutral-500 font-bold uppercase leading-normal font-sans">
+                This action is irreversible and can result in significant changes to their outstanding financial balance status.
+              </p>
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowDeleteAllPaymentsConfirm(false)}
+                className="w-1/2 text-xs bg-neutral-950 border-2 border-neutral-800 hover:border-neutral-600 text-neutral-400 py-3 font-black uppercase tracking-widest transition-colors cursor-pointer font-mono"
+              >
+                No, Keep
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  deleteStudentPayments(historyStudent.id);
+                  showToast(`All payment records for ${historyStudent.name} deleted successfully.`);
+                  setShowDeleteAllPaymentsConfirm(false);
+                }}
+                className="w-1/2 text-xs bg-red-650 hover:bg-red-650/80 border-2 border-red-700 text-white py-3 font-black uppercase tracking-widest transition-colors cursor-pointer font-mono"
+              >
+                Yes, Purge
               </button>
             </div>
           </div>

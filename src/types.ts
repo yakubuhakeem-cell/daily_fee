@@ -21,6 +21,8 @@ export interface Student {
   photoUrl?: string;
   discount?: number; // Optional daily check-in discount amount (0.00 to 5.00)
   gender?: 'Male' | 'Female';
+  paymentType?: 'Daily' | 'Term'; // Billing calculation model: daily (default) vs static term subscription
+  termFee?: number; // Fixed fee for entire school term for Term Payer (e.g. 350.00 GHC)
 }
 
 export interface PaymentHistoryEntry {

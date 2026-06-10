@@ -6,7 +6,7 @@
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { StudentClass, Student, UserRole } from '../types';
-import { Plus, UserPlus, Trash2, Edit2, ShieldAlert, Check, X, ToggleLeft, ToggleRight, Database, Server, RefreshCw, Copy, Share2, Users, BellRing, MessageSquareCode, UserCheck, Camera, Upload, Search } from 'lucide-react';
+import { Plus, UserPlus, Trash2, Edit2, ShieldAlert, Check, X, ToggleLeft, ToggleRight, Database, Server, RefreshCw, Copy, Share2, Users, BellRing, MessageSquareCode, UserCheck, Camera, Upload, Search, QrCode, Printer, Contact, Award } from 'lucide-react';
 import { getClassCategory } from '../initialData';
 import { AdjustmentsTab } from './AdjustmentsTab';
 
@@ -40,6 +40,7 @@ export const AdminPanel: React.FC = () => {
     adjustPayment,
     resetData,
     purgeDeactivatedStudents,
+    promoteAllStudents,
     backups,
     createBackup,
     restoreBackup,
@@ -62,6 +63,24 @@ export const AdminPanel: React.FC = () => {
   const [backupLabel, setBackupLabel] = useState('');
   const [showRestoreConfirmId, setShowRestoreConfirmId] = useState<string | null>(null);
   const [showBackupPurgeConfirm, setShowBackupPurgeConfirm] = useState(false);
+  const [selectedIdCardStudent, setSelectedIdCardStudent] = useState<Student | null>(null);
+  const [showPromotionModal, setShowPromotionModal] = useState(false);
+  const [promotionConfirmedText, setPromotionConfirmedText] = useState('');
+
+  const getSafeOrigin = () => {
+    try {
+      if (window.location.origin && window.location.origin !== 'null') {
+        return window.location.origin;
+      }
+      const parsed = new URL(window.location.href);
+      if (parsed.origin && parsed.origin !== 'null') {
+        return parsed.origin;
+      }
+    } catch (e) {
+      console.warn("Unable to parse origin, falling back to empty string", e);
+    }
+    return '';
+  };
 
   // Filter students based on state (active, inactive, or all) and search query
   const filteredStudentsForList = useMemo(() => {
@@ -110,14 +129,15 @@ export const AdminPanel: React.FC = () => {
   // Find all school days up to currentDate
   const validSchoolDays = useMemo(() => {
     if (!activeTerm || !activeTerm.schoolDays) return [];
-    return [...activeTerm.schoolDays].filter(d => d <= currentDate).sort();
+    const holidays = activeTerm.publicHolidays || [];
+    return [...activeTerm.schoolDays].filter(d => d <= currentDate && !holidays.includes(d)).sort();
   }, [activeTerm, currentDate]);
 
   // Find students who have not paid for 3 or more consecutive school days
   const consecutiveUnpaidAlerts = useMemo(() => {
     if (validSchoolDays.length < 3) return [];
     
-    return students.filter(s => s.active).map(student => {
+    return students.filter(s => s.active && s.paymentType !== 'Term').map(student => {
       // Find the consecutive unpaid tracks
       let consecutiveUnpaid: string[] = [];
       let maxConsecutiveUnpaid: string[] = [];
@@ -179,7 +199,12 @@ export const AdminPanel: React.FC = () => {
   const [newStudentPhoto, setNewStudentPhoto] = useState<string | null>(null);
   const [newStudentDiscount, setNewStudentDiscount] = useState<number>(0);
   const [newStudentGender, setNewStudentGender] = useState<'Male' | 'Female'>('Male');
+  const [newStudentPaymentType, setNewStudentPaymentType] = useState<'Daily' | 'Term'>('Daily');
+  const [newStudentTermFee, setNewStudentTermFee] = useState<number>(350);
   const [editStudentObj, setEditStudentObj] = useState<Student | null>(null);
+
+  // Arrears log collapse state
+  const [isArrearsCollapsed, setIsArrearsCollapsed] = useState(true);
 
   // CSV Import states
   const [csvPreviewRows, setCsvPreviewRows] = useState<any[]>([]);
@@ -682,13 +707,17 @@ export const AdminPanel: React.FC = () => {
       newStudentPhone.trim() || undefined, 
       newStudentPhoto || undefined,
       newStudentDiscount,
-      newStudentGender
+      newStudentGender,
+      newStudentPaymentType,
+      newStudentTermFee
     );
     setNewStudentName('');
     setNewStudentPhone('');
     setNewStudentPhoto(null);
     setNewStudentDiscount(0);
     setNewStudentGender('Male');
+    setNewStudentPaymentType('Daily');
+    setNewStudentTermFee(350);
     showToast('Student successfully registered to the daily ledger catalog.');
   };
 
@@ -699,6 +728,8 @@ export const AdminPanel: React.FC = () => {
     setNewStudentPhoto(null);
     setNewStudentDiscount(0);
     setNewStudentGender('Male');
+    setNewStudentPaymentType('Daily');
+    setNewStudentTermFee(350);
     showToast('Student registration form cleared.');
   };
 
@@ -1461,51 +1492,62 @@ export const AdminPanel: React.FC = () => {
           {/* Automated Daily Alerts for 3+ Unpaid Days */}
           {consecutiveUnpaidAlerts.length > 0 ? (
             <div className="bg-neutral-900 border-4 border-red-500 p-6 space-y-4">
-              <div className="flex items-center gap-3 border-b-2 border-neutral-800 pb-3">
-                <BellRing className="text-red-500 animate-pulse" size={20} />
-                <div>
-                  <h3 className="text-sm font-black uppercase tracking-widest text-red-500 font-mono">
-                    Urgent Attendance & Arrears Alerts
-                  </h3>
-                  <p className="text-[10px] text-neutral-400 uppercase font-mono font-bold tracking-wider mt-0.5">
-                    Critical Warning: Pupils with 3+ consecutive unpaid standard school days detected
-                  </p>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b-2 border-neutral-800 pb-3">
+                <div className="flex items-center gap-3">
+                  <BellRing className="text-red-500 animate-pulse" size={20} />
+                  <div>
+                    <h3 className="text-sm font-black uppercase tracking-widest text-red-500 font-mono">
+                      Urgent Attendance & Arrears Alerts ({consecutiveUnpaidAlerts.length} Pupils)
+                    </h3>
+                    <p className="text-[10px] text-neutral-400 uppercase font-mono font-bold tracking-wider mt-0.5">
+                      Critical Warning: Pupils with 3+ consecutive unpaid standard school days detected
+                    </p>
+                  </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setIsArrearsCollapsed(!isArrearsCollapsed)}
+                  className="bg-neutral-950 hover:bg-neutral-800 text-amber-400 border-2 border-neutral-850 px-4 py-2.5 text-xs font-mono font-black uppercase tracking-widest cursor-pointer select-none transition-all duration-150 shrink-0 self-start sm:self-center"
+                >
+                  {isArrearsCollapsed ? '📂 EXPAND LOG ▾' : '📁 FOLD LOG ▴'}
+                </button>
               </div>
               
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {consecutiveUnpaidAlerts.map(({ student, consecutiveDays, unpaidDates }) => (
-                  <div key={student.id} className="bg-neutral-950 border-2 border-neutral-850 p-4 flex flex-col justify-between gap-3 hover:border-red-500/40 transition-all">
-                    <div>
-                      <div className="flex justify-between items-start gap-2">
-                        <span className="text-xs font-black text-white uppercase tracking-tight">{student.name}</span>
-                        <span className="text-[9px] font-black text-red-500 bg-red-950/40 border border-red-900/60 px-2 py-0.5 font-mono uppercase tracking-widest shrink-0">
-                          {consecutiveDays} days due
-                        </span>
-                      </div>
-                      <div className="mt-2 space-y-1 font-mono text-[9px] text-neutral-450 font-bold uppercase">
-                        <div>Class Group: <span className="text-amber-400 font-extrabold">{student.class}</span></div>
-                        <div>Guardian Contact: <span className="text-neutral-200">{student.guardianPhone || 'No SMS Verified'}</span></div>
-                        <div className="text-red-400/80 leading-normal mt-1.5 normal-case font-medium">
-                          Missed: {unpaidDates.join(', ')}
+              {!isArrearsCollapsed && (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {consecutiveUnpaidAlerts.map(({ student, consecutiveDays, unpaidDates }) => (
+                    <div key={student.id} className="bg-neutral-950 border-2 border-neutral-850 p-4 flex flex-col justify-between gap-3 hover:border-red-500/40 transition-all">
+                      <div>
+                        <div className="flex justify-between items-start gap-2">
+                          <span className="text-xs font-black text-white uppercase tracking-tight">{student.name}</span>
+                          <span className="text-[9px] font-black text-red-500 bg-red-950/40 border border-red-900/60 px-2 py-0.5 font-mono uppercase tracking-widest shrink-0">
+                            {consecutiveDays} days due
+                          </span>
+                        </div>
+                        <div className="mt-2 space-y-1 font-mono text-[9px] text-neutral-450 font-bold uppercase">
+                          <div>Class Group: <span className="text-amber-400 font-extrabold">{student.class}</span></div>
+                          <div>Guardian Contact: <span className="text-neutral-200">{student.guardianPhone || 'No SMS Verified'}</span></div>
+                          <div className="text-red-400/80 leading-normal mt-1.5 normal-case font-medium">
+                            Missed: {unpaidDates.join(', ')}
+                          </div>
                         </div>
                       </div>
+                      
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSmsTarget({ student, consecutiveDays, unpaidDates });
+                          setSmsSuccess(false);
+                        }}
+                        className="w-full flex items-center justify-center gap-2 py-2.5 bg-red-950/20 hover:bg-red-600 border-2 border-red-900 hover:border-red-500 hover:text-white hover:scale-[1.01] active:scale-[0.99] transition-all text-red-400 text-[10px] font-black uppercase tracking-widest cursor-pointer font-mono"
+                      >
+                        <BellRing size={12} className="stroke-[2.5]" />
+                        <span>Send Urgent SMS</span>
+                      </button>
                     </div>
-                    
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSmsTarget({ student, consecutiveDays, unpaidDates });
-                        setSmsSuccess(false);
-                      }}
-                      className="w-full flex items-center justify-center gap-2 py-2.5 bg-red-950/20 hover:bg-red-600 border-2 border-red-900 hover:border-red-500 hover:text-white hover:scale-[1.01] active:scale-[0.99] transition-all text-red-400 text-[10px] font-black uppercase tracking-widest cursor-pointer font-mono"
-                    >
-                      <BellRing size={12} className="stroke-[2.5]" />
-                      <span>Send Urgent SMS</span>
-                    </button>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
           ) : (
             <div className="bg-neutral-900 border-4 border-neutral-800 p-5 flex items-center gap-3">
@@ -1620,39 +1662,81 @@ export const AdminPanel: React.FC = () => {
 
                   <div>
                     <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
-                      Daily Check-In Discount (GHC)
+                      Pupil Payment Scheme
                     </label>
-                    <div className="flex gap-2">
+                    <div className="flex gap-3 text-center">
+                      {(['Daily', 'Term'] as const).map((t) => (
+                        <button
+                          key={t}
+                          type="button"
+                          onClick={() => setNewStudentPaymentType(t)}
+                          className={`flex-1 py-3 px-4 text-xs font-mono font-black uppercase tracking-widest border-2 transition-all cursor-pointer ${
+                            newStudentPaymentType === t
+                              ? 'bg-amber-400 text-black border-amber-400 font-black'
+                              : 'bg-neutral-950 text-neutral-400 border-neutral-800 hover:text-white hover:border-neutral-700'
+                          }`}
+                        >
+                          {t === 'Daily' ? '📅 Daily Payer' : '🎓 Term Payer'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {newStudentPaymentType === 'Term' ? (
+                    <div>
+                      <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                        Flat Term Fee Amount (GHC)
+                      </label>
                       <input
                         type="number"
-                        min="0"
-                        max="5"
-                        step="0.5"
-                        value={newStudentDiscount}
-                        onChange={(e) => setNewStudentDiscount(Math.max(0, Math.min(5, parseFloat(e.target.value) || 0)))}
-                        className="w-1/2 bg-neutral-950 border-2 border-neutral-800 py-3 px-4 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-700"
+                        min="1"
+                        required
+                        value={newStudentTermFee}
+                        onChange={(e) => setNewStudentTermFee(Math.max(1, parseFloat(e.target.value) || 0))}
+                        className="w-full bg-neutral-950 border-2 border-neutral-800 py-3 px-4 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-700 font-mono"
+                        placeholder="e.g. 350.00"
                       />
-                      <div className="flex-1 flex gap-1">
-                        {[0, 2.50, 5].map((val) => (
-                          <button
-                            key={val}
-                            type="button"
-                            onClick={() => setNewStudentDiscount(val)}
-                            className={`flex-1 text-[9px] font-mono font-black border transition-all ${
-                              newStudentDiscount === val
-                                ? 'bg-amber-400 text-black border-amber-400'
-                                : 'bg-neutral-950 text-neutral-500 border-neutral-800 hover:text-white hover:bg-neutral-850'
-                            }`}
-                          >
-                            {val === 0 ? 'None' : val === 5 ? '100% Free' : `GHC ${val.toFixed(2)}`}
-                          </button>
-                        ))}
-                      </div>
+                      <p className="text-[9px] font-mono text-neutral-550 mt-1 uppercase tracking-wide">
+                        Paying a customized static flat charge of <strong className="text-amber-500">GHC {newStudentTermFee.toFixed(2)}</strong> for the entire term (exempt from daily debt).
+                      </p>
                     </div>
-                    <p className="text-[9px] font-mono text-neutral-500 mt-1 uppercase tracking-wide">
-                      Standard fee is GHC 5.00. Effective daily rate: <strong className="text-amber-500">GHC {(5.00 - newStudentDiscount).toFixed(2)}</strong>
-                    </p>
-                  </div>
+                  ) : (
+                    <div>
+                      <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                        Daily Check-In Discount (GHC)
+                      </label>
+                      <div className="flex gap-2">
+                        <input
+                          type="number"
+                          min="0"
+                          max="5"
+                          step="0.5"
+                          value={newStudentDiscount}
+                          onChange={(e) => setNewStudentDiscount(Math.max(0, Math.min(5, parseFloat(e.target.value) || 0)))}
+                          className="w-1/2 bg-neutral-950 border-2 border-neutral-800 py-3 px-4 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-700"
+                        />
+                        <div className="flex-1 flex gap-1 font-mono">
+                          {[0, 2.50, 5].map((val) => (
+                            <button
+                              key={val}
+                              type="button"
+                              onClick={() => setNewStudentDiscount(val)}
+                              className={`flex-1 text-[9px] font-mono font-black border transition-all ${
+                                newStudentDiscount === val
+                                  ? 'bg-amber-400 text-black border-amber-400'
+                                  : 'bg-neutral-950 text-neutral-500 border-neutral-800 hover:text-white hover:bg-neutral-850'
+                              }`}
+                            >
+                              {val === 0 ? 'None' : val === 5 ? '100% Free' : `GHC ${val.toFixed(2)}`}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <p className="text-[9px] font-mono text-neutral-500 mt-1 uppercase tracking-wide">
+                        Standard fee is GHC 5.00. Effective daily rate: <strong className="text-amber-500">GHC {(5.00 - newStudentDiscount).toFixed(2)}</strong>
+                      </p>
+                    </div>
+                  )}
 
                   <div>
                     <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
@@ -1798,41 +1882,83 @@ export const AdminPanel: React.FC = () => {
                     />
                   </div>
 
-                  <div>
+                   <div>
                     <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
-                      Daily Check-In Discount (GHC) - Dynamic Group Rate
+                      Pupil Payment Scheme
                     </label>
-                    <div className="flex gap-2">
+                    <div className="flex gap-3 text-center">
+                      {(['Daily', 'Term'] as const).map((t) => (
+                        <button
+                          key={t}
+                          type="button"
+                          onClick={() => setEditStudentObj({ ...editStudentObj, paymentType: t })}
+                          className={`flex-1 py-3 px-4 text-xs font-mono font-black uppercase tracking-widest border-2 transition-all cursor-pointer ${
+                            (editStudentObj.paymentType || 'Daily') === t
+                              ? 'bg-amber-400 text-black border-amber-400 font-black'
+                              : 'bg-neutral-950 text-neutral-400 border-neutral-800 hover:text-white hover:border-neutral-700'
+                          }`}
+                        >
+                          {t === 'Daily' ? '📅 Daily Payer' : '🎓 Term Payer'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {(editStudentObj.paymentType || 'Daily') === 'Term' ? (
+                    <div>
+                      <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                        Flat Term Fee Amount (GHC)
+                      </label>
                       <input
                         type="number"
-                        min="0"
-                        max="5"
-                        step="0.5"
-                        value={editStudentObj.discount || 0}
-                        onChange={(e) => setEditStudentObj({ ...editStudentObj, discount: Math.max(0, Math.min(5, parseFloat(e.target.value) || 0)) })}
-                        className="w-1/2 bg-neutral-950 border-2 border-neutral-800 py-3 px-4 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400"
+                        min="1"
+                        required
+                        value={editStudentObj.termFee !== undefined ? editStudentObj.termFee : 350}
+                        onChange={(e) => setEditStudentObj({ ...editStudentObj, termFee: Math.max(1, parseFloat(e.target.value) || 0) })}
+                        className="w-full bg-neutral-950 border-2 border-neutral-800 py-3 px-4 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-700 font-mono"
+                        placeholder="e.g. 350.00"
                       />
-                      <div className="flex-1 flex gap-1">
-                        {[0, 2.50, 5].map((val) => (
-                          <button
-                            key={val}
-                            type="button"
-                            onClick={() => setEditStudentObj({ ...editStudentObj, discount: val })}
-                            className={`flex-1 text-[9px] font-mono font-black border transition-all ${
-                              (editStudentObj.discount || 0) === val
-                                ? 'bg-amber-400 text-black border-amber-400'
-                                : 'bg-neutral-950 text-neutral-500 border-neutral-800 hover:text-white hover:bg-neutral-850'
-                            }`}
-                          >
-                            {val === 0 ? 'None' : val === 5 ? '100% Free' : `GHC ${val.toFixed(2)}`}
-                          </button>
-                        ))}
-                      </div>
+                      <p className="text-[9px] font-mono text-neutral-550 mt-1 uppercase tracking-wide">
+                        Paying a customized static flat charge of <strong className="text-amber-500">GHC {(editStudentObj.termFee !== undefined ? editStudentObj.termFee : 350).toFixed(2)}</strong> for the entire term (exempt from daily debt).
+                      </p>
                     </div>
-                    <p className="text-[9px] font-mono text-neutral-500 mt-1 uppercase tracking-wide">
-                      Standard fee is GHC 5.00. Effective daily rate: <strong className="text-amber-500">GHC {(5.00 - (editStudentObj.discount || 0)).toFixed(2)}</strong>
-                    </p>
-                  </div>
+                  ) : (
+                    <div>
+                      <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                        Daily Check-In Discount (GHC) - Dynamic Group Rate
+                      </label>
+                      <div className="flex gap-2">
+                        <input
+                          type="number"
+                          min="0"
+                          max="5"
+                          step="0.5"
+                          value={editStudentObj.discount || 0}
+                          onChange={(e) => setEditStudentObj({ ...editStudentObj, discount: Math.max(0, Math.min(5, parseFloat(e.target.value) || 0)) })}
+                          className="w-1/2 bg-neutral-950 border-2 border-neutral-800 py-3 px-4 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400"
+                        />
+                        <div className="flex-1 flex gap-1 font-mono">
+                          {[0, 2.50, 5].map((val) => (
+                            <button
+                              key={val}
+                              type="button"
+                              onClick={() => setEditStudentObj({ ...editStudentObj, discount: val })}
+                              className={`flex-1 text-[9px] font-mono font-black border transition-all ${
+                                (editStudentObj.discount || 0) === val
+                                  ? 'bg-amber-400 text-black border-amber-400'
+                                  : 'bg-neutral-950 text-neutral-500 border-neutral-800 hover:text-white hover:bg-neutral-850'
+                              }`}
+                            >
+                              {val === 0 ? 'None' : val === 5 ? '100% Free' : `GHC ${val.toFixed(2)}`}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <p className="text-[9px] font-mono text-neutral-500 mt-1 uppercase tracking-wide">
+                        Standard fee is GHC 5.00. Effective daily rate: <strong className="text-amber-500">GHC {(5.00 - (editStudentObj.discount || 0)).toFixed(2)}</strong>
+                      </p>
+                    </div>
+                  )}
 
                   <div>
                     <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
@@ -1921,37 +2047,60 @@ export const AdminPanel: React.FC = () => {
             <div className="p-6 bg-neutral-950 border-b-2 border-neutral-850 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
               <div className="space-y-1">
                 <span className="text-[10px] font-black text-neutral-400 font-mono uppercase tracking-widest block">Student Directory Catalog ({filteredStudentsForList.length})</span>
-                {students.some(s => !s.active) && (
+                <div className="flex flex-wrap items-center gap-2">
+                  {students.some(s => !s.active) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (currentUser?.role !== 'Administrator') {
+                          alert('Access Denied: Only Administrators are permitted to purge deactivated students completely.');
+                          return;
+                        }
+                        const count = students.filter(s => !s.active).length;
+                        setDeleteConf({
+                          isOpen: true,
+                          type: 'purge_inactive',
+                          targetName: `ALL ${count} DEACTIVATED STUDENTS`,
+                          userInput: '',
+                          onConfirm: () => {
+                            purgeDeactivatedStudents();
+                            showToast(`Successfully purged ${count} deactivated pupil files and clean-wiped all transaction roots.`);
+                          }
+                        });
+                      }}
+                      className={`mt-1 px-3 py-1 text-[9px] font-mono font-black uppercase tracking-widest cursor-pointer transition-all flex items-center gap-1.5 border-2 ${
+                        currentUser?.role === 'Administrator'
+                          ? 'bg-red-600 hover:bg-red-500 text-white border-red-700 shadow-[2px_2px_0px_0px_rgba(220,38,38,0.2)] animate-pulse hover:scale-[1.02] active:scale-[0.98]'
+                          : 'bg-neutral-950 border-neutral-850 text-neutral-600 cursor-not-allowed opacity-50'
+                      }`}
+                      title={currentUser?.role !== 'Administrator' ? 'Administrator Only (Access Denied)' : 'Permanently erase all deactivated students and their past records'}
+                    >
+                      <Trash2 size={11} className="stroke-[3]" />
+                      <span>Purge Inactive ({students.filter(s => !s.active).length}){currentUser?.role !== 'Administrator' ? ' (Admin only)' : ''}</span>
+                    </button>
+                  )}
+                  
                   <button
                     type="button"
                     onClick={() => {
                       if (currentUser?.role !== 'Administrator') {
-                        alert('Access Denied: Only Administrators are permitted to purge deactivated students completely.');
+                        alert('Access Denied: Only Administrators are permitted to execute student promotions.');
                         return;
                       }
-                      const count = students.filter(s => !s.active).length;
-                      setDeleteConf({
-                        isOpen: true,
-                        type: 'purge_inactive',
-                        targetName: `ALL ${count} DEACTIVATED STUDENTS`,
-                        userInput: '',
-                        onConfirm: () => {
-                          purgeDeactivatedStudents();
-                          showToast(`Successfully purged ${count} deactivated pupil files and clean-wiped all transaction roots.`);
-                        }
-                      });
+                      setShowPromotionModal(true);
+                      setPromotionConfirmedText('');
                     }}
                     className={`mt-1 px-3 py-1 text-[9px] font-mono font-black uppercase tracking-widest cursor-pointer transition-all flex items-center gap-1.5 border-2 ${
                       currentUser?.role === 'Administrator'
-                        ? 'bg-red-600 hover:bg-red-500 text-white border-red-700 shadow-[2px_2px_0px_0px_rgba(220,38,38,0.2)] animate-pulse hover:scale-[1.02] active:scale-[0.98]'
+                        ? 'border-amber-500 bg-amber-500/10 hover:bg-amber-400 hover:text-black hover:border-amber-400 text-amber-400 shadow-[2px_2px_0px_0px_rgba(245,158,11,0.15)]'
                         : 'bg-neutral-950 border-neutral-850 text-neutral-600 cursor-not-allowed opacity-50'
                     }`}
-                    title={currentUser?.role !== 'Administrator' ? 'Administrator Only (Access Denied)' : 'Permanently erase all deactivated students and their past records'}
+                    title={currentUser?.role !== 'Administrator' ? 'Administrator Only (Access Denied)' : 'Promote all active pupil cohorts to the next grade class level'}
                   >
-                    <Trash2 size={11} className="stroke-[3]" />
-                    <span>Purge Inactive ({students.filter(s => !s.active).length}){currentUser?.role !== 'Administrator' ? ' (Admin only)' : ''}</span>
+                    <Award size={11} className="stroke-[3]" />
+                    <span>Promote Cohorts {currentUser?.role !== 'Administrator' ? ' (Admin only)' : ''}</span>
                   </button>
-                )}
+                </div>
               </div>
               <div className="flex flex-wrap gap-2 shrink-0">
                 <button
@@ -2065,6 +2214,16 @@ export const AdminPanel: React.FC = () => {
                   </div>
 
                   <div className="flex items-center gap-2">
+                    {/* ID Card trigger */}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedIdCardStudent(st)}
+                      title="Generate & Print Student ID Card with QR Code"
+                      className="p-2 border-2 border-neutral-800 hover:border-amber-400 hover:text-amber-400 bg-neutral-950 text-neutral-400 transition-colors cursor-pointer"
+                    >
+                      <QrCode size={13} className="stroke-[2.5]" />
+                    </button>
+
                     {/* Active toggle */}
                     <button
                       onClick={() => handleToggleStudentActive(st)}
@@ -3297,7 +3456,7 @@ export const AdminPanel: React.FC = () => {
                     </p>
                     <div className="bg-neutral-950 p-2 border border-neutral-800 rounded font-mono text-[9px] text-amber-400 break-all select-all font-bold">
                       {(() => {
-                        const raw = window.location.origin;
+                        const raw = getSafeOrigin();
                         if (raw.includes("localhost") || raw.includes("127.0.0.1")) return raw;
                         let clean = raw.replace(/^(https?:\/\/)\d+-/, "$1");
                         if (clean.includes("-dev-")) clean = clean.replace("-dev-", "-pre-");
@@ -3310,7 +3469,7 @@ export const AdminPanel: React.FC = () => {
                       type="button"
                       onClick={() => {
                         try {
-                          const rawOrigin = window.location.origin;
+                          const rawOrigin = getSafeOrigin();
                           let cleanOrigin = rawOrigin;
                           if (!rawOrigin.includes("localhost") && !rawOrigin.includes("127.0.0.1")) {
                             cleanOrigin = rawOrigin.replace(/^(https?:\/\/)\d+-/, "$1");
@@ -3324,7 +3483,7 @@ export const AdminPanel: React.FC = () => {
                           showToast("Copied portal address to clipboard!");
                           setTimeout(() => setCopiedAddress(false), 2000);
                         } catch (err) {
-                          const rawOrigin = window.location.origin;
+                          const rawOrigin = getSafeOrigin();
                           let cleanOrigin = rawOrigin;
                           if (!rawOrigin.includes("localhost") && !rawOrigin.includes("127.0.0.1")) {
                             cleanOrigin = rawOrigin.replace(/^(https?:\/\/)\d+-/, "$1");
@@ -3512,6 +3671,338 @@ export const AdminPanel: React.FC = () => {
                 className="w-full text-[10px] bg-neutral-950 border border-neutral-850 hover:border-neutral-750 text-neutral-500 hover:text-neutral-300 py-2 font-black transition-colors uppercase tracking-widest cursor-pointer"
               >
                 Close Gateway Overlay
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Student ID Card Print Modal */}
+      {selectedIdCardStudent && (
+        <div id="id-card-modal-container" className="fixed inset-0 z-50 bg-neutral-950/90 backdrop-blur-md flex items-center justify-center p-4 font-sans overflow-y-auto">
+          {/* Print Style Injector */}
+          <style dangerouslySetInnerHTML={{ __html: `
+            @media print {
+              html, body {
+                visibility: hidden !important;
+                background: white !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+              }
+              #id-card-print-target, #id-card-print-target * {
+                visibility: visible !important;
+              }
+              #id-card-print-target {
+                position: absolute !important;
+                left: 50% !important;
+                top: 50% !important;
+                transform: translate(-50%, -50%) scale(1.1) !important;
+                border: none !important;
+                box-shadow: none !important;
+                background: white !important;
+                display: flex !important;
+                flex-direction: row !important;
+                gap: 24px !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                width: auto !important;
+                height: auto !important;
+              }
+              #id-card-actions-panel, .no-print {
+                display: none !important;
+              }
+            }
+          `}} />
+
+          <div className="relative w-full max-w-2xl bg-neutral-900 border-4 border-amber-400 p-6 md:p-8 space-y-6 shadow-[8px_8px_0px_0px_rgba(251,191,36,0.15)] text-white flex flex-col">
+            
+            {/* Header */}
+            <div className="flex justify-between items-start border-b border-neutral-800 pb-4 shrink-0">
+              <div className="flex items-start gap-3">
+                <div className="p-2.5 bg-amber-400/10 border border-amber-400 text-amber-300 shrink-0">
+                  <Contact size={20} />
+                </div>
+                <div>
+                  <span className="text-[9px] text-amber-450 font-mono tracking-widest font-black uppercase block font-bold">Credential Printing Desk</span>
+                  <h3 className="text-base font-black uppercase tracking-tight">Student Access Badge Issuer</h3>
+                  <p className="text-[11px] text-neutral-400 mt-1">
+                    Preview and print official double-sided laminating cards. Scannable at checkout gates.
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setSelectedIdCardStudent(null)} 
+                className="p-1 cursor-pointer text-neutral-450 hover:text-white transition-colors"
+                title="Close Window"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Print Target Grid Card Content */}
+            <div id="id-card-print-target" className="flex flex-col md:flex-row items-center justify-center gap-6 py-4 px-2 bg-neutral-950/40 border border-neutral-800 rounded p-6">
+              
+              {/* Front Side Card Cardboard */}
+              <div className="w-[340px] h-[215px] bg-gradient-to-br from-neutral-900 via-neutral-900 to-black text-white relative rounded-xl border-2 border-neutral-700 shadow-xl overflow-hidden flex flex-col justify-between shrink-0">
+                {/* Visual Top Accent Pattern */}
+                <div className="absolute top-0 left-0 right-0 h-1.5 bg-amber-400" />
+                <div className="absolute top-1.5 right-6 w-16 h-12 bg-amber-400/5 rounded-full blur-xl pointer-events-none" />
+
+                {/* Card Top Header */}
+                <div className="px-3.5 pt-3 flex items-center justify-between border-b border-neutral-800/60 pb-1.5">
+                  <div className="flex items-center gap-1.5">
+                    {/* Tiny Logo mark */}
+                    <div className="w-5 h-5 bg-amber-400 text-neutral-900 rounded-sm flex items-center justify-center font-black text-[10px] tracking-tighter">
+                      SH
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-black uppercase tracking-wider text-white block">SHCA-Sawla</span>
+                      <span className="text-[7.5px] font-mono text-amber-400 uppercase tracking-widest block font-extrabold -mt-0.5">Savior Academy</span>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[6.5px] font-black bg-emerald-950/80 text-emerald-400 border border-emerald-905 py-0.5 px-1.5 rounded-sm uppercase tracking-wide">
+                      Active Pass
+                    </span>
+                  </div>
+                </div>
+
+                {/* Card Main content with Photo & Details */}
+                <div className="px-3.5 py-2 flex gap-3 flex-1 items-center">
+                  {/* Left Avatar Passport area */}
+                  <div className="flex flex-col items-center gap-1">
+                    <div className="w-16 h-16 rounded-md bg-neutral-955 border border-neutral-750 flex items-center justify-center overflow-hidden shrink-0">
+                      {selectedIdCardStudent.photoUrl ? (
+                        <img 
+                          src={selectedIdCardStudent.photoUrl} 
+                          alt={selectedIdCardStudent.name} 
+                          className="w-full h-full object-cover"
+                          referrerPolicy="no-referrer"
+                        />
+                      ) : (
+                        <div className="text-neutral-500 font-mono font-black text-[18px] uppercase">
+                          {selectedIdCardStudent.name.slice(0, 2).toUpperCase()}
+                        </div>
+                      )}
+                    </div>
+                    <span className="text-[6px] text-neutral-500 font-mono tracking-widest uppercase font-black">STUDENT INFO</span>
+                  </div>
+
+                  {/* Middle details column */}
+                  <div className="flex-1 space-y-1">
+                    <div>
+                      <span className="text-[7px] text-neutral-500 font-mono block uppercase font-bold">Pupil Name</span>
+                      <span className="text-xs font-black block uppercase tracking-tight text-white line-clamp-1">
+                        {selectedIdCardStudent.name}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <div>
+                        <span className="text-[7px] text-neutral-500 font-mono block uppercase font-bold">Class</span>
+                        <span className="text-[10px] font-extrabold text-amber-400 font-mono">
+                          {selectedIdCardStudent.class}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[7px] text-neutral-500 font-mono block uppercase font-bold">Gender</span>
+                        <span className="text-[9px] font-bold text-neutral-300">
+                          {selectedIdCardStudent.gender || '—'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="pt-0.5">
+                      <span className="text-[7.5px] font-mono text-neutral-450 block font-bold">
+                        REG-ID: <strong className="text-white bg-neutral-950 px-1 py-0.5 border border-neutral-800 rounded-xs ml-0.5">{selectedIdCardStudent.rollNumber || 'SHC-'+selectedIdCardStudent.id.substring(0,5).toUpperCase()}</strong>
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Right QR Code column */}
+                  <div className="flex flex-col items-center justify-center gap-1 shrink-0 bg-white p-1 rounded-sm border border-neutral-805">
+                    <img 
+                      src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=SAAKOCHECK:STUDENT:${selectedIdCardStudent.id}:${selectedIdCardStudent.rollNumber || 'na'}`}
+                      alt="Student QR Verification Key"
+                      className="w-12 h-12"
+                      referrerPolicy="no-referrer"
+                    />
+                    <span className="text-[5.5px] font-black text-black font-mono tracking-tighter uppercase">GATE PASS</span>
+                  </div>
+                </div>
+
+                {/* Card Footer Banner */}
+                <div className="bg-neutral-955 border-t border-neutral-850 px-3 py-1 flex items-center justify-between text-[6.5px] font-mono text-neutral-500">
+                  <span className="font-bold">SYSTEM ACCREDITED &bull; SECURE GATEWAY</span>
+                  <span className="text-amber-500 font-black">25/26 TERM</span>
+                </div>
+              </div>
+
+              {/* Back Side Card Cardboard */}
+              <div className="w-[340px] h-[215px] bg-gradient-to-bl from-neutral-900 via-neutral-950 to-neutral-900 text-white relative rounded-xl border-2 border-neutral-700 shadow-xl overflow-hidden flex flex-col justify-between shrink-0">
+                {/* Visual Accent bar */}
+                <div className="absolute top-0 left-0 right-0 h-1.5 bg-neutral-800" />
+
+                {/* Back Header */}
+                <div className="px-4 pt-3 pb-1 border-b border-neutral-850">
+                  <span className="text-[7.5px] font-black text-neutral-500 font-mono tracking-widest block uppercase">SECURITY POLICY & INSTRUCTIONS</span>
+                </div>
+
+                {/* Back core info list */}
+                <div className="px-4 py-2 flex flex-col justify-center flex-1 space-y-2">
+                  <ol className="list-decimal list-inside text-[7px] text-neutral-401 font-bold space-y-1">
+                    <li>This card remains the property of Savior Academy.</li>
+                    <li>Always present this card for scanning & gate check-ins.</li>
+                    <li>Loss of credential elements must be reported immediately.</li>
+                    <li>Unauthorized duplication or counterfeit transfer is strictly prohibited.</li>
+                  </ol>
+
+                  <div className="flex items-center justify-between pt-1 font-mono text-[7px]">
+                    <div>
+                      <span className="text-neutral-500 block text-[6px]">Guardian Mobile</span>
+                      <span className="text-neutral-300 font-extrabold">{selectedIdCardStudent.guardianPhone || 'NOT ENROLLED'}</span>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-neutral-550 block text-[6px]">Authorized Registrar</span>
+                      <span className="text-amber-400 font-black">YAKUBU HAKEEM</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Authentic bottom barcode graphics overlay */}
+                <div className="bg-white px-4 py-2 flex flex-col items-center justify-center shrink-0 border-t border-neutral-850">
+                  {/* Pure stylized CSS barcode lines */}
+                  <div className="w-full h-5 flex items-stretch gap-[1.5px] bg-white opacity-90">
+                    {[3,2,1,4,1,3,1,2,3,1,2,1,4,1,2,3,1,2,1,2,3,1,4,1,2,3,4,1,2,3,1,2,1,2,3,4,1,2].map((w,i) => (
+                      <div 
+                        key={i} 
+                        className="bg-black flex-1" 
+                        style={{ opacity: i % 2 === 0 ? 1 : 0 }} 
+                      />
+                    ))}
+                  </div>
+                  <span className="text-[6px] font-mono text-neutral-500 font-bold tracking-[0.2em] uppercase mt-0.5">
+                    *SHCA-{selectedIdCardStudent.id.substring(0,8).toUpperCase()}*
+                  </span>
+                </div>
+              </div>
+
+            </div>
+
+            {/* Actions Footer */}
+            <div id="id-card-actions-panel" className="border-t border-neutral-800 pt-4 flex flex-col sm:flex-row gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  window.print();
+                }}
+                className="flex-1 py-3 px-4 bg-amber-400 hover:bg-amber-300 text-black font-black uppercase text-xs tracking-widest transition-all cursor-pointer flex items-center justify-center gap-2"
+              >
+                <Printer size={14} />
+                <span>Print Student Card</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSelectedIdCardStudent(null)}
+                className="w-full sm:w-1/3 py-3 px-4 bg-neutral-950 hover:bg-neutral-850 text-neutral-400 hover:text-white font-mono uppercase text-xs tracking-wider transition-colors border border-neutral-850"
+              >
+                Quit Preview
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* Academic Cohort Promotion Modal Overlay */}
+      {showPromotionModal && (
+        <div className="fixed inset-0 z-50 bg-neutral-950/90 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
+          <div className="relative w-full max-w-xl bg-neutral-900 border-4 border-amber-500 p-6 md:p-8 space-y-6 shadow-[8px_8px_0px_0px_rgba(245,158,11,0.15)] text-white">
+            <div className="flex justify-between items-start border-b border-neutral-800 pb-4">
+              <div className="flex items-center gap-3">
+                <Award size={22} className="text-amber-400" />
+                <div>
+                  <h3 className="text-sm font-black uppercase tracking-widest font-mono">Academic Year Promotion Desk</h3>
+                  <p className="text-[10px] text-neutral-400 uppercase font-mono font-bold mt-0.5">Bulk Grade Cohort Management</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setShowPromotionModal(false)} 
+                className="p-1 cursor-pointer text-neutral-450 hover:text-white transition-colors"
+                title="Close"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="space-y-4 font-sans text-xs">
+              <p className="text-neutral-300 leading-relaxed font-semibold">
+                This utility will promote all currently active pupils school-wide to the next academic level in bulk. Pupils in final year <strong className="text-amber-400 font-mono">B9 (JHS 3)</strong> will be marked completed/graduated and set to inactive.
+              </p>
+
+              <div className="bg-neutral-950 border border-neutral-850 p-4 space-y-3">
+                <span className="text-[9px] font-mono font-black text-neutral-500 uppercase tracking-widest block font-bold">Standard Grade Cohort Transition Flow</span>
+                <div className="grid grid-cols-2 gap-x-6 gap-y-2 font-mono text-[10px] text-neutral-300 divide-y divide-neutral-900">
+                  <div className="flex justify-between py-1 border-none"><span>Nursery ➜ KG 1</span> <span className="text-emerald-400">Promoted</span></div>
+                  <div className="flex justify-between py-1 border-none"><span>KG 1 ➜ KG 2</span> <span className="text-emerald-400">Promoted</span></div>
+                  <div className="flex justify-between py-1"><span>KG 2 ➜ B1 (Primary)</span> <span className="text-emerald-400">Promoted</span></div>
+                  <div className="flex justify-between py-1"><span>B1 ➜ B2</span> <span className="text-emerald-400">Promoted</span></div>
+                  <div className="flex justify-between py-1"><span>B2 ➜ B3</span> <span className="text-emerald-400">Promoted</span></div>
+                  <div className="flex justify-between py-1"><span>B3 ➜ B4</span> <span className="text-emerald-400">Promoted</span></div>
+                  <div className="flex justify-between py-1"><span>B4 ➜ B5</span> <span className="text-emerald-400">Promoted</span></div>
+                  <div className="flex justify-between py-1"><span>B5 ➜ B6</span> <span className="text-emerald-400">Promoted</span></div>
+                  <div className="flex justify-between py-1"><span>B6 ➜ B7 (JHS 1)</span> <span className="text-emerald-400">Promoted</span></div>
+                  <div className="flex justify-between py-1"><span>B7 ➜ B8</span> <span className="text-emerald-400">Promoted</span></div>
+                  <div className="flex justify-between py-1"><span>B8 ➜ B9 (JHS 3)</span> <span className="text-emerald-400">Promoted</span></div>
+                  <div className="flex justify-between py-1"><span>B9 ➜ Left/Graduated</span> <span className="text-amber-500 font-bold">Graduated</span></div>
+                </div>
+              </div>
+
+              <div className="bg-amber-955/15 border border-amber-500/20 p-4 font-mono text-[10px] text-amber-500 uppercase font-black tracking-widest leading-relaxed">
+                ⚠️ WARNING: THIS PERFORMANCE ACTION IS PERMANENT AND NOT REVERSIBLE. IT WILL INSTANTLY ALTER THE GRADE BINDINGS OF ALL {students.filter(s => s.active).length} ACTIVE PUPILS. 
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-[10px] uppercase font-mono font-black text-neutral-450 tracking-wider block">Confirm Mass Promotion Action</label>
+                <p className="text-[10px] text-neutral-400 font-semibold mb-1">Type the word <strong className="text-white font-mono">PROMOTE</strong> below to authorize savior database updates:</p>
+                <input
+                  type="text"
+                  value={promotionConfirmedText}
+                  onChange={(e) => setPromotionConfirmedText(e.target.value)}
+                  placeholder="Type PROMOTE here..."
+                  className="w-full bg-neutral-950 border-2 border-neutral-800 focus:border-amber-400 text-white font-mono uppercase text-xs p-3 font-black focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="border-t border-neutral-800 pt-4 flex gap-3">
+              <button
+                type="button"
+                disabled={promotionConfirmedText !== 'PROMOTE'}
+                onClick={() => {
+                  promoteAllStudents();
+                  showToast("Successfully completed mass cohort promotions school-wide! Inactive pupils purged.");
+                  setShowPromotionModal(false);
+                  setPromotionConfirmedText('');
+                }}
+                className={`flex-1 py-3 px-4 font-black uppercase text-xs tracking-widest transition-all cursor-pointer flex items-center justify-center gap-2 border-none ${
+                  promotionConfirmedText === 'PROMOTE'
+                    ? 'bg-amber-500 hover:bg-amber-400 text-black shadow-[4px_4px_0px_0px_#10b981]'
+                    : 'bg-neutral-950 text-neutral-600 border border-neutral-850 cursor-not-allowed opacity-50'
+                }`}
+              >
+                ⚡ Execute Cohort Promotions
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowPromotionModal(false);
+                  setPromotionConfirmedText('');
+                }}
+                className="w-1/3 py-3 px-4 bg-neutral-950 hover:bg-neutral-850 text-neutral-400 hover:text-white font-mono uppercase text-xs tracking-wider transition-colors border border-neutral-850"
+              >
+                Abort
               </button>
             </div>
           </div>

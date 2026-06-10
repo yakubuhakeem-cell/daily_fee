@@ -376,7 +376,11 @@ export const ReportPanel: React.FC = () => {
     // Generate a dedicated window for printing audit records
     const printWindow = window.open('', '_blank', 'width=1100,height=850');
     if (!printWindow) {
-      alert("Popup blocker active! Please allow popups to open the dedicated print window.");
+      if (typeof window !== 'undefined' && window.parent !== window) {
+        window.dispatchEvent(new CustomEvent('show-print-iframe-warning'));
+      } else {
+        alert("Popup blocker active! Please allow popups to open the dedicated print window.");
+      }
       return;
     }
 
@@ -1949,7 +1953,7 @@ B7 to B9: GHC [SUM]`}
                               OFFICIAL SCHOOL CASHIER STAMP
                             </div>
                             <div className="text-[8px] text-neutral-300 uppercase font-mono tracking-widest leading-none">
-                              ACCRA MAIN BRANCH OFFICE
+                              SHCA-Sawla
                             </div>
                           </div>
 

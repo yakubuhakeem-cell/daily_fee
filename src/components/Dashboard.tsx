@@ -1114,29 +1114,92 @@ export const Dashboard: React.FC = () => {
         </motion.div>
       </div>
 
-      {/* Enrollment & Sync Health Double Banner */}
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+      {/* Enrollment & Today's Attendance & Sync Health Banner Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
-        {/* Total Enrollment Banner */}
-        <motion.div variants={itemVariants} className="lg:col-span-3 bg-neutral-900 border-4 border-neutral-800 p-4 flex flex-col sm:flex-row justify-between items-center gap-4 hover:border-neutral-700 transition-all duration-300">
-          <div className="flex items-center gap-3">
-            <div className="bg-amber-400 text-black p-2 rounded-none">
-              <Users size={18} />
+        {/* Total Enrollment Widget */}
+        <motion.div variants={itemVariants} className="bg-neutral-900 border-4 border-neutral-800 border-l-amber-400 p-4 flex flex-col justify-between gap-3 hover:border-neutral-700 transition-all duration-300">
+          <div className="flex justify-between items-center">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 bg-amber-400 rounded-none shrink-0" />
+              <span className="text-[10px] font-black uppercase tracking-widest text-neutral-500 font-mono">Cohort Demographics</span>
             </div>
-            <div>
-              <span className="text-[10px] font-black uppercase tracking-widest text-neutral-500 font-mono">Student Registry Overview</span>
-              <h4 className="text-sm font-black text-white uppercase tracking-wider">Total Enrollment</h4>
+            <span className="text-[9px] font-mono font-black uppercase text-neutral-400 bg-neutral-950 border border-neutral-850 px-2 py-0.5">
+              Pupil Registry
+            </span>
+          </div>
+
+          <div className="flex items-center justify-between gap-4 mt-1">
+            <div className="space-y-0.5 text-left">
+              <h4 className="text-xs font-black text-white uppercase tracking-wider">Total Enrollment</h4>
+              <p className="text-[10px] text-neutral-400 font-mono uppercase tracking-wide">
+                Pupils Registered
+              </p>
+            </div>
+            <div className="bg-neutral-950 border-2 border-neutral-850 px-3 py-1 font-mono text-right shrink-0">
+              <span className="text-sm font-black text-amber-400" id="total-enrollment-counter">{students?.length || 0}</span>
+              <span className="text-[9px] text-neutral-500 font-bold"> Profiles</span>
             </div>
           </div>
-          <div className="bg-neutral-950 border-2 border-neutral-850 px-6 py-2 flex items-center gap-3">
-            <span className="text-[10px] font-black uppercase tracking-wider text-neutral-400 font-mono">Registered across all classes:</span>
-            <span className="text-xl font-black font-mono text-amber-400" id="total-enrollment-counter">{students?.length || 0} Pupils</span>
+
+          <div className="space-y-1.5 pt-2 border-t border-dashed border-neutral-800">
+            <div className="flex justify-between items-center text-[9px] font-mono font-extrabold text-neutral-500 uppercase tracking-wider">
+              <span>Active Status Coverage</span>
+              <span className="text-neutral-300 font-mono font-black">{activeStudentsCount} / {students?.length || 0} Active</span>
+            </div>
+            <div className="w-full bg-neutral-950 h-2 border border-neutral-850 overflow-hidden">
+              <div 
+                className="bg-amber-400 h-full transition-all duration-500"
+                style={{ width: `${students?.length > 0 ? (activeStudentsCount / students.length) * 100 : 0}%` }}
+              />
+            </div>
+          </div>
+        </motion.div>
+
+        {/* Today's Attendance Widget */}
+        <motion.div variants={itemVariants} className="bg-neutral-900 border-4 border-neutral-800 border-l-emerald-400 p-4 flex flex-col justify-between gap-3 hover:border-neutral-700 transition-all duration-300">
+          <div className="flex justify-between items-center">
+            <div className="flex items-center gap-2">
+              <span className={`w-2 h-2 rounded-full ${dateFilter === currentDate ? 'bg-emerald-400 animate-pulse' : 'bg-neutral-500'}`} />
+              <span className="text-[10px] font-black uppercase tracking-widest text-neutral-500 font-mono">Real-Time Ingress</span>
+            </div>
+            <span className="text-[9px] font-mono font-black uppercase text-emerald-400 bg-emerald-400/10 border border-emerald-450/30 px-2 py-0.5">
+              Core Sentry Stream
+            </span>
+          </div>
+
+          <div className="flex items-center justify-between gap-4 mt-1">
+            <div className="space-y-0.5 text-left">
+              <h4 className="text-xs font-black text-white uppercase tracking-wider">Today's Attendance</h4>
+              <p className="text-[10px] text-neutral-400 font-mono uppercase tracking-wide">
+                Checked-In Pupils
+              </p>
+            </div>
+            <div className="bg-neutral-950 border-2 border-neutral-850 px-3 py-1 font-mono text-right shrink-0">
+              <span className="text-sm font-black text-emerald-400">{stats.paidCount}</span>
+              <span className="text-[9px] text-neutral-500 font-bold"> / {activeStudentsCount} Pupils</span>
+            </div>
+          </div>
+
+          <div className="space-y-1.5 pt-2 border-t border-dashed border-neutral-800">
+            <div className="flex justify-between items-center text-[9px] font-mono font-extrabold text-neutral-500 uppercase tracking-wider">
+              <span>Attendance Rate</span>
+              <span className="text-emerald-400 font-black">
+                {(activeStudentsCount > 0 ? (stats.paidCount / activeStudentsCount) * 100 : 0).toFixed(1)}%
+              </span>
+            </div>
+            <div className="w-full bg-neutral-950 h-2 border border-neutral-850 overflow-hidden">
+              <div 
+                className="bg-emerald-400 h-full transition-all duration-500"
+                style={{ width: `${activeStudentsCount > 0 ? Math.min(100, (stats.paidCount / activeStudentsCount) * 100) : 0}%` }}
+              />
+            </div>
           </div>
         </motion.div>
 
         {/* Sync Health Monitor Widget */}
-        <motion.div variants={itemVariants} className={`lg:col-span-2 bg-neutral-900 border-4 border-neutral-800 ${pendingLocalEdits.length > 0 ? 'border-l-amber-500' : 'border-l-emerald-400'} p-4 flex flex-col justify-between gap-3 relative select-none hover:border-neutral-700 transition-all duration-300`}>
-          <div className="flex justify-between items-center w-full">
+        <motion.div variants={itemVariants} className={`bg-neutral-900 border-4 border-neutral-800 ${pendingLocalEdits.length > 0 ? 'border-l-amber-500' : 'border-l-emerald-400'} p-4 flex flex-col justify-between gap-3 relative select-none hover:border-neutral-700 transition-all duration-300`}>
+          <div className="flex justify-between items-center w-full flex-row">
             <div className="flex items-center gap-2">
               <span className={`w-2.5 h-2.5 rounded-none ${pendingLocalEdits.length > 0 ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'}`} />
               <span className="text-[10px] font-black uppercase tracking-widest text-neutral-400 font-mono">Ledger Node Health</span>
