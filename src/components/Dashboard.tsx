@@ -30,6 +30,8 @@ import {
   ResponsiveContainer, 
   LineChart, 
   Line, 
+  BarChart,
+  Bar,
   XAxis, 
   YAxis, 
   CartesianGrid, 
@@ -429,6 +431,14 @@ export const Dashboard: React.FC = () => {
       name: d.label.substring(0, 3).toUpperCase(),
       date: d.dateStr,
       revenue: weeklyCollectionsData.dayTotals[d.dateStr] || 0,
+    }));
+  }, [weeklyCollectionsData]);
+
+  const classGoalsData = useMemo(() => {
+    return weeklyCollectionsData.rows.map(row => ({
+      name: row.className,
+      "Actual Collected": row.classTotal,
+      "Target Goal": parseFloat(row.historicalAvg.toFixed(2))
     }));
   }, [weeklyCollectionsData]);
 
@@ -1813,12 +1823,16 @@ export const Dashboard: React.FC = () => {
                 <div className="relative flex-1 max-w-md">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-neutral-500" size={14} />
                   <input
+                    id="dashboard-roster-search"
                     type="text"
                     value={dutySearch}
                     onChange={(e) => setDutySearch(e.target.value)}
                     placeholder="Search roster by staff name, class grade or specific duty..."
-                    className="w-full bg-neutral-950 border border-neutral-800 focus:border-neutral-604 focus:ring-0 text-white placeholder-neutral-500 text-xs pl-9 pr-4 py-2 uppercase font-mono tracking-wide rounded-none"
+                    className="w-full bg-neutral-950 border border-neutral-800 focus:border-neutral-604 focus:ring-0 text-white placeholder-neutral-500 text-xs pl-9 pr-16 py-2 uppercase font-mono tracking-wide rounded-none"
                   />
+                  <kbd className="absolute right-2 top-1/2 -translate-y-1/2 hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 border border-neutral-800 bg-neutral-950 font-mono text-[8px] text-neutral-500 rounded-xs leading-none pointer-events-none uppercase font-bold tracking-wider select-none">
+                    Ctrl+K
+                  </kbd>
                 </div>
 
                 {/* Filter Tabs */}
@@ -2302,41 +2316,92 @@ export const Dashboard: React.FC = () => {
             </div>
 
             {/* Collections Trend Line / Bar Chart Row */}
-            <div className="bg-neutral-950 border-2 border-neutral-850 p-6 space-y-4">
-              <div>
-                <h4 className="text-xs font-black text-white uppercase tracking-wider font-mono">Daily Inflow Velocity</h4>
-                <p className="text-[9px] text-neutral-500 font-mono uppercase tracking-widest mt-0.5">Visualizing fee revenue flow across days</p>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 animate-fade-in">
+              {/* Daily Inflow Velocity */}
+              <div className="bg-neutral-950 border-2 border-neutral-850 p-6 space-y-4">
+                <div>
+                  <h4 className="text-xs font-black text-white uppercase tracking-wider font-mono">Daily Inflow Velocity</h4>
+                  <p className="text-[9px] text-neutral-500 font-mono uppercase tracking-widest mt-0.5">Visualizing fee revenue flow across days</p>
+                </div>
+
+                <div className="h-48 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={weeklyChartData} margin={{ top: 10, right: 10, left: 0, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#1c1c1c" vertical={false} />
+                      <XAxis 
+                        dataKey="name" 
+                        stroke="#4b5563" 
+                        fontSize={9} 
+                        tickLine={false} 
+                        axisLine={false}
+                      />
+                      <YAxis 
+                        stroke="#4b5563" 
+                        fontSize={9} 
+                        tickLine={false} 
+                        axisLine={false}
+                        tickFormatter={(v) => `GHC ${v}`}
+                      />
+                      <RechartsTooltip content={<CustomTooltip />} cursor={{ stroke: '#2e2e2e', strokeWidth: 1 }} />
+                      <Line 
+                        type="monotone" 
+                        dataKey="revenue" 
+                        name="Actual Collected"
+                        stroke="#fbbf24" 
+                        strokeWidth={3} 
+                        dot={{ r: 4, fill: '#fbbf24', strokeWidth: 0 }}
+                        activeDot={{ r: 6, fill: '#ffffff', strokeWidth: 0 }}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
               </div>
 
-              <div className="h-44 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={weeklyChartData} margin={{ top: 10, right: 10, left: 0, bottom: 5 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#1c1c1c" vertical={false} />
-                    <XAxis 
-                      dataKey="name" 
-                      stroke="#4b5563" 
-                      fontSize={9} 
-                      tickLine={false} 
-                      axisLine={false}
-                    />
-                    <YAxis 
-                      stroke="#4b5563" 
-                      fontSize={9} 
-                      tickLine={false} 
-                      axisLine={false}
-                      tickFormatter={(v) => `GHC ${v}`}
-                    />
-                    <RechartsTooltip content={<CustomTooltip />} cursor={{ stroke: '#2e2e2e', strokeWidth: 1 }} />
-                    <Line 
-                      type="monotone" 
-                      dataKey="revenue" 
-                      stroke="#fbbf24" 
-                      strokeWidth={3} 
-                      dot={{ r: 4, fill: '#fbbf24', strokeWidth: 0 }}
-                      activeDot={{ r: 6, fill: '#ffffff', strokeWidth: 0 }}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
+              {/* Weekly Class Goals comparison bar chart */}
+              <div className="bg-neutral-950 border-2 border-neutral-850 p-6 space-y-4">
+                <div>
+                  <h4 className="text-xs font-black text-white uppercase tracking-wider font-mono">Weekly Class Goals Comparison</h4>
+                  <p className="text-[9px] text-neutral-500 font-mono uppercase tracking-widest mt-0.5">Comparing actual weekly collections against target goals per class level</p>
+                </div>
+
+                <div className="h-48 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={classGoalsData} margin={{ top: 10, right: 10, left: 0, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#1c1c1c" vertical={false} />
+                      <XAxis 
+                        dataKey="name" 
+                        stroke="#4b5563" 
+                        fontSize={9} 
+                        tickLine={false} 
+                        axisLine={false}
+                      />
+                      <YAxis 
+                        stroke="#4b5563" 
+                        fontSize={9} 
+                        tickLine={false} 
+                        axisLine={false}
+                        tickFormatter={(v) => `GHC ${v}`}
+                      />
+                      <RechartsTooltip content={<CustomTooltip />} cursor={{ fill: '#171717', opacity: 0.4 }} />
+                      <Legend 
+                        verticalAlign="top" 
+                        height={24} 
+                        iconType="square" 
+                        iconSize={8}
+                        wrapperStyle={{ 
+                          fontSize: '8px', 
+                          fontWeight: '900', 
+                          textTransform: 'uppercase', 
+                          fontFamily: 'JetBrains Mono, monospace', 
+                          color: '#a3a3a3',
+                          paddingBottom: '10px'
+                        }}
+                      />
+                      <Bar dataKey="Actual Collected" fill="#fbbf24" name="Actual" maxBarSize={16} radius={[2, 2, 0, 0]} />
+                      <Bar dataKey="Target Goal" fill="#3f3f46" name="Target Goal" maxBarSize={16} radius={[2, 2, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
               </div>
             </div>
 

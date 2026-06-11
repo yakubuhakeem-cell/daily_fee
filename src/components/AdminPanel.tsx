@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
+import QRCode from 'qrcode';
 import { useApp } from '../context/AppContext';
 import { StudentClass, Student, UserRole } from '../types';
 import { Plus, UserPlus, Trash2, Edit2, ShieldAlert, Check, X, ToggleLeft, ToggleRight, Database, Server, RefreshCw, Copy, Share2, Users, BellRing, MessageSquareCode, UserCheck, Camera, Upload, Search, QrCode, Printer, Contact, Award } from 'lucide-react';
@@ -64,8 +65,45 @@ export const AdminPanel: React.FC = () => {
   const [showRestoreConfirmId, setShowRestoreConfirmId] = useState<string | null>(null);
   const [showBackupPurgeConfirm, setShowBackupPurgeConfirm] = useState(false);
   const [selectedIdCardStudent, setSelectedIdCardStudent] = useState<Student | null>(null);
+  const [historyModalStudent, setHistoryModalStudent] = useState<Student | null>(null);
+  const [idCardQrDataUrl, setIdCardQrDataUrl] = useState<string>('');
+  const [idCardTheme, setIdCardTheme] = useState<'dark' | 'light'>('dark');
+
+  useEffect(() => {
+    if (selectedIdCardStudent) {
+      // Encode both name and unique ID into the QR Code for robust check-in scanning
+      const qrPayload = JSON.stringify({
+        id: selectedIdCardStudent.id,
+        name: selectedIdCardStudent.name,
+        rollNumber: selectedIdCardStudent.rollNumber || ''
+      });
+
+      QRCode.toDataURL(qrPayload, {
+        margin: 1,
+        width: 150,
+        color: {
+          dark: '#000000',
+          light: '#ffffff'
+        }
+      })
+        .then(url => {
+          setIdCardQrDataUrl(url);
+        })
+        .catch(err => {
+          console.error("Failed to generate QR Code offline using local qrcode library", err);
+          setIdCardQrDataUrl('');
+        });
+    } else {
+      setIdCardQrDataUrl('');
+    }
+  }, [selectedIdCardStudent]);
+
   const [showPromotionModal, setShowPromotionModal] = useState(false);
   const [promotionConfirmedText, setPromotionConfirmedText] = useState('');
+  const [promotionTab, setPromotionTab] = useState<'bulk' | 'single'>('bulk');
+  const [selectedPromoStudentId, setSelectedPromoStudentId] = useState<string>('');
+  const [inLinePromoStudentId, setInLinePromoStudentId] = useState<string>('');
+  const [inLineRepeatClass, setInLineRepeatClass] = useState<StudentClass>('B1');
 
   const getSafeOrigin = () => {
     try {
@@ -131,6 +169,45 @@ export const AdminPanel: React.FC = () => {
     if (!activeTerm || !activeTerm.schoolDays) return [];
     const holidays = activeTerm.publicHolidays || [];
     return [...activeTerm.schoolDays].filter(d => d <= currentDate && !holidays.includes(d)).sort();
+  }, [activeTerm, currentDate]);
+
+  // Dynamic Expiry Calculation based on activeTerm and currentDate
+  const expiryInfo = useMemo(() => {
+    if (!activeTerm || !activeTerm.schoolDays || activeTerm.schoolDays.length === 0) {
+      // Fallback: 90 days from currentDate
+      const d = currentDate ? new Date(currentDate) : new Date();
+      d.setDate(d.getDate() + 90);
+      const fallbackExpiry = d.toISOString().split('T')[0];
+      return {
+        expiryDate: fallbackExpiry,
+        daysRemaining: 90,
+        isNearingExpiry: false,
+        isExpired: false,
+        termName: '25/26 TERM'
+      };
+    }
+
+    // Get sorted school days to locate first and last day
+    const sortedDays = [...activeTerm.schoolDays].sort();
+    const expiryDate = sortedDays[sortedDays.length - 1]; // Last school day of the active term
+    
+    // Parse to calculate remaining days
+    const current = currentDate ? new Date(currentDate) : new Date();
+    const expiry = new Date(expiryDate);
+    const diffTime = expiry.getTime() - current.getTime();
+    const daysRemaining = Math.max(0, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
+    
+    // "Nearing its expiration date" -> let's say less than or equal to 14 days remaining
+    const isNearingExpiry = daysRemaining > 0 && daysRemaining <= 14;
+    const isExpired = daysRemaining <= 0;
+
+    return {
+      expiryDate,
+      daysRemaining,
+      isNearingExpiry,
+      isExpired,
+      termName: activeTerm.name || '25/26 TERM'
+    };
   }, [activeTerm, currentDate]);
 
   // Find students who have not paid for 3 or more consecutive school days
@@ -1996,19 +2073,30 @@ export const AdminPanel: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="flex gap-3">
+                <div className="flex flex-col gap-2.5">
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setEditStudentObj(null)}
+                      className="w-1/3 text-xs bg-neutral-950 border-2 border-neutral-800 hover:border-neutral-700 text-neutral-400 py-3 font-black uppercase tracking-widest transition-colors"
+                    >
+                      Quit
+                    </button>
+                    <button
+                      type="submit"
+                      className="w-2/3 text-xs bg-white hover:bg-amber-400 text-black py-3 font-black uppercase tracking-widest transition-colors cursor-pointer"
+                    >
+                      Save Changes
+                    </button>
+                  </div>
+
                   <button
                     type="button"
-                    onClick={() => setEditStudentObj(null)}
-                    className="w-1/3 text-xs bg-neutral-950 border-2 border-neutral-800 hover:border-neutral-700 text-neutral-400 py-3 font-black uppercase tracking-widest transition-colors"
+                    onClick={() => setSelectedIdCardStudent(editStudentObj)}
+                    className="w-full h-11 flex items-center justify-center gap-2 text-xs bg-neutral-950 hover:bg-neutral-850 text-amber-400 font-mono font-black border-2 border-neutral-800 hover:border-amber-400 uppercase tracking-widest transition-all cursor-pointer"
                   >
-                    Quit
-                  </button>
-                  <button
-                    type="submit"
-                    className="w-2/3 text-xs bg-white hover:bg-amber-400 text-black py-3 font-black uppercase tracking-widest transition-colors cursor-pointer"
-                  >
-                    Save Changes
+                    <Printer size={14} />
+                    <span>Print ID Card</span>
                   </button>
                 </div>
               </form>
@@ -2040,13 +2128,186 @@ export const AdminPanel: React.FC = () => {
                 </p>
               </div>
             </div>
+
+            {/* Inline Single Student Promotion & Repetition Desk */}
+            <div className="bg-neutral-900 border-4 border-neutral-800 p-8 h-fit space-y-6">
+              <div className="flex items-center gap-3 pb-3 border-b-2 border-neutral-800">
+                <Award size={18} className="text-amber-400" />
+                <h3 className="text-sm font-black uppercase tracking-widest text-white">Academic Progression Desk</h3>
+              </div>
+
+              <p className="text-[11px] text-neutral-350 font-semibold leading-relaxed">
+                Alter or progress grade levels for a specific pupil. Choose either single logical promotion to the next academic level, or designate custom repetition.
+              </p>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                    Select Active Student
+                  </label>
+                  <select
+                    value={inLinePromoStudentId}
+                    onChange={(e) => {
+                      const id = e.target.value;
+                      setInLinePromoStudentId(id);
+                      const currentS = students.find(s => s.id === id);
+                      if (currentS) {
+                        setInLineRepeatClass(currentS.class);
+                      }
+                    }}
+                    className="w-full bg-neutral-950 border-2 border-neutral-800 focus:border-amber-400 text-white font-mono text-xs p-3 font-semibold focus:outline-none"
+                  >
+                    <option value="">-- Choose active student --</option>
+                    {students.filter(s => s.active).map(student => (
+                      <option key={student.id} value={student.id}>
+                        {student.name} ({student.class})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {inLinePromoStudentId && (() => {
+                  const studentInHand = students.find(s => s.id === inLinePromoStudentId);
+                  if (!studentInHand) return null;
+
+                  const CLASS_PROMOTION_MAP: Record<StudentClass, { nextClass: StudentClass | null; category: 'Pre-school' | 'Primary' | 'JHS'; completes: boolean }> = {
+                    'Nursery': { nextClass: 'KG1', category: 'Pre-school', completes: false },
+                    'KG1':     { nextClass: 'KG2', category: 'Pre-school', completes: false },
+                    'KG2':     { nextClass: 'B1',  category: 'Primary',    completes: false },
+                    'B1':      { nextClass: 'B2',  category: 'Primary',    completes: false },
+                    'B2':      { nextClass: 'B3',  category: 'Primary',    completes: false },
+                    'B3':      { nextClass: 'B4',  category: 'Primary',    completes: false },
+                    'B4':      { nextClass: 'B5',  category: 'Primary',    completes: false },
+                    'B5':      { nextClass: 'B6',  category: 'Primary',    completes: false },
+                    'B6':      { nextClass: 'B7',  category: 'JHS',        completes: false },
+                    'B7':      { nextClass: 'B8',  category: 'JHS',        completes: false },
+                    'B8':      { nextClass: 'B9',  category: 'JHS',        completes: false },
+                    'B9':      { nextClass: null,  category: 'JHS',        completes: true }
+                  };
+
+                  const mapEntry = CLASS_PROMOTION_MAP[studentInHand.class];
+                  const nextClassString = mapEntry?.completes ? 'Completed / Graduate' : mapEntry?.nextClass || 'N/A';
+
+                  return (
+                    <div className="space-y-4 pt-2 border-t border-neutral-850">
+                      {/* Promo Action Button */}
+                      <div className="bg-neutral-950 p-3.5 border border-neutral-800 rounded-sm space-y-2">
+                        <div className="flex items-center gap-1.5 text-emerald-400 font-bold uppercase text-[9px] font-mono tracking-wider">
+                          <Award size={12} className="stroke-[2.5]" />
+                          <span>Standard Logical Promotion</span>
+                        </div>
+                        <p className="text-[10px] text-neutral-400 font-semibold">
+                          Advance {studentInHand.name} from <strong className="text-white">{studentInHand.class}</strong> to <strong className="text-emerald-400">{nextClassString}</strong>.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (currentUser?.role !== 'Administrator') {
+                              alert('Access Denied: Only Administrators are permitted to make student grade alterations.');
+                              return;
+                            }
+                            if (mapEntry?.completes) {
+                              updateStudent({
+                                ...studentInHand,
+                                active: false
+                              });
+                              showToast(`Successfully marked ${studentInHand.name} as Completed/Graduated.`);
+                            } else if (mapEntry?.nextClass) {
+                              updateStudent({
+                                ...studentInHand,
+                                class: mapEntry.nextClass,
+                                category: mapEntry.category
+                              });
+                              showToast(`Successfully promoted ${studentInHand.name} to ${mapEntry.nextClass}.`);
+                            }
+                            setInLinePromoStudentId('');
+                          }}
+                          className="w-full mt-1.5 py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-mono font-black uppercase text-[10px] tracking-wider border-none rounded-sm transition-colors cursor-pointer"
+                        >
+                          ⚡ Execute Promotion
+                        </button>
+                      </div>
+
+                      {/* Repetition Class & Action Block */}
+                      <div className="bg-neutral-950 p-3.5 border border-neutral-800 rounded-sm space-y-3">
+                        <div className="flex items-center gap-1.5 text-amber-500 font-bold uppercase text-[9px] font-mono tracking-wider">
+                          <RefreshCw size={11} className="stroke-[2.5]" />
+                          <span>Custom Repetition / Assignment</span>
+                        </div>
+                        <div className="space-y-1">
+                          <label className="block text-[8px] font-mono text-neutral-500 uppercase font-black">
+                            Select Repetition Target Grade
+                          </label>
+                          <select
+                            value={inLineRepeatClass}
+                            onChange={(e) => setInLineRepeatClass(e.target.value as StudentClass)}
+                            className="w-full bg-neutral-900 border border-neutral-800 text-white font-mono text-[10px] p-2 focus:outline-none focus:border-amber-400"
+                          >
+                            {['Nursery', 'KG1', 'KG2', 'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9'].map(cls => (
+                              <option key={cls} value={cls}>
+                                {cls} (Repeat / Assign Grade)
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (currentUser?.role !== 'Administrator') {
+                              alert('Access Denied: Only Administrators are permitted to make student grade alterations.');
+                              return;
+                            }
+                            const targetCategory = getClassCategory(inLineRepeatClass);
+                            updateStudent({
+                              ...studentInHand,
+                              class: inLineRepeatClass,
+                              category: targetCategory,
+                              active: true
+                            });
+                            showToast(`Successfully set ${studentInHand.name} to repeat/enroll in grade: ${inLineRepeatClass}.`);
+                            setInLinePromoStudentId('');
+                          }}
+                          className="w-full py-2 px-3 bg-amber-500 hover:bg-amber-400 text-black font-mono font-black uppercase text-[10px] tracking-wider border-none rounded-sm transition-colors cursor-pointer"
+                        >
+                          🔄 Confirm Repetition
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
           </div>
 
           {/* Directory Listings */}
           <div className="bg-neutral-900 border-4 border-neutral-800 col-span-1 lg:col-span-2 overflow-hidden flex flex-col justify-between">
             <div className="p-6 bg-neutral-950 border-b-2 border-neutral-850 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-              <div className="space-y-1">
+              <div className="space-y-1.5">
                 <span className="text-[10px] font-black text-neutral-400 font-mono uppercase tracking-widest block">Student Directory Catalog ({filteredStudentsForList.length})</span>
+                
+                {/* Gender Totals Summary */}
+                <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[9.5px] font-mono font-bold text-neutral-500 uppercase tracking-widest pb-1 border-b border-neutral-850/35">
+                  <span className="text-neutral-450">DIRECTORY:</span>
+                  <span className="text-sky-400 font-black">👦 Male: <strong className="text-white">{students.filter(s => s.gender === 'Male').length}</strong></span>
+                  <span>/</span>
+                  <span className="text-pink-400 font-black">👧 Female: <strong className="text-white">{students.filter(s => s.gender === 'Female').length}</strong></span>
+                  {students.filter(s => !s.gender).length > 0 && (
+                    <>
+                      <span>/</span>
+                      <span className="text-neutral-500">Unspecified: <strong className="text-neutral-350">{students.filter(s => !s.gender).length}</strong></span>
+                    </>
+                  )}
+                  {students.some(s => !s.active) && (
+                    <>
+                      <span className="text-neutral-605">|</span>
+                      <span className="text-neutral-450">ACTIVE ONLY:</span>
+                      <span className="text-sky-400 font-black">👦 Male: <strong className="text-emerald-400">{students.filter(s => s.active && s.gender === 'Male').length}</strong></span>
+                      <span>/</span>
+                      <span className="text-pink-400 font-black">👧 Female: <strong className="text-emerald-400">{students.filter(s => s.active && s.gender === 'Female').length}</strong></span>
+                    </>
+                  )}
+                </div>
+
                 <div className="flex flex-wrap items-center gap-2">
                   {students.some(s => !s.active) && (
                     <button
@@ -2143,12 +2404,16 @@ export const AdminPanel: React.FC = () => {
             <div className="px-6 py-4 bg-neutral-950/60 border-b-2 border-neutral-850 flex items-center gap-3">
               <Search size={14} className="text-neutral-500 shrink-0" />
               <input
+                id="admin-student-search"
                 type="text"
                 placeholder="Search student by name or ID..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full bg-transparent border-0 p-0 text-xs text-white placeholder-neutral-650 focus:outline-none focus:ring-0 font-mono font-bold uppercase tracking-wider"
               />
+              <kbd className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 border border-neutral-800 bg-neutral-950 font-mono text-[8px] text-neutral-500 rounded-xs leading-none pointer-events-none uppercase font-bold tracking-wider select-none shrink-0">
+                Ctrl+K
+              </kbd>
               {searchQuery && (
                 <button
                   type="button"
@@ -2186,7 +2451,14 @@ export const AdminPanel: React.FC = () => {
                     </div>
                     
                     <div className="space-y-1.5">
-                      <p className={`text-base font-black text-white uppercase tracking-tight ${!st.active ? 'line-through text-neutral-500' : ''}`}>{st.name}</p>
+                      <p 
+                        onClick={() => setHistoryModalStudent(st)}
+                        className={`text-base font-black text-white hover:text-amber-400 cursor-pointer transition-colors uppercase tracking-tight decoration-amber-400 hover:underline flex items-center gap-1.5 ${!st.active ? 'line-through text-neutral-500' : ''}`}
+                        title="Click to view full registration history, financial ledger & pass credentials"
+                      >
+                        {st.name}
+                        <span className="text-neutral-500 hover:text-amber-400 text-[10px] lowercase font-mono font-normal no-underline">(view history)</span>
+                      </p>
                       <div className="flex gap-2.5 items-center text-[10px] text-neutral-400 font-mono font-bold uppercase tracking-wider">
                         <span className="bg-neutral-955 border border-neutral-800 px-2.5 py-0.5 text-amber-400 font-black">{st.class}</span>
                         {st.gender && (
@@ -2219,9 +2491,10 @@ export const AdminPanel: React.FC = () => {
                       type="button"
                       onClick={() => setSelectedIdCardStudent(st)}
                       title="Generate & Print Student ID Card with QR Code"
-                      className="p-2 border-2 border-neutral-800 hover:border-amber-400 hover:text-amber-400 bg-neutral-950 text-neutral-400 transition-colors cursor-pointer"
+                      className="p-2 border-2 border-neutral-800 hover:border-amber-400 hover:text-amber-400 bg-neutral-950 text-neutral-400 transition-colors cursor-pointer flex items-center justify-center gap-1 font-mono text-[9px] font-black uppercase tracking-wider"
                     >
-                      <QrCode size={13} className="stroke-[2.5]" />
+                      <Printer size={13} className="stroke-[2.5]" />
+                      <span className="hidden sm:inline">Print ID</span>
                     </button>
 
                     {/* Active toggle */}
@@ -3677,258 +3950,1031 @@ export const AdminPanel: React.FC = () => {
         </div>
       )}
 
-      {/* Student ID Card Print Modal */}
-      {selectedIdCardStudent && (
-        <div id="id-card-modal-container" className="fixed inset-0 z-50 bg-neutral-950/90 backdrop-blur-md flex items-center justify-center p-4 font-sans overflow-y-auto">
-          {/* Print Style Injector */}
-          <style dangerouslySetInnerHTML={{ __html: `
-            @media print {
-              html, body {
-                visibility: hidden !important;
-                background: white !important;
-                -webkit-print-color-adjust: exact !important;
-                print-color-adjust: exact !important;
-              }
-              #id-card-print-target, #id-card-print-target * {
-                visibility: visible !important;
-              }
-              #id-card-print-target {
-                position: absolute !important;
-                left: 50% !important;
-                top: 50% !important;
-                transform: translate(-50%, -50%) scale(1.1) !important;
-                border: none !important;
-                box-shadow: none !important;
-                background: white !important;
-                display: flex !important;
-                flex-direction: row !important;
-                gap: 24px !important;
-                margin: 0 !important;
-                padding: 0 !important;
-                width: auto !important;
-                height: auto !important;
-              }
-              #id-card-actions-panel, .no-print {
-                display: none !important;
-              }
-            }
-          `}} />
+      {/* Interactive Student Portfolio Ledger and Registration History Modal */}
+      {historyModalStudent && (() => {
+        const studentPayments = payments.filter(p => p.studentId === historyModalStudent.id);
+        const totalPaidThisTerm = studentPayments.reduce((sum, p) => sum + p.amount, 0);
+        const totalRegisteredDays = studentPayments.filter(p => !p.isAbsent).length;
+        const totalAbsentDays = studentPayments.filter(p => p.isAbsent).length;
 
-          <div className="relative w-full max-w-2xl bg-neutral-900 border-4 border-amber-400 p-6 md:p-8 space-y-6 shadow-[8px_8px_0px_0px_rgba(251,191,36,0.15)] text-white flex flex-col">
-            
-            {/* Header */}
-            <div className="flex justify-between items-start border-b border-neutral-800 pb-4 shrink-0">
-              <div className="flex items-start gap-3">
-                <div className="p-2.5 bg-amber-400/10 border border-amber-400 text-amber-300 shrink-0">
-                  <Contact size={20} />
-                </div>
-                <div>
-                  <span className="text-[9px] text-amber-450 font-mono tracking-widest font-black uppercase block font-bold">Credential Printing Desk</span>
-                  <h3 className="text-base font-black uppercase tracking-tight">Student Access Badge Issuer</h3>
-                  <p className="text-[11px] text-neutral-400 mt-1">
-                    Preview and print official double-sided laminating cards. Scannable at checkout gates.
-                  </p>
-                </div>
-              </div>
-              <button 
-                onClick={() => setSelectedIdCardStudent(null)} 
-                className="p-1 cursor-pointer text-neutral-450 hover:text-white transition-colors"
-                title="Close Window"
-              >
-                <X size={20} />
-              </button>
-            </div>
-
-            {/* Print Target Grid Card Content */}
-            <div id="id-card-print-target" className="flex flex-col md:flex-row items-center justify-center gap-6 py-4 px-2 bg-neutral-950/40 border border-neutral-800 rounded p-6">
+        return (
+          <div className="fixed inset-0 z-50 bg-neutral-950/90 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
+            <div className="relative w-full max-w-2xl bg-neutral-900 border-4 border-amber-500 p-6 md:p-8 space-y-6 shadow-[8px_8px_0px_0px_rgba(251,191,36,0.15)] text-white">
               
-              {/* Front Side Card Cardboard */}
-              <div className="w-[340px] h-[215px] bg-gradient-to-br from-neutral-900 via-neutral-900 to-black text-white relative rounded-xl border-2 border-neutral-700 shadow-xl overflow-hidden flex flex-col justify-between shrink-0">
-                {/* Visual Top Accent Pattern */}
-                <div className="absolute top-0 left-0 right-0 h-1.5 bg-amber-400" />
-                <div className="absolute top-1.5 right-6 w-16 h-12 bg-amber-400/5 rounded-full blur-xl pointer-events-none" />
+              {/* Header section */}
+              <div className="flex justify-between items-start border-b border-neutral-800 pb-4">
+                <div className="flex items-start gap-3">
+                  <div className="p-2.5 bg-amber-400/10 border border-amber-400 text-amber-300 shrink-0">
+                    <Users size={20} />
+                  </div>
+                  <div>
+                    <span className="text-[9px] text-amber-400 font-mono tracking-widest font-black uppercase block">Student Portfolio Ledger</span>
+                    <h3 className="text-base font-black uppercase tracking-tight">{historyModalStudent.name}</h3>
+                    <p className="text-[11px] text-neutral-400 mt-1">
+                      Check-in statistics, custom billing logs and credentials for active school term.
+                    </p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setHistoryModalStudent(null)} 
+                  className="p-1 cursor-pointer text-neutral-400 hover:text-white transition-colors"
+                  title="Close History Portfolio"
+                >
+                  <X size={20} />
+                </button>
+              </div>
 
-                {/* Card Top Header */}
-                <div className="px-3.5 pt-3 flex items-center justify-between border-b border-neutral-800/60 pb-1.5">
-                  <div className="flex items-center gap-1.5">
-                    {/* Tiny Logo mark */}
-                    <div className="w-5 h-5 bg-amber-400 text-neutral-900 rounded-sm flex items-center justify-center font-black text-[10px] tracking-tighter">
-                      SH
+              {/* Stats overview bento grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                
+                {/* Academic credentials */}
+                <div className="bg-neutral-950 p-4 border border-neutral-800 rounded-sm space-y-3">
+                  <span className="text-[9px] font-mono text-neutral-500 uppercase font-black block tracking-widest border-b border-neutral-900 pb-1">Academic Status</span>
+                  
+                  <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+                    <div>
+                      <span className="text-[9.5px] text-neutral-450 block uppercase font-bold">Grade Level</span>
+                      <strong className="text-white text-[13px]">{historyModalStudent.class}</strong>
                     </div>
                     <div>
-                      <span className="text-[10px] font-black uppercase tracking-wider text-white block">SHCA-Sawla</span>
-                      <span className="text-[7.5px] font-mono text-amber-400 uppercase tracking-widest block font-extrabold -mt-0.5">Savior Academy</span>
+                      <span className="text-[9.5px] text-neutral-455 block uppercase font-bold">Category</span>
+                      <strong className="text-amber-400 text-[11px]">{historyModalStudent.category}</strong>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <span className="text-[6.5px] font-black bg-emerald-950/80 text-emerald-400 border border-emerald-905 py-0.5 px-1.5 rounded-sm uppercase tracking-wide">
-                      Active Pass
+
+                  <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+                    <div>
+                      <span className="text-[9.5px] text-neutral-450 block uppercase font-bold">Identity Code</span>
+                      <strong className="text-white text-[11px]">{historyModalStudent.rollNumber || 'N/A'}</strong>
+                    </div>
+                    <div>
+                      <span className="text-[9.5px] text-neutral-455 block uppercase font-bold">Enrollment</span>
+                      <span className={`text-[10px] font-black px-1.5 py-0.2 uppercase rounded ${historyModalStudent.active ? 'bg-emerald-950 text-emerald-400 border border-emerald-900/30' : 'bg-red-955 text-red-500 border border-red-900/30'}`}>
+                        {historyModalStudent.active ? 'Active' : 'Suspended'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="text-xs font-mono pt-1">
+                    <span className="text-[9.5px] text-neutral-500 block uppercase font-bold">Guardian Verified Contact</span>
+                    <strong className="text-neutral-300 tracking-tight font-extrabold">{historyModalStudent.guardianPhone || 'No registered mobile'}</strong>
+                  </div>
+                </div>
+
+                {/* Term Financial ledger stats */}
+                <div className="bg-neutral-955 border border-neutral-800 p-4 rounded-sm space-y-2.5 flex flex-col justify-between">
+                  <div>
+                    <span className="text-[9px] font-mono text-neutral-500 uppercase font-black block tracking-widest border-b border-neutral-900 pb-1">Payment Balance</span>
+                    
+                    <div className="flex justify-between items-baseline pt-1.5">
+                      <span className="text-[10px] font-bold text-neutral-400 font-mono uppercase">Total Paid (Term):</span>
+                      <span className="text-xl font-black text-amber-400 font-mono tracking-tighter">
+                        GHC {totalPaidThisTerm.toFixed(2)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="bg-neutral-950 p-2.5 border border-neutral-900 rounded-xs flex items-center justify-around text-center text-xs font-mono gap-1">
+                    <div>
+                      <span className="text-[8px] text-neutral-500 block uppercase font-black">Checked In</span>
+                      <strong className="text-emerald-400 font-black text-sm">{totalRegisteredDays}d</strong>
+                    </div>
+                    <div className="h-6 w-[1.5px] bg-neutral-900" />
+                    <div>
+                      <span className="text-[8px] text-neutral-500 block uppercase font-black">Logged Absent</span>
+                      <strong className="text-red-500 font-black text-sm">{totalAbsentDays}d</strong>
+                    </div>
+                    <div className="h-6 w-[1.5px] bg-neutral-900" />
+                    <div>
+                      <span className="text-[8px] text-neutral-500 block uppercase font-black">Billing Scheme</span>
+                      <span className="text-[9px] bg-neutral-900 border border-neutral-800 text-amber-500 px-1 py-0.2 block rounded font-black mt-0.5">
+                        {historyModalStudent.paymentType || 'Daily'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+
+              {/* Registration and check-ins timeline history log */}
+              <div className="space-y-2">
+                <span className="text-[10px] font-mono font-black text-neutral-400 uppercase tracking-widest block font-bold">
+                  Presence Chronicle & Registration History ({studentPayments.length} entries)
+                </span>
+                
+                <div className="bg-neutral-950 border border-neutral-850 rounded-sm overflow-hidden divide-y divide-neutral-900 max-h-[220px] overflow-y-auto">
+                  {studentPayments.length === 0 ? (
+                    <div className="p-8 text-center text-xs font-mono font-bold uppercase text-neutral-500 tracking-wide">
+                      No matching check-in logs or daily transactions recorded for this student.
+                    </div>
+                  ) : (
+                    [...studentPayments].sort((a,b) => b.date.localeCompare(a.date)).map((pay) => (
+                      <div key={pay.id} className="p-3.5 flex items-center justify-between hover:bg-neutral-900/45 text-xs font-mono">
+                        <div className="flex items-center gap-3">
+                          <div className={`w-2 h-2 rounded-full ${pay.isAbsent ? 'bg-red-500' : 'bg-emerald-400'}`} />
+                          <div>
+                            <span className="text-white font-black block font-bold text-[11px]">{pay.date}</span>
+                            <span className="text-[9.5px] text-neutral-500 block">
+                              Collector: {pay.collectedBy || 'Staff Registrar'}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-3">
+                          {pay.isAbsent ? (
+                            <span className="text-[10px] bg-red-950 text-red-400 border border-red-900/40 px-2 py-0.5 text-right font-black uppercase rounded-xs">
+                              Absent
+                            </span>
+                          ) : (
+                            <div className="text-right">
+                              <span className="text-[10.5px] text-emerald-400 font-black block">
+                                GHC {pay.amount.toFixed(2)}
+                              </span>
+                              <span className="text-[8px] text-neutral-550 block uppercase tracking-wide">
+                                Present / Paid
+                              </span>
+                            </div>
+                          )}
+
+                          <span className={`text-[8.5px] select-none font-bold px-1.5 py-0.2 border rounded-sm uppercase ${pay.verified ? 'bg-emerald-950/40 text-emerald-400 border-emerald-900/50' : 'bg-amber-951 text-amber-300 border-amber-900/30'}`}>
+                            {pay.verified ? 'Verified' : 'Pending'}
+                          </span>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* Action buttons */}
+              <div className="border-t border-neutral-800 pt-4 flex flex-col sm:flex-row gap-3 font-mono">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedIdCardStudent(historyModalStudent);
+                    setHistoryModalStudent(null);
+                  }}
+                  className="flex-1 py-3 px-4 bg-amber-400 hover:bg-amber-300 text-black font-black uppercase text-xs tracking-widest transition-all cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <QrCode size={14} className="stroke-[2.5]" />
+                  <span>Generate QR Access ID Card</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setHistoryModalStudent(null)}
+                  className="w-full sm:w-1/3 py-3 px-4 bg-neutral-950 hover:bg-neutral-850 text-neutral-400 hover:text-white font-medium uppercase text-xs tracking-wider transition-colors border border-neutral-850 cursor-pointer"
+                >
+                  Close Portfolio
+                </button>
+              </div>
+
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Student ID Card Print Modal */}
+      {selectedIdCardStudent && (() => {
+        const student = selectedIdCardStudent;
+        const isDarkTheme = idCardTheme === 'dark';
+
+        const handleDirectPrint = () => {
+          let printIframe = document.getElementById('idcard-print-iframe') as HTMLIFrameElement;
+          if (!printIframe) {
+            printIframe = document.createElement('iframe');
+            printIframe.id = 'idcard-print-iframe';
+            printIframe.setAttribute('style', 'position:fixed; right:0; bottom:0; width:0; height:0; border:0; pointer-events:none;');
+            document.body.appendChild(printIframe);
+          }
+
+          const iframeDoc = printIframe.contentWindow?.document || printIframe.contentDocument;
+          if (!iframeDoc) return;
+
+          // Force colors explicitly with direct styles
+          const cardBgFront = isDarkTheme 
+            ? 'background: linear-gradient(135deg, #171717 0%, #0a0a0a 100%) !important; color: #ffffff !important;'
+            : 'background: linear-gradient(135deg, #ffffff 0%, #f9f9f9 100%) !important; color: #111111 !important; border: 1.5px solid #d4d4d8 !important;';
+
+          const cardBgBack = isDarkTheme 
+            ? 'background: linear-gradient(135deg, #171717 0%, #0a0a0a 100%) !important; color: #ffffff !important;'
+            : 'background: linear-gradient(135deg, #ffffff 0%, #f9f9f9 100%) !important; color: #111111 !important; border: 1.5px solid #d4d4d8 !important;';
+
+          const textMain = isDarkTheme ? 'color: #ffffff !important;' : 'color: #111111 !important;';
+          const textMuted = isDarkTheme ? 'color: #8e8e93 !important;' : 'color: #52525b !important;';
+          const borderCol = isDarkTheme ? 'border-color: #27272a !important;' : 'border-color: #e4e4e7 !important;';
+          const subBg = isDarkTheme ? 'background-color: #0c0a09 !important;' : 'background-color: #f4f4f5 !important;';
+
+          const docContent = `
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>SHCA Student ID - ${student.name}</title>
+    <meta charset="utf-8">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&family=JetBrains+Mono:wght@400;700;800&display=swap" rel="stylesheet">
+    <style>
+      @page {
+        size: landscape;
+        margin: 0;
+      }
+      html, body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        background-color: #ffffff;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+      }
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+        box-sizing: border-box;
+      }
+      .print-container {
+        display: flex;
+        flex-direction: row;
+        gap: 16px;
+        justify-content: center;
+        align-items: center;
+      }
+      .id-card {
+        width: 324px;
+        height: 204px;
+        border-radius: 8px;
+        border: 1.5px solid ${isDarkTheme ? '#3f3f46' : '#d4d4d8'} !important;
+        box-sizing: border-box;
+        overflow: hidden;
+        position: relative;
+        font-family: 'Inter', sans-serif;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        box-shadow: none;
+        ${cardBgFront}
+      }
+      .accent-top {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 4.5px;
+        background-color: ${isDarkTheme ? '#fbbf24' : '#d97706'} !important;
+      }
+      .header {
+        padding: 8px 10px 4px 10px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border-bottom: 1px solid ${isDarkTheme ? '#27272a' : '#e4e4e7'} !important;
+        margin-top: 4.5px;
+        box-sizing: border-box;
+      }
+      .header-logo-container {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+      }
+      .logo-badge {
+        width: 16px;
+        height: 16px;
+        background-color: #fbbf24 !important;
+        color: #000000 !important;
+        border-radius: 2px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 900;
+        font-size: 8px;
+        letter-spacing: -0.5px;
+      }
+      .logo-text {
+        font-weight: 900;
+        font-size: 8.5px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        ${textMain}
+      }
+      .active-pass-badge {
+        font-size: 5.5px;
+        font-weight: 900;
+        background-color: #022c22 !important;
+        color: #34d399 !important;
+        border: 1px solid #10b981 !important;
+        padding: 1px 3px;
+        border-radius: 2px;
+        text-transform: uppercase;
+      }
+      .expired-pass-badge {
+        font-size: 5.5px;
+        font-weight: 900;
+        background-color: #450a0a !important;
+        color: #f87171 !important;
+        border: 1px solid #b91c1c !important;
+        padding: 1px 3px;
+        border-radius: 2px;
+        text-transform: uppercase;
+      }
+      .main-content {
+        padding: 5px 10px;
+        display: flex;
+        gap: 8px;
+        flex: 1;
+        align-items: center;
+        box-sizing: border-box;
+      }
+      .avatar-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1.5px;
+      }
+      .avatar {
+        width: 54px;
+        height: 54px;
+        border-radius: 4.5px;
+        background-color: ${isDarkTheme ? '#09090b' : '#f4f4f5'} !important;
+        border: 1px solid ${isDarkTheme ? '#27272a' : '#e4e4e7'} !important;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+      }
+      .avatar-placeholder {
+        font-family: 'JetBrains Mono', monospace;
+        font-weight: 900;
+        font-size: 14px;
+        text-transform: uppercase;
+        ${textMain}
+      }
+      .avatar img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover !important;
+      }
+      .avatar-label {
+        font-size: 4.8px;
+        font-family: 'JetBrains Mono', monospace;
+        font-weight: 900;
+        letter-spacing: 0.5px;
+        ${textMuted}
+      }
+      .details {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 1.5px;
+      }
+      .field-label {
+        font-size: 5.5px;
+        font-family: 'JetBrains Mono', monospace;
+        font-weight: 700;
+        text-transform: uppercase;
+        ${textMuted}
+      }
+      .field-val-name {
+        font-size: 9.5px;
+        font-weight: 900;
+        text-transform: uppercase;
+        max-width: 140px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: block;
+        letter-spacing: -0.1px;
+        ${textMain}
+      }
+      .meta-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 3px;
+      }
+      .field-val-meta {
+        font-size: 7.5px;
+        font-weight: 900;
+        font-family: 'JetBrains Mono', monospace;
+        color: ${isDarkTheme ? '#fbbf24' : '#d97706'} !important;
+      }
+      .field-val-gender {
+        font-size: 7.5px;
+        font-weight: 700;
+        ${textMain}
+      }
+      .reg-id-box {
+        margin-top: 1px;
+        font-size: 5.5px;
+        font-family: 'JetBrains Mono', monospace;
+        ${textMuted}
+      }
+      .reg-id-badge {
+        font-weight: 800;
+        background-color: ${isDarkTheme ? '#09090b' : '#f4f4f5'} !important;
+        border: 1px solid ${isDarkTheme ? '#27272a' : '#e4e4e7'} !important;
+        padding: 0.5px 2.5px;
+        border-radius: 1.5px;
+        margin-left: 2px;
+        ${textMain}
+      }
+      .qr-code-box {
+        width: 42px;
+        height: 42px;
+        background-color: #ffffff !important;
+        padding: 1.5px;
+        border-radius: 2px;
+        border: 1px solid ${isDarkTheme ? '#27272a' : '#d4d4d8'} !important;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5px;
+        box-sizing: border-box;
+      }
+      .qr-code-img {
+        width: 34px;
+        height: 34px;
+      }
+      .qr-label {
+        font-size: 3.5px;
+        font-family: 'JetBrains Mono', monospace;
+        font-weight: 900;
+        color: #000000 !important;
+        letter-spacing: 0.1px;
+        line-height: 1;
+      }
+      .footer {
+        padding: 3px 10px;
+        border-top: 1px solid ${isDarkTheme ? '#27272a' : '#e4e4e7'} !important;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 5.8px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        ${subBg}
+      }
+      .footer-left {
+        font-weight: 705;
+        ${textMuted}
+      }
+      .footer-expiry {
+        font-weight: 900;
+        background-color: ${isDarkTheme ? '#000000' : '#e4e4e7'} !important;
+        border: 1px solid ${isDarkTheme ? '#27272a' : '#d4d4d8'} !important;
+        padding: 0.5px 2px;
+        border-radius: 1.5px;
+        font-size: 5px;
+        margin-left: 2px;
+        ${textMain}
+      }
+      .term-label {
+        font-weight: 900;
+        color: ${isDarkTheme ? '#fbbf24' : '#d97706'} !important;
+      }
+      
+      /* BACK SIDE */
+      .id-card-back {
+        ${cardBgBack}
+      }
+      .back-body {
+        padding: 6px 10px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        flex: 1;
+        box-sizing: border-box;
+      }
+      .rules-title {
+        font-size: 6.5px;
+        font-family: 'JetBrains Mono', monospace;
+        font-weight: 900;
+        letter-spacing: 0.5px;
+        margin-bottom: 2px;
+        ${textMuted}
+      }
+      .rules-list {
+        margin: 0;
+        padding-left: 10px;
+        font-size: 5.5px;
+        font-weight: 700;
+        line-height: 1.25;
+        ${textMuted}
+      }
+      .rules-list li {
+        margin-bottom: 1px;
+      }
+      .contact-meta {
+        display: flex;
+        justify-content: space-between;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 5.5px;
+        border-top: 1px dashed ${isDarkTheme ? '#27272a' : '#d4d4d8'} !important;
+        padding-top: 2.5px;
+        margin-top: 2px;
+      }
+      .contact-label {
+        display: block;
+        font-size: 4.5px;
+        ${textMuted}
+      }
+      .contact-val {
+        font-weight: 800;
+        ${textMain}
+      }
+      .status-banner-back {
+        border-radius: 2px;
+        padding: 1.5px;
+        text-align: center;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 5px;
+        font-weight: 900;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+        background-color: ${isDarkTheme ? '#09090b' : '#f4f4f5'} !important;
+        border: 1px solid ${isDarkTheme ? '#18181b' : '#e4e4e7'} !important;
+        ${textMuted}
+      }
+      .barcode-area {
+        background-color: #ffffff !important;
+        padding: 3px 10px;
+        border-top: 1px solid ${isDarkTheme ? '#27272a' : '#e4e4e7'} !important;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        box-sizing: border-box;
+      }
+      .barcode-lines {
+        width: 100%;
+        height: 14px;
+        display: flex;
+        align-items: stretch;
+        gap: 0.8px;
+        background-color: #ffffff !important;
+      }
+      .barcode-bar {
+        flex: 1;
+        background-color: #000000 !important;
+      }
+      .barcode-label {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 5px;
+        font-weight: 700;
+        letter-spacing: 1px;
+        color: #52525b !important;
+        margin-top: 1px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="print-container">
+      <div class="id-card">
+        <div class="accent-top"></div>
+        <div class="header">
+          <div class="header-logo-container">
+            <div class="logo-badge">SH</div>
+            <div class="logo-text">SHCA-SAWLA</div>
+          </div>
+          <div>
+            <span class="${expiryInfo.isExpired ? 'expired-pass-badge' : 'active-pass-badge'}">
+              ${expiryInfo.isExpired ? 'Expired' : 'Active Pass'}
+            </span>
+          </div>
+        </div>
+
+        <div class="main-content">
+          <div class="avatar-container">
+            <div class="avatar">
+              ${student.photoUrl 
+                ? `<img src="${student.photoUrl}" alt="${student.name}" />`
+                : `<div class="avatar-placeholder">${student.name.slice(0, 2).toUpperCase()}</div>`
+              }
+            </div>
+            <span class="avatar-label">STUDENT INFO</span>
+          </div>
+
+          <div class="details">
+            <div>
+              <span class="field-label">Pupil Name</span>
+              <span class="field-val-name">${student.name}</span>
+            </div>
+            <div class="meta-grid">
+              <div>
+                <span class="field-label">Class</span>
+                <span class="field-val-meta">${student.class}</span>
+              </div>
+              <div>
+                <span class="field-label">Gender</span>
+                <span class="field-val-gender">${student.gender || '—'}</span>
+              </div>
+            </div>
+            <div class="reg-id-box">
+              REG-ID: <span class="reg-id-badge">${student.rollNumber || 'SHC-' + student.id.substring(0, 5).toUpperCase()}</span>
+            </div>
+          </div>
+
+          <div class="qr-code-box">
+            <img class="qr-code-img" src="${idCardQrDataUrl}" />
+            <span class="qr-label">GATE PASS</span>
+          </div>
+        </div>
+
+        <div class="footer">
+          <div class="footer-left">
+            SYSTEM ACCREDITED <span class="footer-expiry">EXP: ${expiryInfo.expiryDate}</span>
+          </div>
+          <div class="term-label">${expiryInfo.termName.toUpperCase()}</div>
+        </div>
+      </div>
+
+      <div class="id-card id-card-back">
+        <div class="accent-top" style="background-color: ${isDarkTheme ? '#27272a' : '#d4d4d8'} !important;"></div>
+        <div class="header">
+          <span class="rules-title" style="margin: 0;">SECURITY CARD POLICY &amp; RULES</span>
+        </div>
+
+        <div class="back-body">
+          <ol class="rules-list">
+            <li>This card remains the property of SHCA-Sawla.</li>
+            <li>Always present this card for scanning &amp; gate check-ins.</li>
+            <li>Loss of credential elements must be reported immediately.</li>
+            <li>Unauthorized duplication or counterfeit transfer is prohibited.</li>
+          </ol>
+
+          <div class="contact-meta">
+            <div>
+              <span class="contact-label">Guardian Mobile</span>
+              <span class="contact-val">${student.guardianPhone || 'NOT ENROLLED'}</span>
+            </div>
+            <div style="text-align: right;">
+              <span class="contact-label">Authorized Registrar</span>
+              <span class="contact-val" style="color: ${isDarkTheme ? '#fbbf24' : '#d97706'} !important;">YAKUBU HAKEEM</span>
+            </div>
+          </div>
+
+          <div class="status-banner-back">
+            Validation Active &bull; Valid thru Term Closure ({expiryInfo.expiryDate})
+          </div>
+        </div>
+
+        <div class="barcode-area">
+          <div class="barcode-lines">
+            ${Array.from({ length: 32 }).map((_, idx) => `
+              <div class="barcode-bar" style="opacity: ${idx % 3 === 0 || idx % 4 === 1 ? 1 : 0};"></div>
+            `).join('')}
+          </div>
+          <div class="barcode-label">
+            *SHCA-${student.id.substring(0, 8).toUpperCase()}*
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      window.onload = function() {
+        setTimeout(function() {
+          window.focus();
+          window.print();
+        }, 300);
+      };
+    </script>
+  </body>
+</html>
+          `;
+
+          iframeDoc.open();
+          iframeDoc.write(docContent);
+          iframeDoc.close();
+        };
+
+        return (
+          <div id="id-card-modal-container" className="fixed inset-0 z-50 bg-neutral-955/95 backdrop-blur-md flex items-center justify-center p-4 font-sans overflow-y-auto">
+            <div className="relative w-full max-w-2xl bg-neutral-900 border-4 border-amber-400 p-6 md:p-8 space-y-6 shadow-[8px_8px_0px_0px_rgba(251,191,36,0.15)] text-white flex flex-col">
+              
+              {/* Header */}
+              <div className="flex justify-between items-start border-b border-neutral-800 pb-4 shrink-0">
+                <div className="flex items-start gap-3">
+                  <div className="p-2.5 bg-amber-400/10 border border-amber-400 text-amber-300 shrink-0">
+                    <Contact size={20} />
+                  </div>
+                  <div>
+                    <span className="text-[9px] text-amber-450 font-mono tracking-widest font-black uppercase block font-bold">Credential Printing Desk</span>
+                    <h3 className="text-base font-black uppercase tracking-tight">Student Access Badge Issuer</h3>
+                    <p className="text-[11px] text-neutral-401 mt-1">
+                      Preview and generate official double-sided laminating cards. Perfect size for standard wallets.
+                    </p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setSelectedIdCardStudent(null)} 
+                  className="p-1 cursor-pointer text-neutral-450 hover:text-white transition-colors"
+                  title="Close Window"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              {/* Theme Settings Panel */}
+              <div className="bg-neutral-950 p-4 border-2 border-neutral-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-xs">
+                <div className="space-y-0.5">
+                  <span className="text-[10px] uppercase font-mono tracking-wider font-extrabold text-amber-400 block font-black">BADGE THEME OPTION:</span>
+                  <p className="text-[11px] text-neutral-400">Choose custom look. Carbon uses dark premium styling. Light saves printer ink / toner.</p>
+                </div>
+                <div className="flex items-center gap-1 bg-neutral-900 p-1 border border-neutral-800 rounded">
+                  <button
+                    type="button"
+                    onClick={() => setIdCardTheme('dark')}
+                    className={`px-3 py-1.5 font-mono text-[10px] uppercase font-bold tracking-wider rounded-xs transition-all cursor-pointer ${idCardTheme === 'dark' ? 'bg-amber-400 text-black font-black' : 'text-neutral-500 hover:text-neutral-200'}`}
+                  >
+                    Carbon Midnight
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIdCardTheme('light')}
+                    className={`px-3 py-1.5 font-mono text-[10px] uppercase font-bold tracking-wider rounded-xs transition-all cursor-pointer ${idCardTheme === 'light' ? 'bg-amber-400 text-black font-black' : 'text-neutral-500 hover:text-neutral-200'}`}
+                  >
+                    Eco Ink-Saver
+                  </button>
+                </div>
+              </div>
+
+              {/* Print Target Grid Card Content (Aesthetic Preview) */}
+              <div id="id-card-print-target" className="flex flex-col md:flex-row items-center justify-center gap-6 py-4 px-2 bg-neutral-950 border-2 border-neutral-800 rounded p-6">
+                
+                {/* Front Side Card Cardboard */}
+                <div className={`w-[340px] h-[215px] relative rounded-xl border-2 shadow-xl overflow-hidden flex flex-col justify-between shrink-0 transition-all duration-300 ${
+                  idCardTheme === 'dark'
+                    ? 'bg-gradient-to-br from-neutral-900 via-neutral-900 to-black text-white border-neutral-700'
+                    : 'bg-gradient-to-br from-white via-neutral-50 to-neutral-100 text-neutral-900 border-neutral-300 shadow-sm'
+                }`}>
+                  {/* Visual Top Accent Pattern */}
+                  <div className="absolute top-0 left-0 right-0 h-1.5 bg-amber-400" />
+                  <div className="absolute top-1.5 right-6 w-16 h-12 bg-amber-400/5 rounded-full blur-xl pointer-events-none" />
+
+                  {/* Card Top Header */}
+                  <div className={`px-3.5 pt-3 flex items-center justify-between border-b pb-1.5 ${
+                    idCardTheme === 'dark' ? 'border-neutral-800/60' : 'border-neutral-200'
+                  }`}>
+                    <div className="flex items-center gap-1.5">
+                      {/* Tiny Logo mark */}
+                      <div className="w-5 h-5 bg-amber-400 text-neutral-905 rounded-sm flex items-center justify-center font-black text-[10px] tracking-tighter">
+                        SH
+                      </div>
+                      <div>
+                        <span className={`text-[10px] font-black uppercase tracking-wider block ${
+                          idCardTheme === 'dark' ? 'text-white' : 'text-neutral-800'
+                        }`}>SHCA-Sawla</span>
+                      </div>
+                    </div>
+                    <div className="text-right flex items-center gap-1.5">
+                      {expiryInfo.isExpired ? (
+                        <span className="text-[6.5px] font-black bg-red-950/80 text-red-400 border border-red-900/40 py-0.5 px-1.5 rounded-sm uppercase tracking-wider animate-pulse">
+                          Expired
+                        </span>
+                      ) : expiryInfo.isNearingExpiry ? (
+                        <span className="text-[6.5px] font-black bg-amber-955/80 text-amber-400 border border-amber-900/40 py-0.5 px-1.5 rounded-sm uppercase tracking-wider animate-pulse">
+                          ⚠️ Renewal Due
+                        </span>
+                      ) : null}
+                      <span className="text-[6.5px] font-black bg-emerald-950/80 text-emerald-400 border border-emerald-905 py-0.5 px-1.5 rounded-sm uppercase tracking-wide">
+                        Active Pass
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Card Main content with Photo & Details */}
+                  <div className="px-3.5 py-2 flex gap-3 flex-1 items-center">
+                    {/* Left Avatar Passport area */}
+                    <div className="flex flex-col items-center gap-1">
+                      <div className={`w-16 h-16 rounded-md flex items-center justify-center overflow-hidden shrink-0 ${
+                        idCardTheme === 'dark' ? 'bg-neutral-955 border-neutral-750' : 'bg-neutral-200 border-neutral-350'
+                      }`}>
+                        {student.photoUrl ? (
+                          <img 
+                            src={student.photoUrl} 
+                            alt={student.name} 
+                            className="w-full h-full object-cover"
+                            referrerPolicy="no-referrer"
+                          />
+                        ) : (
+                          <div className={`font-mono font-black text-[18px] uppercase ${
+                            idCardTheme === 'dark' ? 'text-neutral-500' : 'text-neutral-400'
+                          }`}>
+                            {student.name.slice(0, 2).toUpperCase()}
+                          </div>
+                        )}
+                      </div>
+                      <span className={`text-[5px] font-mono tracking-widest uppercase font-black ${
+                        idCardTheme === 'dark' ? 'text-neutral-500' : 'text-neutral-400'
+                      }`}>STUDENT INFO</span>
+                    </div>
+
+                    {/* Middle details column */}
+                    <div className="flex-1 space-y-1">
+                      <div>
+                        <span className={`text-[7px] font-mono block uppercase font-bold ${
+                          idCardTheme === 'dark' ? 'text-neutral-500' : 'text-neutral-450'
+                        }`}>Pupil Name</span>
+                        <span className={`text-xs font-black block uppercase tracking-tight line-clamp-1 ${
+                          idCardTheme === 'dark' ? 'text-white' : 'text-neutral-900'
+                        }`}>
+                          {student.name}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <div>
+                          <span className={`text-[7px] font-mono block uppercase font-bold ${
+                            idCardTheme === 'dark' ? 'text-neutral-500' : 'text-neutral-450'
+                          }`}>Class</span>
+                          <span className="text-[10px] font-extrabold text-amber-500 font-mono">
+                            {student.class}
+                          </span>
+                        </div>
+                        <div>
+                          <span className={`text-[7px] font-mono block uppercase font-bold ${
+                            idCardTheme === 'dark' ? 'text-neutral-500' : 'text-neutral-450'
+                          }`}>Gender</span>
+                          <span className={`text-[9px] font-bold ${
+                            idCardTheme === 'dark' ? 'text-neutral-300' : 'text-neutral-700'
+                          }`}>
+                            {student.gender || '—'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="pt-0.5">
+                        <span className={`text-[7.5px] font-mono block font-bold ${
+                          idCardTheme === 'dark' ? 'text-neutral-450' : 'text-neutral-600'
+                        }`}>
+                          REG-ID: <strong className={`px-1 py-0.5 border rounded-xs ml-0.5 ${
+                            idCardTheme === 'dark' ? 'text-white bg-neutral-950 border-neutral-800' : 'text-neutral-900 bg-neutral-200 border-neutral-300'
+                          }`}>{student.rollNumber || 'SHC-'+student.id.substring(0,5).toUpperCase()}</strong>
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Right QR Code column */}
+                    <div className="flex flex-col items-center justify-center gap-1 shrink-0 bg-white p-1 rounded-sm border border-neutral-300">
+                      {idCardQrDataUrl ? (
+                        <img 
+                          src={idCardQrDataUrl}
+                          alt="Student QR Verification Key"
+                          className="w-12 h-12"
+                          referrerPolicy="no-referrer"
+                        />
+                      ) : (
+                        <div className="w-12 h-12 bg-neutral-200 animate-pulse rounded-sm" />
+                      )}
+                      <span className="text-[5.5px] font-black text-black font-mono tracking-tighter uppercase leading-none">GATE PASS</span>
+                    </div>
+                  </div>
+
+                  {/* Card Footer Banner */}
+                  <div className={`border-t px-3 py-1 flex items-center justify-between text-[6.5px] font-mono ${
+                    idCardTheme === 'dark' ? 'bg-neutral-955 border-neutral-850 text-neutral-500' : 'bg-neutral-100 border-neutral-250 text-neutral-500'
+                  }`}>
+                    <span className="font-bold flex items-center gap-1.5">
+                      <span>SYSTEM ACCREDITED</span>
+                      <span className={`text-[5.5px] border px-1 py-0.2 rounded-sm font-black tracking-tighter ${
+                        idCardTheme === 'dark' ? 'bg-neutral-900 border-neutral-800 text-neutral-401' : 'bg-neutral-200 border-neutral-300 text-neutral-705'
+                      }`}>
+                        EXP: {expiryInfo.expiryDate}
+                      </span>
+                    </span>
+                    <span className="text-amber-600 font-extrabold">{expiryInfo.termName.toUpperCase()}</span>
+                  </div>
+                </div>
+
+                {/* Back Side Card Cardboard */}
+                <div className={`w-[340px] h-[215px] relative rounded-xl border-2 shadow-xl overflow-hidden flex flex-col justify-between shrink-0 transition-all duration-300 ${
+                  idCardTheme === 'dark'
+                    ? 'bg-gradient-to-bl from-neutral-900 via-neutral-955 to-neutral-900 text-white border-neutral-700'
+                    : 'bg-gradient-to-bl from-white via-neutral-50 to-neutral-100 text-neutral-900 border-neutral-300 shadow-sm'
+                }`}>
+                  {/* Visual Accent bar */}
+                  <div className={`absolute top-0 left-0 right-0 h-1.5 ${
+                    idCardTheme === 'dark' ? 'bg-neutral-800' : 'bg-neutral-300'
+                  }`} />
+
+                  {/* Back Header */}
+                  <div className={`px-4 pt-3 pb-1 border-b ${
+                    idCardTheme === 'dark' ? 'border-neutral-850' : 'border-neutral-200'
+                  }`}>
+                    <span className={`text-[7.5px] font-black font-mono tracking-widest block uppercase ${
+                      idCardTheme === 'dark' ? 'text-neutral-550' : 'text-neutral-450'
+                    }`}>SECURITY POLICY & INSTRUCTIONS</span>
+                  </div>
+
+                  {/* Back core info list */}
+                  <div className="px-4 py-2 flex flex-col justify-center flex-1 space-y-2">
+                    <ol className={`list-decimal list-inside text-[7px] font-bold space-y-1 ${
+                      idCardTheme === 'dark' ? 'text-neutral-401' : 'text-neutral-600'
+                    }`}>
+                      <li>This card remains the property of SHCA-Sawla.</li>
+                      <li>Always present this card for scanning &amp; gate check-ins.</li>
+                      <li>Loss of credential elements must be reported immediately.</li>
+                      <li>Unauthorized duplication or counterfeit transfer is strictly prohibited.</li>
+                    </ol>
+
+                    <div className="flex items-center justify-between pt-1 font-mono text-[7px]">
+                      <div>
+                        <span className="text-neutral-500 block text-[6px]">Guardian Mobile</span>
+                        <span className={`font-extrabold ${idCardTheme === 'dark' ? 'text-neutral-300' : 'text-neutral-800'}`}>{student.guardianPhone || 'NOT ENROLLED'}</span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-neutral-500 block text-[6px]">Authorized Registrar</span>
+                        <span className="text-amber-500 font-black">YAKUBU HAKEEM</span>
+                      </div>
+                    </div>
+
+                    {expiryInfo.isExpired ? (
+                      <div className="bg-red-950/80 border border-red-900/55 rounded px-2 py-1 text-center font-mono text-[5.8px] text-red-400 font-black uppercase tracking-wider animate-pulse flex items-center justify-center gap-1.5 shrink-0">
+                        <span>⚠️ SHCA BADGE EXPIRED</span>
+                        <span>&bull;</span>
+                        <span>CONTACT ACCREDITED OFFICERS</span>
+                      </div>
+                    ) : expiryInfo.isNearingExpiry ? (
+                      <div className="bg-amber-955/80 border border-amber-900/55 rounded px-2 py-1 text-center font-mono text-[5.8px] text-amber-400 font-black uppercase tracking-wider animate-pulse flex items-center justify-center gap-1.5 shrink-0">
+                        <span>⚠️ RENEWAL DUE</span>
+                        <span>&bull;</span>
+                        <span>{expiryInfo.daysRemaining} school days remaining</span>
+                      </div>
+                    ) : (
+                      <div className={`px-2 py-0.5 border rounded text-center text-[5.5px] font-extrabold font-mono tracking-tight uppercase shrink-0 ${
+                        idCardTheme === 'dark' ? 'bg-neutral-950 border-neutral-900 text-neutral-450' : 'bg-neutral-100 border-neutral-250 text-neutral-500'
+                      }`}>
+                        Validation Active &amp; Valid thru Term Closure ({expiryInfo.expiryDate})
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Authentic bottom barcode graphics overlay */}
+                  <div className="bg-white px-4 py-2 flex flex-col items-center justify-center shrink-0 border-t border-neutral-200">
+                    {/* Pure stylized CSS barcode lines */}
+                    <div className="w-full h-5 flex items-stretch gap-[1.5px] bg-white opacity-90">
+                      {[3,2,1,4,1,3,1,2,3,1,2,1,4,1,2,3,1,2,1,2,3,1,4,1,2,3,4,1,2,3,1,2,1,2,3,4,1,2].map((w,i) => (
+                        <div 
+                          key={i} 
+                          className="bg-black flex-1" 
+                          style={{ opacity: i % 2 === 0 ? 1 : 0 }} 
+                        />
+                      ))}
+                    </div>
+                    <span className="text-[6px] font-mono text-neutral-500 font-bold tracking-[0.2em] uppercase mt-0.5">
+                      *SHCA-{student.id.substring(0,8).toUpperCase()}*
                     </span>
                   </div>
                 </div>
 
-                {/* Card Main content with Photo & Details */}
-                <div className="px-3.5 py-2 flex gap-3 flex-1 items-center">
-                  {/* Left Avatar Passport area */}
-                  <div className="flex flex-col items-center gap-1">
-                    <div className="w-16 h-16 rounded-md bg-neutral-955 border border-neutral-750 flex items-center justify-center overflow-hidden shrink-0">
-                      {selectedIdCardStudent.photoUrl ? (
-                        <img 
-                          src={selectedIdCardStudent.photoUrl} 
-                          alt={selectedIdCardStudent.name} 
-                          className="w-full h-full object-cover"
-                          referrerPolicy="no-referrer"
-                        />
-                      ) : (
-                        <div className="text-neutral-500 font-mono font-black text-[18px] uppercase">
-                          {selectedIdCardStudent.name.slice(0, 2).toUpperCase()}
-                        </div>
-                      )}
-                    </div>
-                    <span className="text-[6px] text-neutral-500 font-mono tracking-widest uppercase font-black">STUDENT INFO</span>
-                  </div>
-
-                  {/* Middle details column */}
-                  <div className="flex-1 space-y-1">
-                    <div>
-                      <span className="text-[7px] text-neutral-500 font-mono block uppercase font-bold">Pupil Name</span>
-                      <span className="text-xs font-black block uppercase tracking-tight text-white line-clamp-1">
-                        {selectedIdCardStudent.name}
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-1.5">
-                      <div>
-                        <span className="text-[7px] text-neutral-500 font-mono block uppercase font-bold">Class</span>
-                        <span className="text-[10px] font-extrabold text-amber-400 font-mono">
-                          {selectedIdCardStudent.class}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-[7px] text-neutral-500 font-mono block uppercase font-bold">Gender</span>
-                        <span className="text-[9px] font-bold text-neutral-300">
-                          {selectedIdCardStudent.gender || '—'}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="pt-0.5">
-                      <span className="text-[7.5px] font-mono text-neutral-450 block font-bold">
-                        REG-ID: <strong className="text-white bg-neutral-950 px-1 py-0.5 border border-neutral-800 rounded-xs ml-0.5">{selectedIdCardStudent.rollNumber || 'SHC-'+selectedIdCardStudent.id.substring(0,5).toUpperCase()}</strong>
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Right QR Code column */}
-                  <div className="flex flex-col items-center justify-center gap-1 shrink-0 bg-white p-1 rounded-sm border border-neutral-805">
-                    <img 
-                      src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=SAAKOCHECK:STUDENT:${selectedIdCardStudent.id}:${selectedIdCardStudent.rollNumber || 'na'}`}
-                      alt="Student QR Verification Key"
-                      className="w-12 h-12"
-                      referrerPolicy="no-referrer"
-                    />
-                    <span className="text-[5.5px] font-black text-black font-mono tracking-tighter uppercase">GATE PASS</span>
-                  </div>
-                </div>
-
-                {/* Card Footer Banner */}
-                <div className="bg-neutral-955 border-t border-neutral-850 px-3 py-1 flex items-center justify-between text-[6.5px] font-mono text-neutral-500">
-                  <span className="font-bold">SYSTEM ACCREDITED &bull; SECURE GATEWAY</span>
-                  <span className="text-amber-500 font-black">25/26 TERM</span>
-                </div>
               </div>
 
-              {/* Back Side Card Cardboard */}
-              <div className="w-[340px] h-[215px] bg-gradient-to-bl from-neutral-900 via-neutral-950 to-neutral-900 text-white relative rounded-xl border-2 border-neutral-700 shadow-xl overflow-hidden flex flex-col justify-between shrink-0">
-                {/* Visual Accent bar */}
-                <div className="absolute top-0 left-0 right-0 h-1.5 bg-neutral-800" />
+              {/* Actions Footer */}
+              <div id="id-card-actions-panel" className="border-t border-neutral-800 pt-4 flex flex-col sm:flex-row gap-3">
+                <button
+                  type="button"
+                  onClick={handleDirectPrint}
+                  className="flex-1 py-3 px-4 bg-amber-400 hover:bg-amber-300 text-black font-black uppercase text-xs tracking-widest transition-all cursor-pointer flex items-center justify-center gap-2 shadow-[0_4px_14px_rgba(251,191,36,0.25)]"
+                >
+                  <Printer size={14} className="stroke-[2.5]" />
+                  <span>Direct Print Badge (Isolated Print Flow)</span>
+                </button>
 
-                {/* Back Header */}
-                <div className="px-4 pt-3 pb-1 border-b border-neutral-850">
-                  <span className="text-[7.5px] font-black text-neutral-500 font-mono tracking-widest block uppercase">SECURITY POLICY & INSTRUCTIONS</span>
-                </div>
-
-                {/* Back core info list */}
-                <div className="px-4 py-2 flex flex-col justify-center flex-1 space-y-2">
-                  <ol className="list-decimal list-inside text-[7px] text-neutral-401 font-bold space-y-1">
-                    <li>This card remains the property of Savior Academy.</li>
-                    <li>Always present this card for scanning & gate check-ins.</li>
-                    <li>Loss of credential elements must be reported immediately.</li>
-                    <li>Unauthorized duplication or counterfeit transfer is strictly prohibited.</li>
-                  </ol>
-
-                  <div className="flex items-center justify-between pt-1 font-mono text-[7px]">
-                    <div>
-                      <span className="text-neutral-500 block text-[6px]">Guardian Mobile</span>
-                      <span className="text-neutral-300 font-extrabold">{selectedIdCardStudent.guardianPhone || 'NOT ENROLLED'}</span>
-                    </div>
-                    <div className="text-right">
-                      <span className="text-neutral-550 block text-[6px]">Authorized Registrar</span>
-                      <span className="text-amber-400 font-black">YAKUBU HAKEEM</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Authentic bottom barcode graphics overlay */}
-                <div className="bg-white px-4 py-2 flex flex-col items-center justify-center shrink-0 border-t border-neutral-850">
-                  {/* Pure stylized CSS barcode lines */}
-                  <div className="w-full h-5 flex items-stretch gap-[1.5px] bg-white opacity-90">
-                    {[3,2,1,4,1,3,1,2,3,1,2,1,4,1,2,3,1,2,1,2,3,1,4,1,2,3,4,1,2,3,1,2,1,2,3,4,1,2].map((w,i) => (
-                      <div 
-                        key={i} 
-                        className="bg-black flex-1" 
-                        style={{ opacity: i % 2 === 0 ? 1 : 0 }} 
-                      />
-                    ))}
-                  </div>
-                  <span className="text-[6px] font-mono text-neutral-500 font-bold tracking-[0.2em] uppercase mt-0.5">
-                    *SHCA-{selectedIdCardStudent.id.substring(0,8).toUpperCase()}*
-                  </span>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedIdCardStudent(null)}
+                  className="w-full sm:w-1/3 py-3 px-4 bg-neutral-950 hover:bg-neutral-850 text-neutral-450 hover:text-white font-mono uppercase text-xs tracking-wider transition-colors border border-neutral-850 cursor-pointer"
+                >
+                  Quit Preview
+                </button>
               </div>
 
             </div>
-
-            {/* Actions Footer */}
-            <div id="id-card-actions-panel" className="border-t border-neutral-800 pt-4 flex flex-col sm:flex-row gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  window.print();
-                }}
-                className="flex-1 py-3 px-4 bg-amber-400 hover:bg-amber-300 text-black font-black uppercase text-xs tracking-widest transition-all cursor-pointer flex items-center justify-center gap-2"
-              >
-                <Printer size={14} />
-                <span>Print Student Card</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setSelectedIdCardStudent(null)}
-                className="w-full sm:w-1/3 py-3 px-4 bg-neutral-950 hover:bg-neutral-850 text-neutral-400 hover:text-white font-mono uppercase text-xs tracking-wider transition-colors border border-neutral-850"
-              >
-                Quit Preview
-              </button>
-            </div>
-
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Academic Cohort Promotion Modal Overlay */}
       {showPromotionModal && (
         <div className="fixed inset-0 z-50 bg-neutral-950/90 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
-          <div className="relative w-full max-w-xl bg-neutral-900 border-4 border-amber-500 p-6 md:p-8 space-y-6 shadow-[8px_8px_0px_0px_rgba(245,158,11,0.15)] text-white">
+          <div className="relative w-full max-w-2xl bg-neutral-900 border-4 border-amber-500 p-6 md:p-8 space-y-6 shadow-[8px_8px_0px_0px_rgba(245,158,11,0.15)] text-white">
             <div className="flex justify-between items-start border-b border-neutral-800 pb-4">
               <div className="flex items-center gap-3">
                 <Award size={22} className="text-amber-400" />
                 <div>
                   <h3 className="text-sm font-black uppercase tracking-widest font-mono">Academic Year Promotion Desk</h3>
-                  <p className="text-[10px] text-neutral-400 uppercase font-mono font-bold mt-0.5">Bulk Grade Cohort Management</p>
+                  <p className="text-[10px] text-neutral-400 uppercase font-mono font-bold mt-0.5">
+                    {promotionTab === 'bulk' ? 'Bulk Grade Cohort Management' : 'Single Student Promotion & Repetition'}
+                  </p>
                 </div>
               </div>
               <button 
-                onClick={() => setShowPromotionModal(false)} 
+                onClick={() => {
+                  setShowPromotionModal(false);
+                  setSelectedPromoStudentId('');
+                }} 
                 className="p-1 cursor-pointer text-neutral-450 hover:text-white transition-colors"
                 title="Close"
               >
@@ -3936,75 +4982,304 @@ export const AdminPanel: React.FC = () => {
               </button>
             </div>
 
-            <div className="space-y-4 font-sans text-xs">
-              <p className="text-neutral-300 leading-relaxed font-semibold">
-                This utility will promote all currently active pupils school-wide to the next academic level in bulk. Pupils in final year <strong className="text-amber-400 font-mono">B9 (JHS 3)</strong> will be marked completed/graduated and set to inactive.
-              </p>
-
-              <div className="bg-neutral-950 border border-neutral-850 p-4 space-y-3">
-                <span className="text-[9px] font-mono font-black text-neutral-500 uppercase tracking-widest block font-bold">Standard Grade Cohort Transition Flow</span>
-                <div className="grid grid-cols-2 gap-x-6 gap-y-2 font-mono text-[10px] text-neutral-300 divide-y divide-neutral-900">
-                  <div className="flex justify-between py-1 border-none"><span>Nursery ➜ KG 1</span> <span className="text-emerald-400">Promoted</span></div>
-                  <div className="flex justify-between py-1 border-none"><span>KG 1 ➜ KG 2</span> <span className="text-emerald-400">Promoted</span></div>
-                  <div className="flex justify-between py-1"><span>KG 2 ➜ B1 (Primary)</span> <span className="text-emerald-400">Promoted</span></div>
-                  <div className="flex justify-between py-1"><span>B1 ➜ B2</span> <span className="text-emerald-400">Promoted</span></div>
-                  <div className="flex justify-between py-1"><span>B2 ➜ B3</span> <span className="text-emerald-400">Promoted</span></div>
-                  <div className="flex justify-between py-1"><span>B3 ➜ B4</span> <span className="text-emerald-400">Promoted</span></div>
-                  <div className="flex justify-between py-1"><span>B4 ➜ B5</span> <span className="text-emerald-400">Promoted</span></div>
-                  <div className="flex justify-between py-1"><span>B5 ➜ B6</span> <span className="text-emerald-400">Promoted</span></div>
-                  <div className="flex justify-between py-1"><span>B6 ➜ B7 (JHS 1)</span> <span className="text-emerald-400">Promoted</span></div>
-                  <div className="flex justify-between py-1"><span>B7 ➜ B8</span> <span className="text-emerald-400">Promoted</span></div>
-                  <div className="flex justify-between py-1"><span>B8 ➜ B9 (JHS 3)</span> <span className="text-emerald-400">Promoted</span></div>
-                  <div className="flex justify-between py-1"><span>B9 ➜ Left/Graduated</span> <span className="text-amber-500 font-bold">Graduated</span></div>
-                </div>
-              </div>
-
-              <div className="bg-amber-955/15 border border-amber-500/20 p-4 font-mono text-[10px] text-amber-500 uppercase font-black tracking-widest leading-relaxed">
-                ⚠️ WARNING: THIS PERFORMANCE ACTION IS PERMANENT AND NOT REVERSIBLE. IT WILL INSTANTLY ALTER THE GRADE BINDINGS OF ALL {students.filter(s => s.active).length} ACTIVE PUPILS. 
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-[10px] uppercase font-mono font-black text-neutral-450 tracking-wider block">Confirm Mass Promotion Action</label>
-                <p className="text-[10px] text-neutral-400 font-semibold mb-1">Type the word <strong className="text-white font-mono">PROMOTE</strong> below to authorize savior database updates:</p>
-                <input
-                  type="text"
-                  value={promotionConfirmedText}
-                  onChange={(e) => setPromotionConfirmedText(e.target.value)}
-                  placeholder="Type PROMOTE here..."
-                  className="w-full bg-neutral-950 border-2 border-neutral-800 focus:border-amber-400 text-white font-mono uppercase text-xs p-3 font-black focus:outline-none"
-                />
-              </div>
-            </div>
-
-            <div className="border-t border-neutral-800 pt-4 flex gap-3">
+            {/* Navigation Tabs */}
+            <div className="flex border-b border-neutral-800 gap-1">
               <button
                 type="button"
-                disabled={promotionConfirmedText !== 'PROMOTE'}
-                onClick={() => {
-                  promoteAllStudents();
-                  showToast("Successfully completed mass cohort promotions school-wide! Inactive pupils purged.");
-                  setShowPromotionModal(false);
-                  setPromotionConfirmedText('');
-                }}
-                className={`flex-1 py-3 px-4 font-black uppercase text-xs tracking-widest transition-all cursor-pointer flex items-center justify-center gap-2 border-none ${
-                  promotionConfirmedText === 'PROMOTE'
-                    ? 'bg-amber-500 hover:bg-amber-400 text-black shadow-[4px_4px_0px_0px_#10b981]'
-                    : 'bg-neutral-950 text-neutral-600 border border-neutral-850 cursor-not-allowed opacity-50'
+                onClick={() => setPromotionTab('bulk')}
+                className={`flex-1 py-2 px-4 text-xs font-mono font-black uppercase tracking-wider border-b-2 transition-all ${
+                  promotionTab === 'bulk'
+                    ? 'border-amber-500 text-amber-400 bg-amber-500/5'
+                    : 'border-transparent text-neutral-400 hover:text-white'
                 }`}
               >
-                ⚡ Execute Cohort Promotions
+                👥 Bulk Cohorts
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setShowPromotionModal(false);
-                  setPromotionConfirmedText('');
-                }}
-                className="w-1/3 py-3 px-4 bg-neutral-950 hover:bg-neutral-850 text-neutral-400 hover:text-white font-mono uppercase text-xs tracking-wider transition-colors border border-neutral-850"
+                onClick={() => setPromotionTab('single')}
+                className={`flex-1 py-2 px-4 text-xs font-mono font-black uppercase tracking-wider border-b-2 transition-all ${
+                  promotionTab === 'single'
+                    ? 'border-amber-500 text-amber-400 bg-amber-500/5'
+                    : 'border-transparent text-neutral-400 hover:text-white'
+                }`}
               >
-                Abort
+                👤 Single Student
               </button>
             </div>
+
+            {promotionTab === 'bulk' ? (
+              <>
+                <div className="space-y-4 font-sans text-xs">
+                  <p className="text-neutral-300 leading-relaxed font-semibold">
+                    This utility will promote all currently active pupils school-wide to the next academic level in bulk. Pupils in final year <strong className="text-amber-400 font-mono">B9 (JHS 3)</strong> will be marked completed/graduated and set to inactive.
+                  </p>
+
+                  <div className="bg-neutral-950 border border-neutral-850 p-4 space-y-3">
+                    <span className="text-[9px] font-mono font-black text-neutral-500 uppercase tracking-widest block font-bold">Standard Grade Cohort Transition Flow</span>
+                    <div className="grid grid-cols-2 gap-x-6 gap-y-2 font-mono text-[10px] text-neutral-300 divide-y divide-neutral-900">
+                      <div className="flex justify-between py-1 border-none"><span>Nursery ➜ KG 1</span> <span className="text-emerald-400 font-bold">Promoted</span></div>
+                      <div className="flex justify-between py-1 border-none"><span>KG 1 ➜ KG 2</span> <span className="text-emerald-400 font-bold">Promoted</span></div>
+                      <div className="flex justify-between py-1"><span>KG 2 ➜ B1 (Primary)</span> <span className="text-emerald-400 font-bold">Promoted</span></div>
+                      <div className="flex justify-between py-1"><span>B1 ➜ B2</span> <span className="text-emerald-400 font-bold">Promoted</span></div>
+                      <div className="flex justify-between py-1"><span>B2 ➜ B3</span> <span className="text-emerald-400 font-bold">Promoted</span></div>
+                      <div className="flex justify-between py-1"><span>B3 ➜ B4</span> <span className="text-emerald-400 font-bold">Promoted</span></div>
+                      <div className="flex justify-between py-1"><span>B4 ➜ B5</span> <span className="text-emerald-400 font-bold">Promoted</span></div>
+                      <div className="flex justify-between py-1"><span>B5 ➜ B6</span> <span className="text-emerald-400 font-bold">Promoted</span></div>
+                      <div className="flex justify-between py-1"><span>B6 ➜ B7 (JHS 1)</span> <span className="text-emerald-400 font-bold">Promoted</span></div>
+                      <div className="flex justify-between py-1"><span>B7 ➜ B8</span> <span className="text-emerald-400 font-bold">Promoted</span></div>
+                      <div className="flex justify-between py-1"><span>B8 ➜ B9 (JHS 3)</span> <span className="text-emerald-400 font-bold">Promoted</span></div>
+                      <div className="flex justify-between py-1"><span>B9 ➜ Left/Graduated</span> <span className="text-amber-500 font-bold">Graduated</span></div>
+                    </div>
+                  </div>
+
+                  <div className="bg-amber-955/15 border border-amber-500/20 p-4 font-mono text-[10px] text-amber-500 uppercase font-black tracking-widest leading-relaxed font-bold">
+                    ⚠️ WARNING: THIS PERFORMANCE ACTION IS PERMANENT AND NOT REVERSIBLE. IT WILL INSTANTLY ALTER THE GRADE BINDINGS OF ALL {students.filter(s => s.active).length} ACTIVE PUPILS. 
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-[10px] uppercase font-mono font-black text-neutral-450 tracking-wider block font-bold">Confirm Mass Promotion Action</label>
+                    <p className="text-[10px] text-neutral-400 font-semibold mb-1">Type the word <strong className="text-white font-mono">PROMOTE</strong> below to authorize savior database updates:</p>
+                    <input
+                      type="text"
+                      value={promotionConfirmedText}
+                      onChange={(e) => setPromotionConfirmedText(e.target.value)}
+                      placeholder="Type PROMOTE here..."
+                      className="w-full bg-neutral-950 border-2 border-neutral-800 focus:border-amber-400 text-white font-mono uppercase text-xs p-3 font-black focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="border-t border-neutral-800 pt-4 flex gap-3">
+                  <button
+                    type="button"
+                    disabled={promotionConfirmedText !== 'PROMOTE'}
+                    onClick={() => {
+                      promoteAllStudents();
+                      showToast("Successfully completed mass cohort promotions school-wide! Inactive pupils purged.");
+                      setShowPromotionModal(false);
+                      setPromotionConfirmedText('');
+                    }}
+                    className={`flex-1 py-3 px-4 font-black uppercase text-xs tracking-widest transition-all cursor-pointer flex items-center justify-center gap-2 border-none ${
+                      promotionConfirmedText === 'PROMOTE'
+                        ? 'bg-amber-500 hover:bg-amber-400 text-black shadow-[4px_4px_0px_0px_#10b981]'
+                        : 'bg-neutral-950 text-neutral-600 border border-neutral-850 cursor-not-allowed opacity-50'
+                    }`}
+                  >
+                    ⚡ Execute Cohort Promotions
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowPromotionModal(false);
+                      setPromotionConfirmedText('');
+                    }}
+                    className="w-1/3 py-3 px-4 bg-neutral-950 hover:bg-neutral-850 text-neutral-400 hover:text-white font-mono uppercase text-xs tracking-wider transition-colors border border-neutral-850"
+                  >
+                    Abort
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="space-y-4 font-sans text-xs">
+                  <div className="space-y-2">
+                    <label className="text-[10px] uppercase font-mono font-black text-neutral-450 tracking-wider block font-bold">Select Student to Manage</label>
+                    <select
+                      value={selectedPromoStudentId}
+                      onChange={(e) => setSelectedPromoStudentId(e.target.value)}
+                      className="w-full bg-neutral-950 border-2 border-neutral-800 focus:border-amber-400 text-white font-mono text-xs p-3 font-semibold focus:outline-none"
+                    >
+                      <option value="">-- Choose active student --</option>
+                      {students.filter(s => s.active).map(student => (
+                        <option key={student.id} value={student.id}>
+                          {student.name} ({student.class}) - {student.rollNumber || 'No RFID'}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {selectedPromoStudentId && (() => {
+                    const studentInHand = students.find(s => s.id === selectedPromoStudentId);
+                    if (!studentInHand) return null;
+
+                    const CLASS_PROMOTION_MAP: Record<StudentClass, { nextClass: StudentClass | null; category: 'Pre-school' | 'Primary' | 'JHS'; completes: boolean }> = {
+                      'Nursery': { nextClass: 'KG1', category: 'Pre-school', completes: false },
+                      'KG1':     { nextClass: 'KG2', category: 'Pre-school', completes: false },
+                      'KG2':     { nextClass: 'B1',  category: 'Primary',    completes: false },
+                      'B1':      { nextClass: 'B2',  category: 'Primary',    completes: false },
+                      'B2':      { nextClass: 'B3',  category: 'Primary',    completes: false },
+                      'B3':      { nextClass: 'B4',  category: 'Primary',    completes: false },
+                      'B4':      { nextClass: 'B5',  category: 'Primary',    completes: false },
+                      'B5':      { nextClass: 'B6',  category: 'Primary',    completes: false },
+                      'B6':      { nextClass: 'B7',  category: 'JHS',        completes: false },
+                      'B7':      { nextClass: 'B8',  category: 'JHS',        completes: false },
+                      'B8':      { nextClass: 'B9',  category: 'JHS',        completes: false },
+                      'B9':      { nextClass: null,  category: 'JHS',        completes: true }
+                    };
+
+                    const mapEntry = CLASS_PROMOTION_MAP[studentInHand.class];
+                    const nextClassString = mapEntry?.completes ? 'Completed/Graduated' : mapEntry?.nextClass || 'N/A';
+                    
+                    return (
+                      <div className="space-y-4">
+                        {/* Student Info Card */}
+                        <div className="bg-neutral-950 border border-neutral-800 p-4 rounded-sm flex items-center gap-4">
+                          {studentInHand.photoUrl ? (
+                            <img
+                              src={studentInHand.photoUrl}
+                              alt={studentInHand.name}
+                              referrerPolicy="no-referrer"
+                              className="w-12 h-12 rounded object-cover border-2 border-neutral-800"
+                            />
+                          ) : (
+                            <div className="w-12 h-12 bg-neutral-900 border border-neutral-800 rounded flex items-center justify-center text-neutral-500 font-mono font-bold uppercase text-lg">
+                              {studentInHand.name.charAt(0)}
+                            </div>
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <span className="text-amber-400 font-black font-mono text-[9px] tracking-wider block uppercase font-bold">Selected Student Record</span>
+                            <span className="text-xs font-black text-white block truncate uppercase">{studentInHand.name}</span>
+                            <div className="flex items-center gap-2 mt-1 text-[9px] font-mono text-neutral-400">
+                              <span>Grade: <strong className="text-white">{studentInHand.class}</strong> ({studentInHand.category})</span>
+                              <span>&bull;</span>
+                              <span>ID: <strong className="text-white">{studentInHand.id.substring(0,8)}</strong></span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Actions Desk */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {/* Promotion Option Block */}
+                          <div className="bg-neutral-950/60 border border-neutral-850 p-4 space-y-3 flex flex-col justify-between">
+                            <div>
+                              <div className="flex items-center gap-1.5 text-emerald-400 font-bold uppercase text-[9px] font-mono tracking-wider">
+                                <Award size={13} className="stroke-[2]" />
+                                <span>Academic Promotion</span>
+                              </div>
+                              <p className="text-[10px] text-neutral-400 mt-2 leading-relaxed font-semibold">
+                                Promote this student to the next logical academic standard class level. 
+                              </p>
+                              <div className="mt-3 bg-neutral-900 p-2 border border-neutral-850 rounded-sm font-mono text-[10px] space-y-1">
+                                <div className="flex justify-between">
+                                  <span className="text-neutral-500">Current Rank:</span>
+                                  <span className="font-extrabold text-neutral-300">{studentInHand.class}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-neutral-500">Next Target:</span>
+                                  <span className="font-extrabold text-emerald-400 uppercase">{nextClassString}</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (currentUser?.role !== 'Administrator') {
+                                  alert('Access Denied: Only Administrators are permitted to make student grade alterations.');
+                                  return;
+                                }
+                                if (mapEntry?.completes) {
+                                  updateStudent({
+                                    ...studentInHand,
+                                    active: false
+                                  });
+                                  showToast(`Successfully marked ${studentInHand.name} as Completed/Graduated and set to inactive.`);
+                                } else if (mapEntry?.nextClass) {
+                                  updateStudent({
+                                    ...studentInHand,
+                                    class: mapEntry.nextClass,
+                                    category: mapEntry.category
+                                  });
+                                  showToast(`Successfully promoted ${studentInHand.name} to ${mapEntry.nextClass} (${mapEntry.category}).`);
+                                }
+                                setSelectedPromoStudentId('');
+                              }}
+                              className="w-full py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-mono font-black uppercase text-[10px] tracking-wider border-none rounded-sm transition-colors cursor-pointer"
+                            >
+                              ⚡ Promote to {mapEntry?.completes ? 'Graduate' : nextClassString}
+                            </button>
+                          </div>
+
+                          {/* Repetition Block */}
+                          <div className="bg-neutral-950/60 border border-neutral-850 p-4 space-y-3 flex flex-col justify-between">
+                            <div>
+                              <div className="flex items-center gap-1.5 text-amber-500 font-bold uppercase text-[9px] font-mono tracking-wider">
+                                <RefreshCw size={12} className="stroke-[2]" />
+                                <span>Class Repetition</span>
+                              </div>
+                              <p className="text-[10px] text-neutral-400 mt-2 leading-relaxed font-semibold">
+                                Retain this student in their current grade class, or select a custom class to repeat.
+                              </p>
+                              <div className="mt-3 space-y-2">
+                                <span className="text-[9px] font-mono text-neutral-500 uppercase tracking-widest block font-bold">Select Target Grade</span>
+                                <select
+                                  id="single-student-repeat-class-selector"
+                                  className="w-full bg-neutral-900 border border-neutral-800 text-neutral-300 font-mono text-[10px] p-2 focus:outline-none focus:border-amber-400"
+                                  defaultValue={studentInHand.class}
+                                >
+                                  {['Nursery', 'KG1', 'KG2', 'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9'].map(cls => (
+                                    <option key={cls} value={cls}>
+                                      {cls} (Repeat grade class)
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (currentUser?.role !== 'Administrator') {
+                                  alert('Access Denied: Only Administrators are permitted to make student grade alterations.');
+                                  return;
+                                }
+                                const selectEl = document.getElementById('single-student-repeat-class-selector') as HTMLSelectElement;
+                                const targetClass = selectEl?.value as StudentClass;
+                                
+                                if (targetClass) {
+                                  const targetCategory = getClassCategory(targetClass);
+                                  updateStudent({
+                                    ...studentInHand,
+                                    class: targetClass,
+                                    category: targetCategory,
+                                    active: true
+                                  });
+                                  showToast(`Successfully set ${studentInHand.name} to repeat/enroll in grade class: ${targetClass}.`);
+                                }
+                                setSelectedPromoStudentId('');
+                              }}
+                              className="w-full py-2 px-3 bg-amber-500 hover:bg-amber-400 text-black font-mono font-black uppercase text-[10px] tracking-wider border-none rounded-sm transition-colors cursor-pointer"
+                            >
+                              🔄 Confirm Repetition Grade
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {!selectedPromoStudentId && (
+                    <div className="bg-neutral-950/40 border border-neutral-850 border-dashed rounded-sm p-8 text-center text-neutral-500 font-mono text-[10px] leading-relaxed">
+                      Select a pupil from school registry roster above to start single promotion / repetition desk operations.
+                    </div>
+                  )}
+                </div>
+
+                <div className="border-t border-neutral-800 pt-4 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowPromotionModal(false);
+                      setSelectedPromoStudentId('');
+                    }}
+                    className="w-1/3 py-3 px-4 bg-neutral-950 hover:bg-neutral-850 text-neutral-400 hover:text-white font-mono uppercase text-xs tracking-wider transition-colors border border-neutral-850"
+                  >
+                    Close Desk
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

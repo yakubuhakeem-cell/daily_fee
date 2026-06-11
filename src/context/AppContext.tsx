@@ -6,8 +6,39 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { Student, PaymentRecord, UserAccount, UserRole, StudentClass, SchoolCategory, Term, PendingEdit, BackupRecord } from '../types';
 import { INITIAL_USERS, INITIAL_STUDENTS, generateSeedPayments, getClassCategory } from '../initialData';
-import { db } from '../lib/firebase';
+import { db as rawDb } from '../lib/firebase';
 import { generateSchoolDays } from '../utils/termUtils';
+
+let globalOnSaveProgress: ((change: number) => void) | null = null;
+
+// Clean Proxy wrapper over firebaseDb services to automatically intercept writes, deletes, and seeds,
+// triggering satisfying visual 'Saving...' and 'Saved' UI feedback indicators dynamically.
+const db = new Proxy(rawDb, {
+  get(target, prop, receiver) {
+    const originalMethod = Reflect.get(target, prop, receiver);
+    if (typeof originalMethod === 'function') {
+      const methodName = String(prop);
+      if (
+        methodName.startsWith('save') || 
+        methodName.startsWith('delete') || 
+        methodName.startsWith('seed')
+      ) {
+        return async (...args: any[]) => {
+          globalOnSaveProgress?.(+1);
+          try {
+            const result = await originalMethod.apply(target, args);
+            globalOnSaveProgress?.(-1);
+            return result;
+          } catch (err) {
+            globalOnSaveProgress?.(-1);
+            throw err;
+          }
+        };
+      }
+    }
+    return originalMethod;
+  }
+});
 
 interface AppContextType {
   currentUser: UserAccount | null;
@@ -62,6 +93,7 @@ interface AppContextType {
   bgSyncEnabled: boolean;
   setBgSyncEnabled: (enabled: boolean) => void;
   bgSyncStatus: 'idle' | 'syncing' | 'success' | 'error';
+  saveStatus: 'idle' | 'saving' | 'saved' | 'error';
   lastBgSyncTime: string | null;
   pendingLocalEdits: PendingEdit[];
   clearPendingLocalEdits: () => void;
@@ -399,6 +431,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [bgSyncStatus, setBgSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
   const [lastBgSyncTime, setLastBgSyncTime] = useState<string | null>(null);
 
+  const [activeSavesCount, setActiveSavesCount] = useState(0);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+
+  // React to global proxy raw database event notifications
+  useEffect(() => {
+    globalOnSaveProgress = (change) => {
+      setActiveSavesCount(prev => Math.max(0, prev + change));
+    };
+    return () => {
+      globalOnSaveProgress = null;
+    };
+  }, []);
+
+  // Manage transitional sync flow values for user-friendliness
+  useEffect(() => {
+    if (activeSavesCount > 0) {
+      setSaveStatus('saving');
+    } else {
+      setSaveStatus(prev => {
+        if (prev === 'saving') {
+          return 'saved';
+        }
+        return prev;
+      });
+      const timeout = setTimeout(() => {
+        setSaveStatus(prev => prev === 'saved' ? 'idle' : prev);
+      }, 2500);
+      return () => clearTimeout(timeout);
+    }
+  }, [activeSavesCount]);
+
   const setBgSyncEnabled = (enabled: boolean) => {
     localStorage.setItem('s_background_sync_enabled', String(enabled));
     setBgSyncEnabledState(enabled);
@@ -732,9 +795,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Sync to local backups
   const saveState = (newUsers: UserAccount[], newStudents: Student[], newPayments: PaymentRecord[]) => {
+    setActiveSavesCount(prev => prev + 1);
     localStorage.setItem('s_users', JSON.stringify(newUsers));
     localStorage.setItem('s_students', JSON.stringify(newStudents));
     localStorage.setItem('s_payments', JSON.stringify(newPayments));
+    
+    // Simulate a brief minimum sync animation duration (approx 500ms) to ensure 'Saving...' registers with users
+    setTimeout(() => {
+      setActiveSavesCount(prev => Math.max(0, prev - 1));
+    }, 500);
   };
 
   const login = (email: string, mfaCode?: string, password?: string) => {
@@ -2173,6 +2242,7 @@ School Administration Financial Audit System (MFA Secure)
       bgSyncEnabled,
       setBgSyncEnabled,
       bgSyncStatus,
+      saveStatus,
       lastBgSyncTime,
       pendingLocalEdits: storageMode === 'cloud' ? [] : pendingLocalEdits,
       clearPendingLocalEdits,

@@ -1561,12 +1561,16 @@ B7 to B9: GHC [SUM]`}
                 <div className="relative">
                   <Search className="absolute left-3 top-2.5 text-neutral-500" size={13} />
                   <input
+                    id="reports-student-search"
                     type="text"
                     value={printSearchQuery}
                     onChange={(e) => setPrintSearchQuery(e.target.value)}
                     placeholder="Search by name or ID..."
-                    className="w-full bg-neutral-950 border-2 border-neutral-800 py-2 pl-9 pr-8 text-xs outline-none text-white focus:border-amber-400 font-mono"
+                    className="w-full bg-neutral-950 border-2 border-neutral-800 py-2 pl-9 pr-16 text-xs outline-none text-white focus:border-amber-400 font-mono"
                   />
+                  <kbd className="absolute right-2.5 top-2.5 hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 border border-neutral-800 bg-neutral-950 font-mono text-[8px] text-neutral-500 rounded-xs leading-none pointer-events-none uppercase font-bold tracking-wider select-none">
+                    Ctrl+K
+                  </kbd>
                   {printSearchQuery && (
                     <button
                       type="button"

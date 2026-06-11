@@ -45,7 +45,8 @@ function NavigationWrapper() {
     users,
     payments,
     theme,
-    setTheme
+    setTheme,
+    saveStatus
   } = useApp();
 
   // Compute unassigned pupils & missing registration records for the current day
@@ -135,6 +136,39 @@ function NavigationWrapper() {
       window.removeEventListener('show-print-iframe-warning', handleCustomPrintWarning);
     };
   }, []);
+
+  // Set up global keyboard shortcuts (Ctrl+K to focus search, Ctrl+P to print)
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Check for Ctrl+K or Cmd+K
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        
+        let searchId = 'class-register-search';
+        if (activeTab === 'dashboard') searchId = 'dashboard-roster-search';
+        else if (activeTab === 'admin') searchId = 'admin-student-search';
+        else if (activeTab === 'reports') searchId = 'reports-student-search';
+        else if (activeTab === 'termPayers') searchId = 'term-payers-search';
+
+        const searchInput = document.getElementById(searchId) as HTMLInputElement;
+        if (searchInput) {
+          searchInput.focus();
+          searchInput.select();
+        }
+      }
+
+      // Check for Ctrl+P or Cmd+P
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
+        e.preventDefault();
+        window.print();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+    };
+  }, [activeTab]);
 
   // Programmatic switch and cloud sync flow trigger helper function
   const triggerSwitchAndSyncCloud = async () => {
@@ -244,6 +278,32 @@ function NavigationWrapper() {
                   </span>
                 </>
               )}
+
+              {/* Real-time Visual Local/Firebase Save Status Badge inline */}
+              <AnimatePresence mode="wait">
+                {saveStatus && saveStatus !== 'idle' && (
+                  <motion.span
+                    key={saveStatus}
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.8 }}
+                    transition={{ duration: 0.15 }}
+                    className={`ml-2 inline-flex items-center gap-1.5 px-2 py-0.5 border text-[9px] font-black uppercase tracking-widest ${
+                      saveStatus === 'saving'
+                        ? 'bg-amber-950/50 text-amber-400 border-amber-900'
+                        : saveStatus === 'saved'
+                        ? 'bg-emerald-950/50 text-emerald-400 border-emerald-900'
+                        : 'bg-red-950/50 text-red-400 border-red-900'
+                    }`}
+                  >
+                    <span className={`w-1.5 h-1.5 rounded-full ${
+                      saveStatus === 'saving' ? 'bg-amber-400 animate-pulse' :
+                      saveStatus === 'saved' ? 'bg-emerald-400' : 'bg-red-500'
+                    }`}></span>
+                    <span>{saveStatus === 'saving' ? 'Saving...' : saveStatus === 'saved' ? 'Saved' : 'Error'}</span>
+                  </motion.span>
+                )}
+              </AnimatePresence>
             </div>
 
             <div className="h-8 w-[1px] bg-neutral-800" />
@@ -555,6 +615,20 @@ function NavigationWrapper() {
           <div className="flex items-center gap-2">
             <span className="w-1.5 h-1.5 bg-neutral-600"></span>
             <span className="text-[9px] font-black uppercase tracking-widest text-neutral-400">Ver 2.6.0-Pro</span>
+          </div>
+          
+          {/* Synchronized state indicator footer widget */}
+          <div className="flex items-center gap-2 border-l border-neutral-850 pl-4">
+            <span className={`w-1.5 h-1.5 rounded-full transition-colors duration-300 ${
+              saveStatus === 'saving' ? 'bg-amber-400 animate-pulse' :
+              saveStatus === 'saved' ? 'bg-emerald-400 animate-pulse' : 'bg-emerald-500'
+            }`}></span>
+            <span className={`text-[9px] font-black uppercase tracking-widest transition-colors duration-300 ${
+              saveStatus === 'saving' ? 'text-amber-400' :
+              saveStatus === 'saved' ? 'text-emerald-400' : 'text-neutral-500'
+            }`}>
+              {saveStatus === 'saving' ? 'Saving...' : saveStatus === 'saved' ? 'Saved' : 'LEDGER SYNCED'}
+            </span>
           </div>
         </div>
 

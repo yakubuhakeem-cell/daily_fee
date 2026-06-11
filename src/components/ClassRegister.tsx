@@ -5,7 +5,7 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { useApp, PendingAlert } from '../context/AppContext';
-import { StudentClass, Student, SchoolCategory } from '../types';
+import { StudentClass, Student, SchoolCategory, PaymentRecord } from '../types';
 import { Check, X, Search, Landmark, BellRing, ChevronRight, ChevronLeft, CheckSquare, Users, MessageSquareCode, CalendarDays, CalendarPlus, CalendarX, Plus, ChevronDown, Trash2, Coins, History, Printer, Camera, Upload, Copy, Pencil, QrCode, AlertCircle, User, Phone, Award, ShieldAlert, CheckCircle2, TrendingUp } from 'lucide-react';
 import { motion } from 'motion/react';
 import { Html5Qrcode } from 'html5-qrcode';
@@ -56,6 +56,8 @@ export const ClassRegister: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [guardianSmsStudent, setGuardianSmsStudent] = useState<Student | null>(null);
   const [successSms, setSuccessSms] = useState(false);
+  const [receiptStudent, setReceiptStudent] = useState<Student | null>(null);
+  const [selectedRecordForReceipt, setSelectedRecordForReceipt] = useState<{ student: Student; payment: PaymentRecord } | null>(null);
 
   // Photo capturing/uploading states
   const [selectedPhotoStudent, setSelectedPhotoStudent] = useState<Student | null>(null);
@@ -571,6 +573,16 @@ export const ClassRegister: React.FC = () => {
     );
   }, [classStudents, searchQuery]);
 
+  // Find the first unmarked student in the current view to automatically guide high-volume workflow
+  const nextUnmarkedStudent = useMemo(() => {
+    return filteredStudents.find(s => {
+      const pInfo = paidStudentMap.get(s.id);
+      const isP = !!pInfo && !pInfo.isAbsent;
+      const isA = !!pInfo && !!pInfo.isAbsent;
+      return !isP && !isA;
+    });
+  }, [filteredStudents, paidStudentMap]);
+
   // Helper to automatically scroll to the next unmarked student in the current filtered class view after marking a payment or absent
   const scrollToNextUnpaid = (currentStudentId: string) => {
     // Find index of current student that was just marked
@@ -628,6 +640,19 @@ export const ClassRegister: React.FC = () => {
       .filter(p => p.class === selectedClass && p.date === currentDate && !p.isAbsent)
       .reduce((acc, p) => acc + p.amount, 0);
   }, [payments, selectedClass, currentDate]);
+
+  const classExpectedFees = useMemo(() => {
+    return classStudents.reduce((acc, s) => {
+      // Standard daily fee is GHC 5 less discount
+      const dailyRate = Math.max(0, 5.00 - (s.discount || 0));
+      return acc + dailyRate;
+    }, 0);
+  }, [classStudents]);
+
+  const classCollectionPercentage = useMemo(() => {
+    if (classExpectedFees <= 0) return 0;
+    return (collectionTotal / classExpectedFees) * 100;
+  }, [collectionTotal, classExpectedFees]);
 
   const globalCollectionTotal = useMemo(() => {
     return payments
@@ -915,10 +940,32 @@ export const ClassRegister: React.FC = () => {
           <p className="text-xs font-black text-amber-400 uppercase tracking-[0.2em] font-mono">
             Date Location Tracker: {currentDate}
           </p>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-4">
             <h2 className="text-3xl font-black text-white uppercase italic tracking-tight leading-none">
               Daily Check-In GHC 5.00 Register
             </h2>
+            <div className="flex items-center gap-2 bg-neutral-950 px-3 py-1.5 border-2 border-neutral-800 rounded-sm">
+              <CalendarDays size={14} className="text-amber-400 shrink-0" />
+              {currentUser?.role === 'Administrator' || currentUser?.role === 'Accountant' || currentUser?.role === 'Headmaster' ? (
+                <input
+                  type="date"
+                  value={currentDate}
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      setCurrentDate(e.target.value);
+                      showToast(`Ledger date updated to ${e.target.value}.`);
+                    }
+                  }}
+                  className="bg-transparent text-white focus:outline-none font-mono text-xs uppercase cursor-pointer border-none p-0 tracking-wider [color-scheme:dark]"
+                  title="Switch Active Ledger Date"
+                />
+              ) : (
+                <div className="flex items-center gap-1.5 text-neutral-500 font-mono text-xs uppercase tracking-wider select-none" title="Date switching restricted to Administrators and Accountants">
+                  <span>{currentDate}</span>
+                  <ShieldAlert size={12} className="text-neutral-600" />
+                </div>
+              )}
+            </div>
           </div>
           <p className="text-xs text-neutral-400 font-bold">
             All pupils must present clearance prior to classroom ingress. Authorization: <span className="font-extrabold text-amber-400 font-mono tracking-wider">{currentUser?.role}</span>
@@ -1452,12 +1499,33 @@ export const ClassRegister: React.FC = () => {
             <div className="relative flex-1">
               <Search className="absolute left-4 top-3.5 text-neutral-500" size={16} />
               <input
+                id="class-register-search"
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="SEARCH STUDENT NAME OR ROLL..."
-                className="w-full bg-neutral-900 border-2 border-neutral-800 py-3 pl-11 pr-4 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600 tracking-wide"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (nextUnmarkedStudent) {
+                      handleTogglePayment(nextUnmarkedStudent.id);
+                      setSearchQuery(''); // Clear search after checking in to auto-advance and reset the roster list to show the next student clearly
+                    } else {
+                      showToast("All pupils in this class roster have been cleared for today!");
+                    }
+                  }
+                }}
+                placeholder="SEARCH NAME/ROLL (ENTER TO AUTO-PAY NEXT UP)..."
+                className="w-full bg-neutral-900 border-2 border-neutral-800 py-3 pl-11 pr-24 text-[11px] font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600 tracking-wide"
+                title="Type to search, or simply press Enter to record check-in for the active next student and shift forward"
               />
+              <div className="absolute right-3 top-3.5 flex items-center gap-1.5">
+                <kbd className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 border border-neutral-800 bg-neutral-950 font-mono text-[9px] text-neutral-500 rounded-xs leading-none pointer-events-none uppercase font-bold tracking-wider select-none">
+                  Ctrl+K
+                </kbd>
+                <kbd className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 border border-neutral-800 bg-neutral-950 font-mono text-[9px] text-amber-500/80 rounded-xs leading-none pointer-events-none uppercase font-bold tracking-wider select-none" title="Press Enter to toggle payment for the next student up">
+                  ↵ Enter
+                </kbd>
+              </div>
             </div>
             <button
               id="qr-scanner-trigger"
@@ -1536,7 +1604,7 @@ export const ClassRegister: React.FC = () => {
               </div>
 
               {selectedStudentIds.length > 0 && (
-                <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
+                <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto justify-end">
                   <button
                     type="button"
                     onClick={() => {
@@ -1550,6 +1618,35 @@ export const ClassRegister: React.FC = () => {
                     <CheckSquare size={13} className="stroke-[2.5]" />
                     <span>Mark Selected Paid</span>
                   </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!window.confirm(`Are you sure you want to unmark/clear the daily records for the ${selectedStudentIds.length} selected pupils?`)) {
+                        return;
+                      }
+                      let count = 0;
+                      selectedStudentIds.forEach(studentId => {
+                        const paidInfo = paidStudentMap.get(studentId);
+                        if (paidInfo) {
+                          deletePayment(paidInfo.paymentId);
+                          count++;
+                        }
+                      });
+                      if (count > 0) {
+                        showToast(`Successfully unmarked records for ${count} selected pupils.`);
+                      } else {
+                        showToast(`None of the selected pupils had active records today.`);
+                      }
+                      setSelectedStudentIds([]);
+                    }}
+                    disabled={isHoliday}
+                    className="w-full sm:w-auto text-[10px] font-mono font-black bg-neutral-950 border border-neutral-800 hover:border-red-500 hover:text-red-400 text-neutral-400 py-2.5 px-4 transition-colors flex items-center justify-center gap-1.5 uppercase tracking-wider disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    <X size={13} className="stroke-[2.5]" />
+                    <span>Unmark Selected</span>
+                  </button>
+
                   <button
                     type="button"
                     onClick={() => setSelectedStudentIds([])}
@@ -1605,13 +1702,23 @@ export const ClassRegister: React.FC = () => {
               const isPrepaid = isPaid && paidInfo && paidInfo.amount === 0 && (paidInfo.notes?.toLowerCase().includes('covered') || paidInfo.notes?.toLowerCase().includes('prepaid') || paidInfo.notes?.toLowerCase().includes('advance'));
               const isScholarship = isPaid && paidInfo && paidInfo.amount === 0 && !isPrepaid;
 
+              const isNextToPay = nextUnmarkedStudent && nextUnmarkedStudent.id === student.id;
+
               return (
                 <div 
                   key={student.id} 
                   id={`student-row-${student.id}`}
-                  className={`flex flex-col sm:flex-row justify-between items-start sm:items-center p-6 transition-all gap-4 ${
-                    isPaid ? 'bg-amber-400/[0.02]' : isAbsent ? 'bg-red-500/[0.02]' : 'hover:bg-neutral-800/10'
-                  }  scroll-mt-24 ${hasArrearsAtRisk ? 'opacity-60 hover:opacity-100 border-l-4 border-l-red-500 bg-red-950/[0.015]' : ''}`}
+                  className={`flex flex-col sm:flex-row justify-between items-start sm:items-center p-6 transition-all gap-4 scroll-mt-24 ${
+                    isNextToPay 
+                      ? 'border-l-4 border-l-amber-400 bg-amber-400/[0.04] ring-2 ring-amber-450/25 shadow-[0_0_15px_rgba(251,191,36,0.08)] scale-[1.002] z-10' 
+                      : hasArrearsAtRisk 
+                        ? 'border-l-4 border-l-red-500 bg-red-950/[0.015] opacity-80 hover:opacity-100' 
+                        : isPaid 
+                          ? 'bg-amber-400/[0.02]' 
+                          : isAbsent 
+                            ? 'bg-red-500/[0.02]' 
+                            : 'hover:bg-neutral-800/10'
+                  }`}
                 >
                   <div className="flex items-center gap-4 w-full sm:w-auto">
                     {/* Checkbox for selection */}
@@ -1671,6 +1778,12 @@ export const ClassRegister: React.FC = () => {
                       <span className="text-[10px] font-black px-2.5 py-0.5 bg-neutral-950 border border-neutral-800 text-amber-400 font-mono tracking-wider">
                         {student.rollNumber}
                       </span>
+                      {isNextToPay && (
+                        <span className="text-[9px] font-black px-2.5 py-0.5 bg-amber-450 border border-amber-500 text-neutral-950 font-mono tracking-widest uppercase animate-pulse shrink-0 flex items-center gap-1.5 shadow-[0_0_8px_rgba(251,191,36,0.25)] rounded-xs">
+                          <span className="w-1.5 h-1.5 rounded-full bg-black animate-ping" />
+                          ★ NEXT UP
+                        </span>
+                      )}
                       {student.discount !== undefined && student.discount > 0 && (
                         <span className="text-[9px] font-black px-2.5 py-0.5 font-mono tracking-widest uppercase bg-amber-955 border border-amber-600 text-amber-400">
                           {student.discount === 5 ? '100% SCHOLARSHIP' : `DISCOUNT: GHC ${student.discount.toFixed(2)}/DAY`}
@@ -1809,6 +1922,19 @@ export const ClassRegister: React.FC = () => {
                       className="p-2.5 text-neutral-400 hover:text-amber-400 border-2 border-neutral-800 hover:border-amber-400 bg-neutral-950 transition-colors cursor-pointer"
                     >
                       <BellRing size={16} />
+                    </button>
+
+                    {/* Generate Receipt Button */}
+                    <button
+                      onClick={() => setReceiptStudent(student)}
+                      title={isPaid ? "Generate and Print Daily Payment Confirmation Receipt" : "Generate Receipt (No active payment record found)"}
+                      className={`p-2.5 transition-all cursor-pointer flex items-center justify-center border-2 ${
+                        isPaid 
+                          ? 'text-amber-400 border-amber-400/50 hover:border-amber-400 bg-amber-400/10' 
+                          : 'text-neutral-500 border-neutral-800 hover:border-neutral-700 hover:text-neutral-300 bg-neutral-950'
+                      }`}
+                    >
+                      <Printer size={16} />
                     </button>
 
                     {/* Advance Custom Pay trigger */}
@@ -2170,6 +2296,49 @@ export const ClassRegister: React.FC = () => {
                         Match <span className="text-white">GHC {globalCollectionTotal.toFixed(2)}</span> cash-in-hand under date <span className="text-amber-400 font-black">{currentDate}</span>.
                       </p>
                     </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Daily Class Summary Statistics Footer Row */}
+              <div className="border-t border-neutral-800 pt-5 grid grid-cols-1 md:grid-cols-3 gap-4 font-mono text-xs">
+                {/* 1. Paid Students Counter */}
+                <div className="bg-neutral-900 border border-neutral-800 p-3.5 flex items-center justify-between">
+                  <div className="space-y-1">
+                    <span className="text-[9px] text-neutral-500 uppercase tracking-widest font-black block">PAID COHORT HEADCOUNT</span>
+                    <strong className="text-sm font-black text-white">{paidCount} <span className="text-neutral-500 font-normal">/ {classStudents.length} Students</span></strong>
+                  </div>
+                  <div className="text-amber-400 bg-amber-400/5 border border-amber-400/15 p-2 rounded-xs">
+                    <Users size={16} className="stroke-[2.5]" />
+                  </div>
+                </div>
+
+                {/* 2. Total Expected Fees */}
+                <div className="bg-neutral-900 border border-neutral-800 p-3.5 flex items-center justify-between">
+                  <div className="space-y-1">
+                    <span className="text-[9px] text-neutral-510 uppercase tracking-widest font-black block">TOTAL EXPECTED FEES</span>
+                    <strong className="text-sm font-black text-amber-400">GHC {classExpectedFees.toFixed(2)}</strong>
+                  </div>
+                  <div className="text-emerald-400 bg-emerald-500/5 border border-emerald-500/15 p-2 rounded-xs">
+                    <Coins size={16} className="stroke-[2.5]" />
+                  </div>
+                </div>
+
+                {/* 3. Collection Percentage */}
+                <div className="bg-neutral-900 border border-neutral-800 p-3.5 flex items-center justify-between">
+                  <div className="space-y-1">
+                    <span className="text-[9px] text-neutral-510 uppercase tracking-widest font-black block">COLLECTION PERCENTAGE</span>
+                    <div className="flex items-center gap-2">
+                      <strong className="text-sm font-black text-white">{classCollectionPercentage.toFixed(1)}%</strong>
+                      <span className="text-[10px] text-neutral-450">({paidCount} of {classStudents.length})</span>
+                    </div>
+                  </div>
+                  <div className={`p-2 rounded-xs font-black text-[9px] ${
+                    classCollectionPercentage >= 90 ? 'bg-emerald-950 text-emerald-400 border border-emerald-900/40' :
+                    classCollectionPercentage >= 50 ? 'bg-amber-951 text-amber-300 border-amber-900/30' :
+                    'bg-red-955 text-red-500 border border-red-900/30'
+                  }`}>
+                    {classCollectionPercentage >= 90 ? 'EXCELLENT' : classCollectionPercentage >= 50 ? 'STABLE' : 'CRITICAL'}
                   </div>
                 </div>
               </div>
@@ -3162,6 +3331,19 @@ export const ClassRegister: React.FC = () => {
                                     <span className="text-[9px] font-black uppercase px-2 py-0.5 bg-emerald-950/50 text-emerald-400 border border-emerald-900/40 font-sans tracking-widest">
                                       VERIFIED
                                     </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setSelectedRecordForReceipt({
+                                          student: historyStudent,
+                                          payment: p
+                                        });
+                                      }}
+                                      className="p-1.5 text-neutral-400 hover:text-amber-400 hover:bg-amber-400/10 rounded transition-colors"
+                                      title="Generate receipt for this specific transaction"
+                                    >
+                                      <Printer size={13} />
+                                    </button>
                                     {(currentUser?.role === 'Administrator' || currentUser?.role === 'Headmaster' || currentUser?.role === 'Accountant') && (
                                       <button
                                         type="button"
@@ -3399,13 +3581,12 @@ export const ClassRegister: React.FC = () => {
                               </div>
                             </div>
                           </div>
-
                         </div>
                       </div>
                     </div>
                   )}
 
-                  {/* Absolute Printable Layout (Visible only in physical media print engine) */}
+                           {/* Absolute Printable Layout (Visible only in physical media print engine) */}
                   <style dangerouslySetInnerHTML={{ __html: `
                     @media print {
                       /* Hide standard app UI */
@@ -3415,11 +3596,13 @@ export const ClassRegister: React.FC = () => {
                         color: #000 !important;
                         box-shadow: none !important;
                       }
-                      /* Show ONLY the single printable invoice container */
-                      #print-single-invoice-area-upgrade, #print-single-invoice-area-upgrade * {
+                      /* Show ONLY the single printable invoice container or the daily receipt area */
+                      #print-single-invoice-area-upgrade, #print-single-invoice-area-upgrade *,
+                      #print-daily-receipt, #print-daily-receipt *,
+                      #print-record-receipt, #print-record-receipt * {
                         visibility: visible !important;
                       }
-                      #print-single-invoice-area-upgrade {
+                      #print-single-invoice-area-upgrade, #print-daily-receipt, #print-record-receipt {
                         position: absolute !important;
                         left: 0 !important;
                         top: 0 !important;
@@ -3939,6 +4122,452 @@ export const ClassRegister: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* STUDENT DAILY PAYMENT RECEIPT MODAL */}
+      {receiptStudent && (() => {
+        const paidInfo = paidStudentMap.get(receiptStudent.id);
+        const isPaidToday = !!paidInfo && !paidInfo.isAbsent;
+        
+        return (
+          <>
+            {/* Screen UI Modal (Hidden when printing via no-print custom class) */}
+            <div className="fixed inset-0 z-50 bg-neutral-950/90 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto no-print">
+              <div className="relative w-full max-w-lg bg-neutral-900 border-4 border-amber-450 p-6 md:p-8 space-y-6 shadow-[8px_8px_0px_0px_rgba(251,191,36,0.15)] text-white">
+                
+                {/* Header section */}
+                <div className="flex justify-between items-start border-b border-neutral-800 pb-4">
+                  <div className="flex items-start gap-3">
+                    <div className="p-2.5 bg-amber-400/10 border border-amber-400 text-amber-300 shrink-0 animate-none">
+                      <Printer size={20} />
+                    </div>
+                    <div>
+                      <span className="text-[9px] text-amber-400 font-mono tracking-widest font-black uppercase block">Daily Transaction Record</span>
+                      <h3 className="text-base font-black uppercase tracking-tight">Fee Payment Docket</h3>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => setReceiptStudent(null)} 
+                    className="p-1 cursor-pointer text-neutral-400 hover:text-white transition-colors"
+                    title="Close Receipt Overlay"
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
+
+                {/* Status Alert or Receipt Details */}
+                {!isPaidToday ? (
+                  <div className="bg-neutral-950 p-6 border-2 border-dashed border-neutral-800 text-center space-y-3.5 rounded-sm">
+                    <div className="w-10 h-10 rounded-full bg-red-950/40 border border-red-500/20 text-red-500 flex items-center justify-center mx-auto">
+                      <X size={18} />
+                    </div>
+                    <div className="space-y-1">
+                      <h4 className="text-sm font-bold uppercase tracking-wide text-neutral-300">No Payment Recorded Today</h4>
+                      <p className="text-xs text-neutral-450 leading-relaxed max-w-sm mx-auto font-mono">
+                        There is no active check-in or daily gate deposit registered for <span className="text-white font-bold">{receiptStudent.name}</span> on <span className="text-amber-500 font-bold">{currentDate}</span>.
+                      </p>
+                    </div>
+                    <div className="pt-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          recordPayment(receiptStudent.id, true);
+                          showToast(`Successfully logged daily fee for ${receiptStudent.name}.`);
+                        }}
+                        className="px-5 py-2.5 bg-amber-400 hover:bg-amber-300 text-black text-[10.5px] font-mono font-black uppercase tracking-widest transition-colors cursor-pointer"
+                      >
+                        Collect Daily Fee & Clear
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-5">
+                    <div className="bg-neutral-950 p-4 border border-neutral-850 rounded-xs space-y-4 font-mono text-xs">
+                      
+                      {/* Header receipt info */}
+                      <div className="flex justify-between items-start border-b border-neutral-900 pb-3">
+                        <div>
+                          <span className="text-[9px] text-neutral-500 block uppercase font-bold">Pupil Name</span>
+                          <strong className="text-sm font-black text-white uppercase">{receiptStudent.name}</strong>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-[9px] text-neutral-500 block uppercase font-bold">Grade / Class</span>
+                          <strong className="text-amber-400 uppercase">{receiptStudent.class} ({receiptStudent.category})</strong>
+                        </div>
+                      </div>
+
+                      {/* Meta info columns */}
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-3 pt-1 text-[11px]">
+                        <div>
+                          <span className="text-[9px] text-neutral-505 block uppercase">Admission ID</span>
+                          <strong className="text-neutral-300 font-bold">{receiptStudent.rollNumber || 'SHC-'+receiptStudent.id.substring(0,5).toUpperCase()}</strong>
+                        </div>
+                        
+                        <div>
+                          <span className="text-[9px] text-neutral-505 block uppercase">Receipt Reference</span>
+                          <strong className="text-neutral-300 truncate block select-all font-bold" title={paidInfo.paymentId}>
+                            {paidInfo.paymentId.substring(0, 10).toUpperCase()}...
+                          </strong>
+                        </div>
+
+                        <div>
+                          <span className="text-[9px] text-neutral-505 block uppercase">Payment Date</span>
+                          <strong className="text-neutral-300 font-bold">{currentDate}</strong>
+                        </div>
+
+                        <div>
+                          <span className="text-[9px] text-neutral-505 block uppercase">System Officer</span>
+                          <strong className="text-neutral-300 font-bold uppercase truncate block">{paidInfo.collectedBy || 'Staff Registrar'}</strong>
+                        </div>
+                      </div>
+
+                      {/* Amount Block */}
+                      <div className="pt-3 border-t border-neutral-900 flex justify-between items-center">
+                        <div>
+                          <span className="text-[9px] text-neutral-500 block uppercase font-bold">Transaction Type</span>
+                          <span className="text-[9.5px] bg-neutral-900 text-amber-500 border border-neutral-850 px-2 py-0.5 font-bold uppercase rounded-sm inline-block mt-0.5">
+                            {receiptStudent.paymentType || 'Daily Gate Coin'}
+                          </span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-[9px] text-neutral-505 block uppercase font-bold">Gate Amount Paid</span>
+                          <strong className="text-lg font-black text-emerald-400">
+                            GHC {paidInfo.amount.toFixed(2)}
+                          </strong>
+                        </div>
+                      </div>
+
+                      {/* Details note */}
+                      {paidInfo.notes && (
+                        <div className="p-2.5 bg-neutral-900 border border-neutral-850 rounded-xs text-[10px] text-neutral-400">
+                          <span className="text-[8px] uppercase text-neutral-500 block font-bold leading-none mb-1">DOCKET RECONCILIATION NOTES</span>
+                          {paidInfo.notes}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Aesthetic Verification Seal */}
+                    <div className="flex items-center justify-between px-4 py-3 bg-neutral-950 border border-neutral-850 text-xs font-mono rounded-xs">
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                        <span className="text-neutral-450 text-[10.5px]">Status: <strong className="text-emerald-400 font-black uppercase">VERIFIED SECURE</strong></span>
+                      </div>
+                      <span className="text-[9px] text-neutral-550 uppercase">Gate ID Code: SHC-{receiptStudent.id.substring(0,6).toUpperCase()}</span>
+                    </div>
+
+                    {/* Printing action and close btn */}
+                    <div className="flex gap-3 font-mono text-center">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          window.print();
+                        }}
+                        className="flex-1 py-3 px-4 bg-amber-400 hover:bg-amber-300 text-black font-black uppercase text-xs tracking-widest transition-all cursor-pointer flex items-center justify-center gap-2 border border-amber-500"
+                      >
+                        <Printer size={15} className="stroke-[2.5]" />
+                        <span>Print Hardcopy Receipt</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setReceiptStudent(null)}
+                        className="w-1/3 py-3 px-4 bg-neutral-950 hover:bg-neutral-850 text-neutral-400 hover:text-white font-medium uppercase text-xs tracking-wider transition-colors border border-neutral-850 cursor-pointer"
+                      >
+                        Done
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+              </div>
+            </div>
+
+            {/* PRINTER FRIENDLY PORTRAIT DAILY RECEIPT SLIP (HIDDEN ON SCREEN, VISIBLE ON PRINT ONLY) */}
+            {isPaidToday && (
+              <div id="print-daily-receipt" className="hidden print:block bg-white text-black p-12 max-w-[210mm] mx-auto font-sans leading-relaxed">
+                <div className="space-y-6">
+                  
+                  {/* Letterhead */}
+                  <div className="border-b-4 border-black pb-4 flex justify-between items-start">
+                    <div className="space-y-1">
+                      <span className="text-[11px] font-black uppercase tracking-wider text-black bg-neutral-200 px-2.5 py-1 font-mono">
+                        SAAKO HOLY CHILD ACADEMY
+                      </span>
+                      <h2 className="text-xl font-black uppercase tracking-tight leading-none mt-2 font-sans font-bold">OFFICIAL DAILY PAYMENT RECEIPT</h2>
+                      <p className="text-[9px] text-neutral-600 font-black uppercase tracking-widest font-mono">
+                        GATE CHECKPOINT INGRESS SYSTEM • TRANSACTION CONFIRMATION SLIP
+                      </p>
+                    </div>
+                    
+                    <div className="text-right space-y-1 font-mono">
+                      <span className="text-[11px] font-black uppercase px-3 py-1 bg-black text-white inline-block">
+                        DAILY FEE RECEIPT
+                      </span>
+                      <div className="text-[8.5px] text-neutral-600 uppercase font-black mt-2">
+                        TRANSACTION ID: SHC-TX-{currentDate.replace(/-/g, '')}-{paidInfo.paymentId.substring(0,8).toUpperCase()}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Profile and Transaction breakdown */}
+                  <div className="grid grid-cols-2 gap-8 text-[11px] leading-relaxed border-b border-neutral-300 pb-5">
+                    <div className="font-sans space-y-1.5">
+                      <span className="text-[8.5px] font-black uppercase text-neutral-500 block text-neutral-510 font-bold">STUDENT BENEFICIARY</span>
+                      <div className="text-sm font-black text-black uppercase font-bold">{receiptStudent.name}</div>
+                      <div className="font-mono text-neutral-755 font-bold">Roll Ref: {receiptStudent.rollNumber || 'SHC-' + receiptStudent.id.substring(0, 5).toUpperCase()}</div>
+                      <div className="font-bold">Cohort Grade: {receiptStudent.class} ({receiptStudent.category})</div>
+                    </div>
+
+                    <div className="border-l pl-8 border-neutral-200 font-mono space-y-1.5">
+                      <span className="text-[8.5px] font-black uppercase text-neutral-500 block font-sans font-bold">TRANSACTION METRICS</span>
+                      <div><strong>Date Cleared:</strong> {currentDate}</div>
+                      <div><strong>Gate Fee Logged:</strong> GHC {paidInfo.amount.toFixed(2)}</div>
+                      <div><strong>Assigned System Core:</strong> {paidInfo.collectedBy || 'Certified Gateway Officer'}</div>
+                      <div><strong>Verification Code:</strong> SUCCESSFUL DEPOSIT SECURITIES ✔️</div>
+                    </div>
+                  </div>
+
+                  {/* Receipt message */}
+                  <div className="p-4 border border-neutral-300 bg-neutral-50 rounded-sm text-xs space-y-2">
+                    <span className="text-[10px] font-black text-black block font-mono uppercase font-bold">SECURITY TRANSACTION CONFIRMATION SUMMARY</span>
+                    <p className="text-[10px] leading-relaxed font-sans text-neutral-700">
+                      This receipt confirms a monetary transaction of <strong className="text-black font-bold">GHC {paidInfo.amount.toFixed(2)}</strong> paid on <strong className="text-black font-bold">{currentDate}</strong> in favor of the pupil <strong className="text-black font-bold">{receiptStudent.name}</strong>.
+                      The fee allows daily gate pass entry, attendance logs validation, and educational resources allocation under the active term register.
+                    </p>
+                  </div>
+
+                  {/* Signature deck */}
+                  <div className="pt-12 flex justify-between items-end font-sans">
+                    <div className="space-y-1 text-left font-mono">
+                      <div className="text-[8px] text-neutral-500 uppercase">OFFICIAL QR GATE REFERENCE</div>
+                      <div className="text-[10px] font-bold tracking-widest text-neutral-800 uppercase bg-neutral-100 p-1.5 inline-block font-mono">
+                        *SHCR-{receiptStudent.id.substring(0,8).toUpperCase()}*
+                      </div>
+                    </div>
+
+                    <div className="text-right space-y-2">
+                      <div className="inline-block border-b border-black w-32 h-6" />
+                      <div className="text-[7.5px] font-black uppercase text-neutral-700 tracking-wider font-sans font-bold animate-none">
+                        Audit Desk Signature
+                        <span className="text-[7px] text-neutral-400 block mt-0.5 font-normal">SAAKO HOLY CHILD ACADEMY CHECKPOINT</span>
+                      </div>
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+            )}
+          </>
+        );
+      })()}
+
+      {/* INDIVIDUAL RECORD RECEIPT MODAL */}
+      {selectedRecordForReceipt && (() => {
+        const { student, payment } = selectedRecordForReceipt;
+        const refId = payment.id;
+        
+        return (
+          <>
+            {/* Screen UI Modal (Hidden when printing via no-print class) */}
+            <div className="fixed inset-0 z-50 bg-neutral-950/90 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto no-print animate-fade-in animate-duration-200">
+              <div className="relative w-full max-w-lg bg-neutral-900 border-4 border-amber-450 p-6 md:p-8 space-y-6 shadow-[8px_8px_0px_0px_rgba(251,191,36,0.15)] text-white">
+                
+                {/* Header section */}
+                <div className="flex justify-between items-start border-b border-neutral-800 pb-4">
+                  <div className="flex items-start gap-3">
+                    <div className="p-2.5 bg-amber-400/10 border border-amber-400 text-amber-300 shrink-0">
+                      <Printer size={20} />
+                    </div>
+                    <div>
+                      <span className="text-[9px] text-amber-400 font-mono tracking-widest font-black uppercase block">Ledger Transaction Receipt</span>
+                      <h3 className="text-base font-black uppercase tracking-tight">Fee Payment Docket</h3>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => setSelectedRecordForReceipt(null)} 
+                    className="p-1 cursor-pointer text-neutral-400 hover:text-white transition-colors"
+                    title="Close Receipt Overlay"
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
+
+                {/* Receipt Details */}
+                <div className="space-y-5">
+                  <div className="bg-neutral-950 p-4 border border-neutral-850 rounded-xs space-y-4 font-mono text-xs">
+                    
+                    {/* Header receipt info */}
+                    <div className="flex justify-between items-start border-b border-neutral-900 pb-3">
+                      <div>
+                        <span className="text-[9px] text-neutral-500 block uppercase font-bold">Pupil Name</span>
+                        <strong className="text-sm font-black text-white uppercase">{student.name}</strong>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[9px] text-neutral-500 block uppercase font-bold">Grade / Class</span>
+                        <strong className="text-amber-400 uppercase">{student.class} ({student.category})</strong>
+                      </div>
+                    </div>
+
+                    {/* Meta info columns */}
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-3 pt-1 text-[11px]">
+                      <div>
+                        <span className="text-[9px] text-neutral-505 block uppercase">Admission ID</span>
+                        <strong className="text-neutral-300 font-bold">{student.rollNumber || 'SHC-'+student.id.substring(0,5).toUpperCase()}</strong>
+                      </div>
+                      
+                      <div>
+                        <span className="text-[9px] text-neutral-505 block uppercase">Receipt Reference</span>
+                        <strong className="text-neutral-300 truncate block select-all font-bold" title={refId}>
+                          {refId.substring(0, 10).toUpperCase()}...
+                        </strong>
+                      </div>
+
+                      <div>
+                        <span className="text-[9px] text-neutral-505 block uppercase">Payment Date</span>
+                        <strong className="text-neutral-300 font-bold">{payment.date}</strong>
+                      </div>
+
+                      <div>
+                        <span className="text-[9px] text-neutral-505 block uppercase">System Officer</span>
+                        <strong className="text-neutral-300 font-bold uppercase truncate block">{payment.collectedBy || 'Staff Registrar'}</strong>
+                      </div>
+                    </div>
+
+                    {/* Amount Block */}
+                    <div className="pt-3 border-t border-neutral-900 flex justify-between items-center">
+                      <div>
+                        <span className="text-[9px] text-neutral-500 block uppercase font-bold">Transaction Type</span>
+                        <span className="text-[9.5px] bg-neutral-900 text-amber-500 border border-neutral-850 px-2 py-0.5 font-bold uppercase rounded-sm inline-block mt-0.5">
+                          {payment.isAbsent ? 'Absent (No Fee Due)' : (student.paymentType || 'Daily Gate Coin')}
+                        </span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[9px] text-neutral-505 block uppercase font-bold">Amount Paid</span>
+                        <strong className="text-lg font-black text-emerald-400">
+                          GHC {payment.amount.toFixed(2)}
+                        </strong>
+                      </div>
+                    </div>
+
+                    {/* Details note */}
+                    {payment.notes && (
+                      <div className="p-2.5 bg-neutral-900 border border-neutral-850 rounded-xs text-[10px] text-neutral-400">
+                        <span className="text-[8px] uppercase text-neutral-500 block font-bold leading-none mb-1">DOCKET RECONCILIATION NOTES</span>
+                        {payment.notes}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Aesthetic Verification Seal */}
+                  <div className="flex items-center justify-between px-4 py-3 bg-neutral-950 border border-neutral-850 text-xs font-mono rounded-xs">
+                    <div className="flex items-center gap-2">
+                      <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                      <span className="text-neutral-455 text-[10.5px]">Status: <strong className="text-emerald-400 font-black uppercase">VERIFIED SECURE</strong></span>
+                    </div>
+                    <span className="text-[9px] text-neutral-550 uppercase">Gate ID Code: SHC-{student.id.substring(0,6).toUpperCase()}</span>
+                  </div>
+
+                  {/* Printing action and close btn */}
+                  <div className="flex gap-3 font-mono text-center">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        window.print();
+                      }}
+                      className="flex-1 py-3 px-4 bg-amber-400 hover:bg-amber-300 text-black font-black uppercase text-xs tracking-widest transition-all cursor-pointer flex items-center justify-center gap-2 border border-amber-500 animate-pulse"
+                    >
+                      <Printer size={15} className="stroke-[2.5]" />
+                      <span>Print Hardcopy Receipt</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setSelectedRecordForReceipt(null)}
+                      className="w-1/3 py-3 px-4 bg-neutral-950 hover:bg-neutral-850 text-neutral-400 hover:text-white font-medium uppercase text-xs tracking-wider transition-colors border border-neutral-850 cursor-pointer"
+                    >
+                      Done
+                    </button>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+
+            {/* PRINTER FRIENDLY PORTRAIT DAILY RECEIPT SLIP (HIDDEN ON SCREEN, VISIBLE ON PRINT ONLY) */}
+            <div id="print-record-receipt" className="hidden print:block bg-white text-black p-12 max-w-[210mm] mx-auto font-sans leading-relaxed">
+              <div className="space-y-6">
+                
+                {/* Letterhead */}
+                <div className="border-b-4 border-black pb-4 flex justify-between items-start">
+                  <div className="space-y-1">
+                    <span className="text-[11px] font-black uppercase tracking-wider text-black bg-neutral-200 px-2.5 py-1 font-mono">
+                      SAAKO HOLY CHILD ACADEMY
+                    </span>
+                    <h2 className="text-xl font-black uppercase tracking-tight leading-none mt-2 font-sans font-bold">OFFICIAL PAYMENT RECEIPT</h2>
+                    <p className="text-[9px] text-neutral-600 font-black uppercase tracking-widest font-mono">
+                      GATE CHECKPOINT INGRESS SYSTEM • TRANSACTION CONFIRMATION SLIP
+                    </p>
+                  </div>
+                  
+                  <div className="text-right space-y-1 font-mono">
+                    <span className="text-[11px] font-black uppercase px-3 py-1 bg-black text-white inline-block text-center font-bold">
+                      FEE TRANSACTION RECEIPT
+                    </span>
+                    <div className="text-[8.5px] text-neutral-600 uppercase font-black mt-2">
+                      TRANSACTION ID: SHC-TX-{payment.date.replace(/-/g, '')}-{refId.substring(0,8).toUpperCase()}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Profile and Transaction breakdown */}
+                <div className="grid grid-cols-2 gap-8 text-[11px] leading-relaxed border-b border-neutral-300 pb-5">
+                  <div className="font-sans space-y-1.5">
+                    <span className="text-[8.5px] font-black uppercase text-neutral-500 block text-neutral-510 font-bold">STUDENT BENEFICIARY</span>
+                    <div className="text-sm font-black text-black uppercase font-bold">{student.name}</div>
+                    <div className="font-mono text-neutral-755 font-bold">Roll Ref: {student.rollNumber || 'SHC-' + student.id.substring(0, 5).toUpperCase()}</div>
+                    <div className="font-bold">Cohort Grade: {student.class} ({student.category})</div>
+                  </div>
+
+                  <div className="border-l pl-8 border-neutral-200 font-mono space-y-1.5">
+                    <span className="text-[8.5px] font-black uppercase text-neutral-500 block font-sans font-bold">TRANSACTION METRICS</span>
+                    <div><strong>Date Cleared:</strong> {payment.date}</div>
+                    <div><strong>Fee Logged:</strong> GHC {payment.amount.toFixed(2)}</div>
+                    <div><strong>Assigned System Officer:</strong> {payment.collectedBy || 'Certified Gateway Officer'}</div>
+                    <div><strong>Verification Code:</strong> SUCCESSFUL DEPOSIT SECURITIES ✔️</div>
+                  </div>
+                </div>
+
+                {/* Receipt message */}
+                <div className="p-4 border border-neutral-300 bg-neutral-50 rounded-sm text-xs space-y-2">
+                  <span className="text-[10px] font-black text-black block font-mono uppercase font-bold">SECURITY TRANSACTION CONFIRMATION SUMMARY</span>
+                  <p className="text-[10px] leading-relaxed font-sans text-neutral-700">
+                    This receipt confirms a monetary transaction of <strong className="text-black font-bold">GHC {payment.amount.toFixed(2)}</strong> paid on <strong className="text-black font-bold">{payment.date}</strong> in favor of the pupil <strong className="text-black font-bold">{student.name}</strong>.
+                    The fee allows daily gate pass entry, attendance logs validation, and educational resources allocation under the active term register.
+                  </p>
+                </div>
+
+                {/* Signature deck */}
+                <div className="pt-12 flex justify-between items-end font-sans">
+                  <div className="space-y-1 text-left font-mono">
+                    <div className="text-[8px] text-neutral-500 uppercase">OFFICIAL QR GATE REFERENCE</div>
+                    <div className="text-[10px] font-bold tracking-widest text-neutral-800 uppercase bg-neutral-100 p-1.5 inline-block font-mono">
+                      *SHCR-{student.id.substring(0,8).toUpperCase()}*
+                    </div>
+                  </div>
+
+                  <div className="text-right space-y-2">
+                    <div className="inline-block border-b border-black w-32 h-6" />
+                    <div className="text-[7.5px] font-black uppercase text-neutral-700 tracking-wider font-sans font-bold">
+                      Audit Desk Signature
+                      <span className="text-[7px] text-neutral-400 block mt-0.5 font-normal">SAAKO HOLY CHILD ACADEMY CHECKPOINT</span>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          </>
+        );
+      })()}
 
       {/* Dynamic Action/Delete Confirmation Modal Safeguard */}
       {deleteConf.isOpen && (

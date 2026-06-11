@@ -296,12 +296,16 @@ export const TermPayersTab: React.FC = () => {
         <div className="relative w-full md:flex-1">
           <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-500" />
           <input
+            id="term-payers-search"
             type="text"
             placeholder="Search term payers by pupil name, roll ID..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-neutral-950 border-2 border-neutral-800 pl-10 pr-4 py-2 text-xs text-white font-medium outline-none focus:border-amber-400 focus:ring-0 placeholder:text-neutral-600 transition-colors"
+            className="w-full bg-neutral-950 border-2 border-neutral-800 pl-10 pr-16 py-2 text-xs text-white font-medium outline-none focus:border-amber-400 focus:ring-0 placeholder:text-neutral-600 transition-colors"
           />
+          <kbd className="absolute right-3 top-1/2 -translate-y-1/2 hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 border border-neutral-800 bg-neutral-950 font-mono text-[8px] text-neutral-500 rounded-xs leading-none pointer-events-none uppercase font-bold tracking-wider select-none">
+            Ctrl+K
+          </kbd>
         </div>
 
         {/* Filter select by Grade Class */}
