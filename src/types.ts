@@ -23,6 +23,7 @@ export interface Student {
   gender?: 'Male' | 'Female';
   paymentType?: 'Daily' | 'Term'; // Billing calculation model: daily (default) vs static term subscription
   termFee?: number; // Fixed fee for entire school term for Term Payer (e.g. 350.00 GHC)
+  legacyDebt?: number; // Pre-adoption/outstanding legacy debt to be integrated into their system balance (GHC)
 }
 
 export interface PaymentHistoryEntry {
@@ -104,5 +105,45 @@ export interface BackupRecord {
     terms: Term[];
   };
 }
+
+export type ExpenseCategory = 
+  | 'Food' 
+  | 'Utilities' 
+  | 'Utility'
+  | 'Maintenance' 
+  | 'Transport' 
+  | 'Supplies' 
+  | 'Uniforms' 
+  | 'Payroll' 
+  | 'Others';
+
+export interface Expense {
+  id: string;
+  date: string; // YYYY-MM-DD
+  amount: number;
+  category: ExpenseCategory;
+  description: string;
+  approvedBy: string;
+  timestamp: string; // ISO timestamp
+}
+
+export type PaymentMethod = 'Cash' | 'Mobile Money' | 'Bank Transfer';
+
+export interface WorkerSalary {
+  id: string;
+  date: string; // YYYY-MM-DD (payment execution date)
+  workerName: string;
+  userId?: string; // Links to UserAccount.id if applicable
+  monthYear: string; // e.g. "June 2026" or "YYYY-MM"
+  role: string;
+  baseSalary: number;
+  allowance: number;
+  deduction: number;
+  netPaid: number; // base + allowance - deduction
+  paymentMethod: PaymentMethod;
+  notes?: string;
+  timestamp: string; // ISO timestamp
+}
+
 
 

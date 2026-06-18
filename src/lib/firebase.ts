@@ -17,7 +17,7 @@ import {
   memoryLocalCache
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { Student, PaymentRecord, UserAccount, Term } from '../types';
+import { Student, PaymentRecord, UserAccount, Term, Expense, WorkerSalary } from '../types';
 
 const dbId = (!firebaseConfig.firestoreDatabaseId || firebaseConfig.firestoreDatabaseId === 'default') 
   ? undefined 
@@ -329,6 +329,84 @@ export const db = {
       return res.ok;
     } catch (e) {
       console.error("Local Server API deleteTerm error: ", e);
+      return false;
+    }
+  },
+
+  async getExpenses(): Promise<Expense[] | null> {
+    try {
+      const res = await fetch("/api/expenses");
+      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+      return await res.json();
+    } catch (e) {
+      console.error("Local Server API getExpenses error: ", e);
+      return null;
+    }
+  },
+
+  async saveExpense(expense: Expense): Promise<boolean> {
+    try {
+      const res = await fetch("/api/expenses", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(expense),
+      });
+      return res.ok;
+    } catch (e) {
+      console.error("Local Server API saveExpense error: ", e);
+      return false;
+    }
+  },
+
+  async deleteExpense(expenseId: string): Promise<boolean> {
+    try {
+      const res = await fetch(`/api/expenses/${expenseId}`, {
+        method: "DELETE",
+      });
+      return res.ok;
+    } catch (e) {
+      console.error("Local Server API deleteExpense error: ", e);
+      return false;
+    }
+  },
+
+  async getSalaries(): Promise<WorkerSalary[] | null> {
+    try {
+      const res = await fetch("/api/salaries");
+      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+      return await res.json();
+    } catch (e) {
+      console.error("Local Server API getSalaries error: ", e);
+      return null;
+    }
+  },
+
+  async saveSalary(salary: WorkerSalary): Promise<boolean> {
+    try {
+      const res = await fetch("/api/salaries", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(salary),
+      });
+      return res.ok;
+    } catch (e) {
+      console.error("Local Server API saveSalary error: ", e);
+      return false;
+    }
+  },
+
+  async deleteSalary(salaryId: string): Promise<boolean> {
+    try {
+      const res = await fetch(`/api/salaries/${salaryId}`, {
+        method: "DELETE",
+      });
+      return res.ok;
+    } catch (e) {
+      console.error("Local Server API deleteSalary error: ", e);
       return false;
     }
   }

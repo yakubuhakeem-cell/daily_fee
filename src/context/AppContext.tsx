@@ -4,7 +4,7 @@
  */
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { Student, PaymentRecord, UserAccount, UserRole, StudentClass, SchoolCategory, Term, PendingEdit, BackupRecord } from '../types';
+import { Student, PaymentRecord, UserAccount, UserRole, StudentClass, SchoolCategory, Term, PendingEdit, BackupRecord, Expense, ExpenseCategory, PaymentMethod, WorkerSalary } from '../types';
 import { INITIAL_USERS, INITIAL_STUDENTS, generateSeedPayments, getClassCategory } from '../initialData';
 import { db as rawDb } from '../lib/firebase';
 import { generateSchoolDays } from '../utils/termUtils';
@@ -58,7 +58,7 @@ interface AppContextType {
   login: (email: string, mfaCode?: string, password?: string) => { success: boolean; requiresMfa?: boolean; requiresPassword?: boolean; error?: string };
   logout: () => void;
   toggleMfaForUser: (userId: string) => void;
-  addStudent: (name: string, className: StudentClass, guardianPhone?: string, photoUrl?: string, discount?: number, gender?: 'Male' | 'Female', paymentType?: 'Daily' | 'Term', termFee?: number) => void;
+  addStudent: (name: string, className: StudentClass, guardianPhone?: string, photoUrl?: string, discount?: number, gender?: 'Male' | 'Female', paymentType?: 'Daily' | 'Term', termFee?: number, legacyDebt?: number) => void;
   updateStudent: (student: Student) => void;
   deleteStudent: (studentId: string) => void;
   purgeDeactivatedStudents: () => void;
@@ -108,6 +108,15 @@ interface AppContextType {
   playFeedbackSound: (type: 'success' | 'error' | 'warning') => void;
   theme: 'dark' | 'daylight';
   setTheme: (theme: 'dark' | 'daylight') => void;
+  expenses: Expense[];
+  salaries: WorkerSalary[];
+  addExpense: (amount: number, category: ExpenseCategory, description: string, approvedBy: string, date: string) => void;
+  deleteExpense: (expenseId: string) => void;
+  addSalary: (workerName: string, role: string, baseSalary: number, allowance: number, deduction: number, paymentMethod: PaymentMethod, monthYear: string, date: string, notes?: string, userId?: string) => void;
+  deleteSalary: (salaryId: string) => void;
+  whatsappLogs: any[];
+  sendautomatedWhatsApp: (phone: string, message: string, studentId?: string, studentName?: string, type?: string) => Promise<{ success: boolean; log?: any; error?: string }>;
+  fetchWhatsappLogs: () => Promise<void>;
 }
 
 export interface DailyStats {
@@ -146,6 +155,105 @@ export interface PendingAlert {
   guardianPhone: string;
 }
 
+export function calculateStudentFinancialState(
+  student: Student,
+  payments: PaymentRecord[],
+  activeTerm: Term | null,
+  currentDate: string
+) {
+  if (student.paymentType === 'Term') {
+    const termFee = student.termFee || 350;
+    const legacyDebt = student.legacyDebt || 0;
+    const totalTarget = termFee + legacyDebt;
+    const studentPayments = payments.filter(p => p.studentId === student.id);
+    const totalPaid = studentPayments
+      .filter(p => !p.isAbsent)
+      .reduce((sum, p) => sum + p.amount, 0);
+    const runningBalance = totalPaid - totalTarget;
+    return {
+      paymentType: 'Term' as const,
+      runningBalance,
+      totalRequired: totalTarget,
+      totalPaid,
+      pastUnpaidDays: [] as string[],
+      isPaidToday: totalPaid >= totalTarget,
+      totalDebt: runningBalance < 0 ? Math.abs(runningBalance) : 0,
+      prepaidDaysCount: 0
+    };
+  }
+
+  const dailyRate = Math.max(0.01, 5.00 - (student.discount || 0));
+  const studentPayments = payments.filter(p => p.studentId === student.id);
+
+  if (!activeTerm || !activeTerm.schoolDays) {
+    return {
+      paymentType: 'Daily' as const,
+      runningBalance: 0,
+      totalRequired: 0,
+      totalPaid: 0,
+      pastUnpaidDays: [] as string[],
+      isPaidToday: false,
+      totalDebt: 0,
+      prepaidDaysCount: 0
+    };
+  }
+
+  const holidays = activeTerm.publicHolidays || [];
+  // Get all school days in the active term up to currentDate (inclusive)
+  const schoolDaysUpToToday = activeTerm.schoolDays.filter(d => d <= currentDate && !holidays.includes(d));
+
+  // Filter days where the student was NOT absent
+  const billableDays = schoolDaysUpToToday.filter(dStr => {
+    const isAbsent = studentPayments.some(p => p.date === dStr && p.isAbsent);
+    return !isAbsent;
+  });
+
+  const totalPaid = studentPayments
+    .filter(p => !p.isAbsent)
+    .reduce((sum, p) => sum + p.amount, 0);
+
+  const totalRequired = billableDays.length * dailyRate;
+  const runningBalance = totalPaid - totalRequired;
+
+  // Calculate which specific days are unpaid/covered chronologically using the sequential pool
+  let runningPaid = totalPaid;
+  const unpaidDaysList: string[] = [];
+  const coveredDaysList: string[] = [];
+
+  billableDays.forEach(dStr => {
+    if (runningPaid + 0.005 >= dailyRate) {
+      runningPaid -= dailyRate;
+      coveredDaysList.push(dStr);
+    } else {
+      runningPaid = 0;
+      unpaidDaysList.push(dStr);
+    }
+  });
+
+  // Is today paid/covered?
+  const isHolidayToday = holidays.includes(currentDate);
+  const isAbsentToday = studentPayments.some(p => p.date === currentDate && p.isAbsent);
+  const isTodayBillable = !isHolidayToday && !isAbsentToday && activeTerm.schoolDays.includes(currentDate);
+
+  const isPaidToday = !isTodayBillable || coveredDaysList.includes(currentDate);
+
+  const remainingSurplus = runningPaid;
+  const prepaidDaysCount = Math.floor((remainingSurplus + 0.005) / dailyRate);
+
+  const pastUnpaidDays = unpaidDaysList.filter(d => d < currentDate);
+
+  return {
+    paymentType: 'Daily' as const,
+    runningBalance,
+    totalRequired,
+    totalPaid,
+    pastUnpaidDays,
+    isPaidToday,
+    totalDebt: runningBalance < 0 ? Math.abs(runningBalance) : 0,
+    prepaidDaysCount
+  };
+}
+
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -166,6 +274,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [students, setStudents] = useState<Student[]>([]);
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
   const [terms, setTerms] = useState<Term[]>([]);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [salaries, setSalaries] = useState<WorkerSalary[]>([]);
+  const [whatsappLogs, setWhatsappLogs] = useState<any[]>([]);
 
   const activeTerm = terms.find(t => t.active) || null;
 
@@ -474,13 +585,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     setBgSyncStatus('syncing');
     try {
-      const [dbUsers, dbStudents, dbPayments] = await Promise.all([
+      const [dbUsers, dbStudents, dbPayments, dbExpenses, dbSalaries] = await Promise.all([
         db.getUsers(),
         db.getStudents(),
-        db.getPayments()
+        db.getPayments(),
+        db.getExpenses(),
+        db.getSalaries()
       ]);
 
-      if (dbUsers === null || dbStudents === null || dbPayments === null) {
+      if (dbUsers === null || dbStudents === null || dbPayments === null || dbExpenses === null || dbSalaries === null) {
         setBgSyncStatus('error');
         return;
       }
@@ -488,11 +601,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setUsers(dbUsers);
       setStudents(dbStudents);
       setPayments(dbPayments);
+      setExpenses(dbExpenses);
+      setSalaries(dbSalaries);
 
       // Cache locally to keep quick sync speed
       localStorage.setItem('s_users', JSON.stringify(dbUsers));
       localStorage.setItem('s_students', JSON.stringify(dbStudents));
       localStorage.setItem('s_payments', JSON.stringify(dbPayments));
+      localStorage.setItem('s_expenses', JSON.stringify(dbExpenses));
+      localStorage.setItem('s_salaries', JSON.stringify(dbSalaries));
 
       setBgSyncStatus('success');
       setLastBgSyncTime(new Date().toLocaleTimeString());
@@ -534,6 +651,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const localPayments = localStorage.getItem('s_payments');
     const localTerms = localStorage.getItem('s_terms');
     const localUser = localStorage.getItem('s_current_user');
+    const localExpenses = localStorage.getItem('s_expenses');
+    const localSalaries = localStorage.getItem('s_salaries');
 
     // 1. Session authentication state loading
     try {
@@ -557,19 +676,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       
       try {
         // Run lookups in parallel to minimize wait times (cut 24s sequence down to 8s)
-        const [dbUsers, dbStudents, dbPayments, dbTerms] = await Promise.all([
+        const [dbUsers, dbStudents, dbPayments, dbTerms, dbExpenses, dbSalaries] = await Promise.all([
           db.getUsers(),
           db.getStudents(),
           db.getPayments(),
-          db.getTerms()
+          db.getTerms(),
+          db.getExpenses(),
+          db.getSalaries()
         ]);
 
-        if (dbUsers === null || dbStudents === null || dbPayments === null || dbTerms === null) {
+        if (dbUsers === null || dbStudents === null || dbPayments === null || dbTerms === null || dbExpenses === null || dbSalaries === null) {
           console.warn('Cloud database collections are offline/misconfigured. Falling back to LocalStorage...');
           setFirebaseConnected(false);
           setStorageModeState('local');
           setFirebaseError('Cloud database returned null. Reverting to local storage mode.');
-          loadLocalBackup(localUsers, localStudents, localPayments, localTerms);
+          loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries);
           return;
         }
 
@@ -634,7 +755,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setFirebaseConnected(false);
             setStorageModeState('local');
             setFirebaseError('Relational seeding transaction failed. Reverting to safe local storage mode.');
-            loadLocalBackup(localUsers, localStudents, localPayments, localTerms);
+            loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries);
             return;
           }
         }
@@ -642,11 +763,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setUsers(dbUsers);
         setStudents(dbStudents);
         setPayments(dbPayments);
+        setExpenses(dbExpenses);
+        setSalaries(dbSalaries);
 
         // Sync local copies as high speed cache
         localStorage.setItem('s_users', JSON.stringify(dbUsers));
         localStorage.setItem('s_students', JSON.stringify(dbStudents));
         localStorage.setItem('s_payments', JSON.stringify(dbPayments));
+        localStorage.setItem('s_expenses', JSON.stringify(dbExpenses));
+        localStorage.setItem('s_salaries', JSON.stringify(dbSalaries));
         
         // Sync terms in active cloud mode
         if (dbTerms && dbTerms.length > 0) {
@@ -694,11 +819,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         
         setFirebaseError(displayError);
-        loadLocalBackup(localUsers, localStudents, localPayments, localTerms);
+        loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries);
       }
     } else {
       console.log('FEETRACK running in standard client-persistence mode (Local Storage).');
-      loadLocalBackup(localUsers, localStudents, localPayments, localTerms);
+      loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries);
     }
   };
 
@@ -707,7 +832,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     initializeData();
   }, [storageMode]);
 
-    const loadLocalBackup = (localUsers: string | null, localStudents: string | null, localPayments: string | null, localTerms: string | null) => {
+    const loadLocalBackup = (
+      localUsers: string | null,
+      localStudents: string | null,
+      localPayments: string | null,
+      localTerms: string | null,
+      localExpenses: string | null,
+      localSalaries: string | null
+    ) => {
       // Users list healing
       try {
         if (localUsers) {
@@ -790,6 +922,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }];
         setTerms(initialTerms);
         localStorage.setItem('s_terms', JSON.stringify(initialTerms));
+      }
+
+      // Expenses database healing
+      try {
+        if (localExpenses) {
+          setExpenses(JSON.parse(localExpenses));
+        } else {
+          setExpenses([]);
+          localStorage.setItem('s_expenses', JSON.stringify([]));
+        }
+      } catch (e) {
+        setExpenses([]);
+        localStorage.setItem('s_expenses', JSON.stringify([]));
+      }
+
+      // Salaries database healing
+      try {
+        if (localSalaries) {
+          setSalaries(JSON.parse(localSalaries));
+        } else {
+          setSalaries([]);
+          localStorage.setItem('s_salaries', JSON.stringify([]));
+        }
+      } catch (e) {
+        setSalaries([]);
+        localStorage.setItem('s_salaries', JSON.stringify([]));
       }
     };
 
@@ -997,7 +1155,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
-  const addStudent = (name: string, className: StudentClass, guardianPhone?: string, photoUrl?: string, discount = 0, gender?: 'Male' | 'Female', paymentType: 'Daily' | 'Term' = 'Daily', termFee = 350) => {
+  const addStudent = (name: string, className: StudentClass, guardianPhone?: string, photoUrl?: string, discount = 0, gender?: 'Male' | 'Female', paymentType: 'Daily' | 'Term' = 'Daily', termFee = 350, legacyDebt = 0) => {
     const isDuplicate = students.some(s => 
       s.name.trim().toLowerCase() === name.trim().toLowerCase() && 
       s.class === className
@@ -1025,7 +1183,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       discount: discount,
       gender: gender,
       paymentType: paymentType,
-      termFee: termFee
+      termFee: termFee,
+      legacyDebt: legacyDebt
     };
 
     const nextStudents = [...students, newStudent];
@@ -1169,7 +1328,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let runningPaid = totalPaid;
     const unpaidDays: string[] = [];
     billableDays.forEach(dStr => {
-      if (runningPaid >= dailyRate) {
+      if (runningPaid + 0.005 >= dailyRate) {
         runningPaid -= dailyRate;
       } else {
         runningPaid = 0;
@@ -1186,7 +1345,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const recordsToSync: PaymentRecord[] = [];
 
       if (amountToSettle > 0) {
-        const daysToCover = Math.floor(amountToSettle / dailyRate);
+        const daysToCover = Math.floor((amountToSettle + 0.005) / dailyRate);
         const datesToRecord = unpaidDays.slice(0, daysToCover);
 
         const todayDebtPaymentId = `p_${studentId}_${currentDate}_debt`;
@@ -1225,6 +1384,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         datesToRecord.forEach((dayStr) => {
           const existingIdx = nextPayments.findIndex(p => p.studentId === studentId && p.date === dayStr);
           
+          if (existingIdx > -1) {
+            const existingRecord = nextPayments[existingIdx];
+            // If the existing record preserves any non-zero cash collection, or is a main debt transaction record,
+            // DO NOT OVERWRITE its amount to 0 (which would erase the student's payment history).
+            if (existingRecord.amount > 0 || existingRecord.id.endsWith('_debt')) {
+              const updatedRecord: PaymentRecord = {
+                ...existingRecord,
+                notes: existingRecord.notes 
+                  ? `${existingRecord.notes} | Arrears Cleared on ${currentDate}` 
+                  : `Arrears Cleared on ${currentDate}`
+              };
+              nextPayments[existingIdx] = updatedRecord;
+              recordsToSync.push(updatedRecord);
+              return;
+            }
+          }
+
           const record: PaymentRecord = {
             id: existingIdx > -1 ? nextPayments[existingIdx].id : `p_${studentId}_${dayStr}`,
             studentId: student.id,
@@ -1264,7 +1440,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           datesToCoverForRemainder.push(currentDate);
         }
 
-        const daysToCoverRemainder = Math.floor(remainder / dailyRate);
+        const daysToCoverRemainder = Math.floor((remainder + 0.005) / dailyRate);
         let scanIndex = startIndex;
         while (datesToCoverForRemainder.length < daysToCoverRemainder && scanIndex < schoolDays.length) {
           const dStr = schoolDays[scanIndex];
@@ -1315,6 +1491,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         datesToCoverForRemainder.forEach((dayStr) => {
           if (dayStr === currentDate) return;
           const existingIdx = nextPayments.findIndex(p => p.studentId === studentId && p.date === dayStr && !p.id.endsWith('_debt'));
+          
+          if (existingIdx > -1) {
+            const existingRecord = nextPayments[existingIdx];
+            if (existingRecord.amount > 0) {
+              const updatedRecord: PaymentRecord = {
+                ...existingRecord,
+                notes: existingRecord.notes 
+                  ? `${existingRecord.notes} | Block prepaid on ${currentDate}` 
+                  : `Block prepaid on ${currentDate}`
+              };
+              nextPayments[existingIdx] = updatedRecord;
+              recordsToSync.push(updatedRecord);
+              return;
+            }
+          }
+
           const rRecord: PaymentRecord = {
             id: existingIdx > -1 ? nextPayments[existingIdx].id : `p_${studentId}_${dayStr}`,
             studentId: student.id,
@@ -1557,6 +1749,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (dayStr === currentDate) return;
 
       const existingIdx = nextPayments.findIndex(p => p.studentId === studentId && p.date === dayStr && !p.id.endsWith('_debt'));
+      
+      if (existingIdx > -1) {
+        const existingRecord = nextPayments[existingIdx];
+        if (existingRecord.amount > 0) {
+          const updatedRecord: PaymentRecord = {
+            ...existingRecord,
+            notes: existingRecord.notes 
+              ? `${existingRecord.notes} | Block prepaid on ${currentDate}` 
+              : `Block prepaid on ${currentDate}`
+          };
+          nextPayments[existingIdx] = updatedRecord;
+          recordsToCloudSync.push(updatedRecord);
+          return;
+        }
+      }
+
       const record: PaymentRecord = {
         id: existingIdx > -1 ? nextPayments[existingIdx].id : `p_${studentId}_${dayStr}`,
         studentId: student.id,
@@ -1663,11 +1871,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const deletePayment = (paymentId: string) => {
     const targetP = payments.find(p => p.id === paymentId);
-    const nextPayments = payments.filter(p => p.id !== paymentId);
+    if (!targetP) return;
+
+    let clearedDatesToDelete: string[] = targetP.clearedDates || [];
+
+    // Filter out both the main payment record, and any zero-amount markers on the cleared dates
+    const nextPayments = payments.filter(p => {
+      if (p.id === paymentId) return false;
+      if (p.studentId === targetP.studentId && p.amount === 0 && clearedDatesToDelete.includes(p.date)) {
+        return false;
+      }
+      return true;
+    });
+
     setPayments(nextPayments);
     saveState(users, students, nextPayments);
+
     if (db.isActive()) {
       db.deletePayment(paymentId);
+      // Also delete marker records from Cloud Firestore if active
+      clearedDatesToDelete.forEach(dStr => {
+        const markerId = `p_${targetP.studentId}_${dStr}`;
+        db.deletePayment(markerId);
+      });
     }
     if (storageMode !== 'cloud') {
       recordLocallyPendingEdit('payment', 'delete', `Voided payment transaction entry for pupil: "${targetP?.studentName || 'Pupil'}"`);
@@ -2188,6 +2414,142 @@ School Administration Financial Audit System (MFA Secure)
     }
   };
 
+  const addExpense = (amount: number, category: ExpenseCategory, description: string, approvedBy: string, date: string) => {
+    const newExpense: Expense = {
+      id: `exp-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
+      date,
+      amount,
+      category,
+      description,
+      approvedBy,
+      timestamp: new Date().toISOString()
+    };
+
+    const updated = [newExpense, ...expenses];
+    setExpenses(updated);
+    localStorage.setItem('s_expenses', JSON.stringify(updated));
+
+    if (db.isActive() && storageMode === 'cloud') {
+      db.saveExpense(newExpense).catch(err => {
+        console.error("Failed to save expense to cloud:", err);
+      });
+    }
+  };
+
+  const deleteExpense = (expenseId: string) => {
+    const updated = expenses.filter(e => e.id !== expenseId);
+    setExpenses(updated);
+    localStorage.setItem('s_expenses', JSON.stringify(updated));
+
+    if (db.isActive() && storageMode === 'cloud') {
+      db.deleteExpense(expenseId).catch(err => {
+        console.error("Failed to delete expense from cloud:", err);
+      });
+    }
+  };
+
+  const addSalary = (
+    workerName: string,
+    role: string,
+    baseSalary: number,
+    allowance: number,
+    deduction: number,
+    paymentMethod: PaymentMethod,
+    monthYear: string,
+    date: string,
+    notes?: string,
+    userId?: string
+  ) => {
+    const netPaid = baseSalary + allowance - deduction;
+    const newSalary: WorkerSalary = {
+      id: `sal-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
+      date,
+      workerName,
+      userId,
+      monthYear,
+      role,
+      baseSalary,
+      allowance,
+      deduction,
+      netPaid,
+      paymentMethod,
+      notes,
+      timestamp: new Date().toISOString()
+    };
+
+    const updated = [newSalary, ...salaries];
+    setSalaries(updated);
+    localStorage.setItem('s_salaries', JSON.stringify(updated));
+
+    if (db.isActive() && storageMode === 'cloud') {
+      db.saveSalary(newSalary).catch(err => {
+        console.error("Failed to save salary to cloud:", err);
+      });
+    }
+  };
+
+  const deleteSalary = (salaryId: string) => {
+    const updated = salaries.filter(s => s.id !== salaryId);
+    setSalaries(updated);
+    localStorage.setItem('s_salaries', JSON.stringify(updated));
+
+    if (db.isActive() && storageMode === 'cloud') {
+      db.deleteSalary(salaryId).catch(err => {
+        console.error("Failed to delete salary from cloud:", err);
+      });
+    }
+  };
+
+  const fetchWhatsappLogs = async () => {
+    try {
+      const res = await fetch('/api/whatsapp/logs');
+      if (res.ok) {
+        const data = await res.json();
+        setWhatsappLogs(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch WhatsApp logs state:', err);
+    }
+  };
+
+  const sendautomatedWhatsApp = async (
+    phone: string,
+    message: string,
+    studentId?: string,
+    studentName?: string,
+    type?: string
+  ) => {
+    try {
+      const res = await fetch('/api/whatsapp/send', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          phone,
+          message,
+          studentId,
+          studentName,
+          type,
+          operator: currentUser ? currentUser.name : 'System Automation'
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        await fetchWhatsappLogs();
+      }
+      return data;
+    } catch (err: any) {
+      console.error('Failed to send automated WhatsApp via API:', err);
+      return { success: false, error: err?.message || String(err) };
+    }
+  };
+
+  // Initially fetch whatsapp logs on storage mode shifts or startup
+  useEffect(() => {
+    fetchWhatsappLogs();
+  }, [storageMode]);
+
   return (
     <AppContext.Provider value={{
       currentUser,
@@ -2256,7 +2618,16 @@ School Administration Financial Audit System (MFA Secure)
       setAudioMuted,
       playFeedbackSound,
       theme,
-      setTheme
+      setTheme,
+      expenses,
+      salaries,
+      addExpense,
+      deleteExpense,
+      addSalary,
+      deleteSalary,
+      whatsappLogs,
+      sendautomatedWhatsApp,
+      fetchWhatsappLogs
     }}>
       {children}
     </AppContext.Provider>

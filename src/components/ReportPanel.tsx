@@ -10,8 +10,10 @@ import {
   FileSpreadsheet, Mail, Search, Calendar, ChevronRight, CheckCircle2, 
   HelpCircle, Settings, CheckSquare, PlusSquare, ArrowUpDown, X, Printer,
   UserCheck, CalendarRange, AlertTriangle, TrendingUp, UserMinus, Eye,
-  ZoomIn, ZoomOut, FileText, Check
+  ZoomIn, ZoomOut, FileText, Check, Info, MessageSquare, Share2
 } from 'lucide-react';
+import { SchoolLogo } from './SchoolLogo';
+import { VoiceSearchButton } from './VoiceSearchButton';
 
 export const ReportPanel: React.FC = () => {
   const { 
@@ -21,13 +23,21 @@ export const ReportPanel: React.FC = () => {
     sendMonthlyEmailDraft,
     currentUser,
     verifyPayment,
-    activeTerm
+    activeTerm,
+    sendautomatedWhatsApp
   } = useApp();
 
   const [dateFilter, setDateFilter] = useState<string>(''); // empty means All Days
   const [classFilter, setClassFilter] = useState<string>('ALL');
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
+
+  // Auditing & Month-To-Date (MTD) view states
+  const [auditViewMode, setAuditViewMode] = useState<'daily' | 'monthly'>('daily');
+  const [auditSelectedMonth, setAuditSelectedMonth] = useState<string>(() => {
+    return currentDate?.slice(0, 7) || '2026-06';
+  });
+  const [expandedDailyAuditDate, setExpandedDailyAuditDate] = useState<string>('');
 
   // Calendar states
   const [selectedMonthKey, setSelectedMonthKey] = useState<string>('');
@@ -61,6 +71,14 @@ export const ReportPanel: React.FC = () => {
   const [printStartDate, setPrintStartDate] = useState('');
   const [printEndDate, setPrintEndDate] = useState('');
   const [printSearchQuery, setPrintSearchQuery] = useState('');
+
+  // Term Summary PDF states
+  const [showTermSummaryModal, setShowTermSummaryModal] = useState(false);
+  const [termSummarySearchQuery, setTermSummarySearchQuery] = useState('');
+  const [termSummaryClassFilter, setTermSummaryClassFilter] = useState('ALL');
+  const [termSummarySignatory, setTermSummarySignatory] = useState('Yakubu Hakeem (Headmaster)');
+  const [termSummaryMemo, setTermSummaryMemo] = useState('Consolidated term billing record and verified registration statement. Please verify and resolve all outstanding balances with the administrative office.');
+  const [termSummaryOnlyPending, setTermSummaryOnlyPending] = useState(false);
 
   // Group class categories
   const classes: StudentClass[] = [
@@ -183,6 +201,114 @@ export const ReportPanel: React.FC = () => {
     return Object.values(groups).sort((a, b) => a.studentName.localeCompare(b.studentName));
   }, [printFilteredPayments, includeUnverified]);
 
+  // Term Summary PDF data compilation
+  const termSummaryReportsByStudent = useMemo(() => {
+    if (!activeTerm || !activeTerm.schoolDays) return [];
+
+    let filteredList = students.filter(s => s.active !== false);
+
+    if (termSummaryClassFilter !== 'ALL') {
+      filteredList = filteredList.filter(s => s.class === termSummaryClassFilter);
+    }
+    if (termSummarySearchQuery.trim()) {
+      const query = termSummarySearchQuery.toLowerCase();
+      filteredList = filteredList.filter(s => 
+        s.name.toLowerCase().includes(query) ||
+        s.id.toLowerCase().includes(query) ||
+        (s.rollNumber && s.rollNumber.toLowerCase().includes(query))
+      );
+    }
+
+    const holidays = activeTerm.publicHolidays || [];
+    const termSchoolDays = activeTerm.schoolDays;
+
+    return filteredList.map(student => {
+      // Find payments for this student inside the active term
+      const studentPayments = payments.filter(p => p.studentId === student.id && termSchoolDays.includes(p.date));
+      
+      const presentPayments = studentPayments.filter(p => !p.isAbsent && p.verified);
+      const unverifiedPayments = studentPayments.filter(p => !p.isAbsent && !p.verified);
+      const absentPayments = studentPayments.filter(p => p.isAbsent);
+
+      const presentCount = presentPayments.length + (includeUnverified ? unverifiedPayments.length : 0);
+      const absentCount = absentPayments.length;
+      
+      // School days elapsed up to currentDate
+      const elapsedDays = termSchoolDays.filter(d => d <= currentDate);
+
+      // Unpaid days up to currentDate
+      const unpaidDays = elapsedDays.filter(dayStr => {
+        if (holidays.includes(dayStr)) return false;
+        const record = payments.find(p => p.studentId === student.id && p.date === dayStr);
+        return !record;
+      });
+      const unpaidCount = unpaidDays.length;
+
+      // Fees calculations
+      const isTermPayer = student.paymentType === 'Term';
+      const termFeeAmount = student.termFee || 350;
+
+      let totalCharged = 0;
+      let totalPaid = 0;
+      let totalDue = 0;
+
+      if (isTermPayer) {
+        totalCharged = termFeeAmount + (student.legacyDebt || 0);
+        // Payments include any recorded payments.
+        totalPaid = studentPayments.filter(p => !p.isAbsent && (includeUnverified || p.verified)).reduce((sum, p) => sum + p.amount, 0);
+        totalDue = Math.max(0, totalCharged - totalPaid);
+      } else {
+        totalPaid = studentPayments.filter(p => !p.isAbsent && (includeUnverified || p.verified)).reduce((sum, p) => sum + p.amount, 0);
+        totalDue = (unpaidCount * 5) + (student.legacyDebt || 0);
+        totalCharged = totalPaid + totalDue;
+      }
+
+      // Attendance rate
+      const denominator = presentCount + absentCount + unpaidCount;
+      const attendanceRate = denominator > 0 ? (presentCount / denominator) * 100 : 100;
+
+      return {
+        student,
+        presentCount,
+        absentCount,
+        unpaidCount,
+        attendanceRate,
+        isTermPayer,
+        termFeeAmount,
+        totalCharged,
+        totalPaid,
+        totalDue,
+        paymentsList: studentPayments.sort((a, b) => b.date.localeCompare(a.date))
+      };
+    }).filter(item => {
+      if (termSummaryOnlyPending) {
+        return item.totalDue > 0;
+      }
+      return true;
+    }).sort((a, b) => a.student.name.localeCompare(b.student.name));
+  }, [students, payments, activeTerm, currentDate, termSummarySearchQuery, termSummaryClassFilter, termSummaryOnlyPending, includeUnverified]);
+
+  // Compiled term summary overall totals
+  const termSummaryTotals = useMemo(() => {
+    let kids = termSummaryReportsByStudent.length;
+    let totalBilled = 0;
+    let totalCleared = 0;
+    let totalArrears = 0;
+
+    termSummaryReportsByStudent.forEach(item => {
+      totalBilled += item.totalCharged;
+      totalCleared += item.totalPaid;
+      totalArrears += item.totalDue;
+    });
+
+    return {
+      kids,
+      totalBilled,
+      totalCleared,
+      totalArrears
+    };
+  }, [termSummaryReportsByStudent]);
+
   // Aggregate stats of filtered set
   const totalsInfo = useMemo(() => {
     const totalCollected = filteredPayments.filter(p => p.verified).reduce((sum, p) => sum + p.amount, 0);
@@ -192,6 +318,112 @@ export const ReportPanel: React.FC = () => {
       unverifiedCount
     };
   }, [filteredPayments]);
+
+  const handleShareReportOrInvoice = async (
+    type: 'invoice-page' | 'ledger-report',
+    details: {
+      studentId?: string;
+      studentName?: string;
+      guardianPhone?: string;
+      rollNumber?: string;
+      studentClass?: string;
+      studentCategory?: string;
+      totalPaymentsAllTime?: number;
+      totalDebt?: number;
+      unpaidDaysCount?: number;
+      schoolOwesStudent?: number;
+      totalPaidRecorded?: number;
+      customFootnote?: string;
+      totalRowsMatched?: number;
+      ledgerValuation?: number;
+      unverifiedRows?: number;
+      authorizedSignatory?: string;
+      auditedMemo?: string;
+    }
+  ) => {
+    let messageText = '';
+    let phone = '';
+
+    if (type === 'invoice-page') {
+      const sRoll = details.rollNumber || 'FT-PUPIL-' + (details.studentId?.substring(0, 5).toUpperCase() || '');
+      const classGroup = `${details.studentClass || ''} (${details.studentCategory || ''})`;
+      phone = details.guardianPhone || '';
+
+      messageText = `*SAAKO HOLY CHILD ACADEMY*\n*OFFICIAL STATEMENT OF FEES & LEDGER REPORT*\n\n` +
+        `*Reference:* SHC-RE-${currentDate.replace(/-/g, '')}-${details.studentId?.substring(0,6).toUpperCase() || 'ST'}\n` +
+        `*Pupil Beneficiary:* ${details.studentName}\n` +
+        `*Roll Number:* ${sRoll}\n` +
+        `*Class Group:* ${classGroup}\n` +
+        `*Statement Date:* ${currentDate}\n\n` +
+        `*Financial Summary:*\n` +
+        `* All-Time Fees Collected: GHC ${(details.totalPaymentsAllTime || 0).toFixed(2)}\n` +
+        `* Total Arrears (Debt): GHC ${(details.totalDebt || 0).toFixed(2)} ${details.unpaidDaysCount ? `(${details.unpaidDaysCount} register days)` : ''}\n` +
+        `* Prepaid Pool Balance: GHC ${(details.schoolOwesStudent || 0).toFixed(2)}\n` +
+        `* Fees Covered inside Statement: GHC ${(details.totalPaidRecorded || 0).toFixed(2)}\n\n` +
+        `${details.customFootnote ? `_Notice: ${details.customFootnote}_\n\n` : ''}` +
+        `_Issued by: ${currentUser ? currentUser.name : 'Authorized Registrar Registration'}_`;
+    } else if (type === 'ledger-report') {
+      const filterDesc = `${classFilter !== 'ALL' ? `Class: ${classFilter}` : 'All Classes'}${categoryFilter !== 'ALL' ? ` [${categoryFilter}]` : ''}${dateFilter ? ` on Date: ${dateFilter}` : ''}`;
+      messageText = `*SAAKO HOLY CHILD ACADEMY*\n*OFFICIAL AUDITED TRANSCRIPT & DAILY LEDGER*\n\n` +
+        `*Report Date:* ${currentDate}\n` +
+        `*Roster Scope:* ${filterDesc}\n\n` +
+        `*Statement Insights:*\n` +
+        `* Match Ledger Entries Count: ${details.totalRowsMatched || 0} rows\n` +
+        `* Valuation / Amount Verified: GHC ${(details.ledgerValuation || 0).toFixed(2)}\n` +
+        `* Unverified Pending Records: ${details.unverifiedRows || 0} matching\n` +
+        `* Authorized Signatory: ${details.authorizedSignatory || 'Headmaster'}\n\n` +
+        `${details.auditedMemo ? `_Office Memo: ${details.auditedMemo}_\n\n` : ''}` +
+        `_Validated via Gate Checkpoint Ingress System on ${currentDate}_`;
+    }
+
+    if (!messageText) return;
+
+    let sharedViaApi = false;
+    if (typeof navigator !== 'undefined' && navigator.share) {
+      try {
+        await navigator.share({
+          title: type === 'invoice-page' ? 'Pupil Fee Statement' : 'School Audited Transcript Ledger',
+          text: messageText
+        });
+        sharedViaApi = true;
+        alert("Successfully shared!");
+      } catch (err: any) {
+        if (err.name === 'AbortError') return;
+        console.log("Web Share API could not complete. Using fallback:", err);
+      }
+    }
+
+    if (!sharedViaApi) {
+      let targetPhone = phone.replace(/\D/g, "");
+      if (targetPhone.startsWith("0") && targetPhone.length === 10) {
+        targetPhone = "233" + targetPhone.substring(1);
+      }
+      
+      const urlText = encodeURIComponent(messageText);
+      const waUrl = targetPhone 
+        ? `https://api.whatsapp.com/send?phone=${targetPhone}&text=${urlText}`
+        : `https://api.whatsapp.com/send?text=${urlText}`;
+
+      if (typeof window !== 'undefined') {
+        window.open(waUrl, '_blank', 'noopener,noreferrer');
+        alert("Pre-filled WhatsApp opened. Direct delivery to guardian initiated!");
+      }
+    }
+
+    try {
+      if (sendautomatedWhatsApp) {
+        await sendautomatedWhatsApp(
+          phone || 'N/A',
+          messageText,
+          details.studentId || undefined,
+          details.studentName || undefined,
+          type
+        );
+      }
+    } catch (err) {
+      console.error("Failed to automatically log dispatch connection:", err);
+    }
+  };
 
   // Aggregate stats for export confirmation summary modal
   const exportSummary = useMemo(() => {
@@ -222,6 +454,79 @@ export const ReportPanel: React.FC = () => {
       pendingVal
     };
   }, [filteredPayments]);
+
+  // --- Start of Monthly MTD Aggregation calculations ---
+  const availableMonths = useMemo(() => {
+    const monthsSet = new Set<string>();
+    payments.forEach(p => {
+      if (p.date && p.date.length >= 7) {
+        monthsSet.add(p.date.slice(0, 7)); // "YYYY-MM"
+      }
+    });
+    // Fallback to include current month
+    const curYearMonth = currentDate.slice(0, 7);
+    monthsSet.add(curYearMonth);
+    
+    // Sort reverse chronological (latest months first)
+    return Array.from(monthsSet).sort().reverse();
+  }, [payments, currentDate]);
+
+  const monthlyPayments = useMemo(() => {
+    return payments.filter(p => p.date && p.date.startsWith(auditSelectedMonth));
+  }, [payments, auditSelectedMonth]);
+
+  const aggregatedDays = useMemo(() => {
+    const dayGroups: { [date: string]: {
+      date: string;
+      totalAmount: number;
+      verifiedAmount: number;
+      unverifiedAmount: number;
+      totalCount: number;
+      verifiedCount: number;
+      classTotals: { [cls: string]: number };
+    } } = {};
+
+    monthlyPayments.forEach(p => {
+      const d = p.date;
+      if (!dayGroups[d]) {
+        dayGroups[d] = {
+          date: d,
+          totalAmount: 0,
+          verifiedAmount: 0,
+          unverifiedAmount: 0,
+          totalCount: 0,
+          verifiedCount: 0,
+          classTotals: {}
+        };
+      }
+      const group = dayGroups[d];
+      group.totalAmount += p.amount;
+      group.totalCount += 1;
+      if (p.verified) {
+        group.verifiedAmount += p.amount;
+        group.verifiedCount += 1;
+      } else {
+        group.unverifiedAmount += p.amount;
+      }
+      
+      const clsName = p.class || 'Other';
+      group.classTotals[clsName] = (group.classTotals[clsName] || 0) + p.amount;
+    });
+
+    // Sort chronologically (latest date first)
+    return Object.values(dayGroups).sort((a, b) => b.date.localeCompare(a.date));
+  }, [monthlyPayments]);
+
+  const formatMonthKey = (yrMo: string) => {
+    if (!yrMo) return 'No Month Selected';
+    const parts = yrMo.split('-');
+    if (parts.length !== 2) return yrMo;
+    const yr = parseInt(parts[0], 10);
+    const mo = parseInt(parts[1], 10);
+    const d = new Date(yr, mo - 1, 1);
+    return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  };
+  // --- End of Monthly MTD Aggregation calculations ---
 
   // Pagination for pre-export preview table
   const PREVIEW_ITEMS_PER_PAGE = 10;
@@ -481,6 +786,13 @@ export const ReportPanel: React.FC = () => {
           @page {
             size: ${pageSizeString};
             margin: ${pageMarginString};
+            @bottom-right {
+              content: "Page " counter(page) " of " counter(pages);
+              font-family: 'JetBrains Mono', monospace !important;
+              font-size: 8px !important;
+              font-weight: bold !important;
+              color: #333333 !important;
+            }
           }
 
           @media print {
@@ -816,6 +1128,18 @@ export const ReportPanel: React.FC = () => {
             title="Open audit ledger in stripped, print-ready dedicated browser window"
           >
             <Printer size={14} /> Print Report
+          </button>
+
+          {/* Term Summary PDF button */}
+          <button
+            onClick={() => {
+              setTermSummarySearchQuery(searchQuery);
+              setShowTermSummaryModal(true);
+            }}
+            className="flex-1 sm:flex-initial text-[10px] font-black bg-neutral-950 hover:bg-neutral-850 hover:text-white text-emerald-450 py-3.5 px-4 transition-all border-2 border-neutral-800 hover:border-emerald-400 uppercase tracking-widest cursor-pointer flex items-center justify-center gap-1.5"
+            title="Generate consolidated term-long summaries and statement sheets for all pupils"
+          >
+            <FileText size={14} /> Term Summary PDF
           </button>
 
           {/* Download CSV audit core */}
@@ -1316,80 +1640,299 @@ export const ReportPanel: React.FC = () => {
         )}
       </div>
 
-      {/* Main Ledger Listing Sheet */}
-      <div className="bg-neutral-900 border-4 border-neutral-800 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead>
-              <tr className="bg-neutral-950 border-b-2 border-neutral-800 text-[10px] font-black text-neutral-400 uppercase tracking-widest font-mono">
-                <th className="p-4 cursor-pointer select-none" onClick={() => handleSort('date')}>
-                  <div className="flex items-center gap-1.5 py-1">Date Check <ArrowUpDown size={12} /></div>
-                </th>
-                <th className="p-4 cursor-pointer select-none" onClick={() => handleSort('studentName')}>
-                  <div className="flex items-center gap-1.5 py-1">Student Name <ArrowUpDown size={12} /></div>
-                </th>
-                <th className="p-4 cursor-pointer select-none font-mono" onClick={() => handleSort('class')}>
-                  <div className="flex items-center gap-1.5 py-1">Class <ArrowUpDown size={12} /></div>
-                </th>
-                <th className="p-4 font-mono uppercase tracking-widest">Group</th>
-                <th className="p-4 text-right uppercase tracking-widest">Fee (GHC)</th>
-                <th className="p-4 uppercase tracking-widest">Staff Gate</th>
-                <th className="p-4 text-center uppercase tracking-widest">Security Check</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-neutral-850 font-sans text-neutral-300">
-              {filteredPayments.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="text-center py-12 text-neutral-500 font-black uppercase tracking-widest text-xs">
-                    No payment ledger found. Change filter queries to load records.
-                  </td>
-                </tr>
-              ) : (
-                filteredPayments.map((p) => (
-                  <tr key={p.id} className="hover:bg-neutral-950/20">
-                    <td className="p-4 font-mono text-neutral-450">{p.date}</td>
-                    <td className="p-4 font-black text-white uppercase text-xs tracking-wide">
-                      <div>{p.studentName}</div>
-                      {p.notes && (
-                        <div className="mt-1 text-[10px] font-mono text-neutral-400 font-bold normal-case flex flex-wrap items-center gap-1.5 leading-snug">
-                          {p.notes.toLowerCase().includes('settled debt') || p.notes.toLowerCase().includes('arrears') ? (
-                            <span className="px-1.5 py-0.5 rounded-xs uppercase text-[8px] font-black bg-red-950/80 text-rose-400 border border-red-900/60 tracking-wider inline-block">
-                              DEBT CLEARANCE
-                            </span>
-                          ) : p.notes.toLowerCase().includes('prepaid') || p.notes.toLowerCase().includes('covered') || p.notes.toLowerCase().includes('advance') ? (
-                            <span className="px-1.5 py-0.5 rounded-xs uppercase text-[8px] font-black bg-sky-955 text-sky-400 border border-sky-900 tracking-wider inline-block">
-                              ADVANCE PREPAID
-                            </span>
-                          ) : null}
-                          <span className="text-neutral-450 uppercase">{p.notes}</span>
-                        </div>
-                      )}
-                    </td>
-                    <td className="p-4 font-mono font-black text-amber-400 text-sm">{p.class}</td>
-                    <td className="p-4 text-neutral-400 text-[11px] font-black uppercase tracking-wider">{p.category}</td>
-                    <td className="p-4 text-right font-black font-mono text-white">GHC {p.amount.toFixed(2)}</td>
-                    <td className="p-4 text-neutral-300 font-bold uppercase text-[11px] truncate max-w-[120px]">{p.collectedBy}</td>
-                    <td className="p-4 text-center">
-                      {p.verified ? (
-                        <span className="inline-flex items-center gap-1 px-3 py-1 bg-neutral-950 text-emerald-400 border border-neutral-850 font-black text-[10px] uppercase tracking-widest">
-                          Approved
-                        </span>
-                      ) : (
-                        <button
-                          onClick={() => verifyPayment(p.id)}
-                          className="px-3 py-1 text-[9px] font-black bg-white hover:bg-amber-400 text-black uppercase tracking-widest transition-colors cursor-pointer"
-                        >
-                          Approve Check
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+      {/* View Selector Tabs and Header */}
+      <div className="bg-neutral-900 border-4 border-neutral-800 p-4 flex flex-col md:flex-row justify-between items-center gap-4">
+        <div className="flex items-center gap-2">
+          <CalendarRange size={18} className="text-amber-400" />
+          <h3 className="text-xs font-black uppercase text-white font-mono tracking-widest">Fee Ledger Query Workstation</h3>
+        </div>
+        
+        <div className="flex bg-neutral-950 p-1 border border-neutral-850 gap-1 w-full md:w-auto">
+          <button
+            type="button"
+            onClick={() => setAuditViewMode('daily')}
+            className={`flex-1 md:flex-initial px-4 py-2 text-[10px] uppercase font-mono font-black tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+              auditViewMode === 'daily'
+                ? 'bg-amber-400 text-black'
+                : 'text-neutral-400 hover:text-white'
+            }`}
+          >
+            <Calendar size={12} />
+            Daily Log View
+          </button>
+          <button
+            type="button"
+            onClick={() => setAuditViewMode('monthly')}
+            className={`flex-1 md:flex-initial px-4 py-2 text-[10px] uppercase font-mono font-black tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+              auditViewMode === 'monthly'
+                ? 'bg-amber-400 text-black'
+                : 'text-neutral-400 hover:text-white'
+            }`}
+          >
+            <TrendingUp size={12} />
+            Monthly Summary MTD View
+          </button>
         </div>
       </div>
+
+      {auditViewMode === 'daily' ? (
+        /* Main Ledger Listing Sheet */
+        <div className="bg-neutral-900 border-4 border-neutral-800 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="bg-neutral-950 border-b-2 border-neutral-800 text-[10px] font-black text-neutral-400 uppercase tracking-widest font-mono">
+                  <th className="p-4 cursor-pointer select-none" onClick={() => handleSort('date')}>
+                    <div className="flex items-center gap-1.5 py-1">Date Check <ArrowUpDown size={12} /></div>
+                  </th>
+                  <th className="p-4 cursor-pointer select-none" onClick={() => handleSort('studentName')}>
+                    <div className="flex items-center gap-1.5 py-1">Student Name <ArrowUpDown size={12} /></div>
+                  </th>
+                  <th className="p-4 cursor-pointer select-none font-mono" onClick={() => handleSort('class')}>
+                    <div className="flex items-center gap-1.5 py-1">Class <ArrowUpDown size={12} /></div>
+                  </th>
+                  <th className="p-4 font-mono uppercase tracking-widest">Group</th>
+                  <th className="p-4 text-right uppercase tracking-widest">Fee (GHC)</th>
+                  <th className="p-4 uppercase tracking-widest">Staff Gate</th>
+                  <th className="p-4 text-center uppercase tracking-widest">Security Check</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-neutral-850 font-sans text-neutral-300">
+                {filteredPayments.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="text-center py-12 text-neutral-500 font-black uppercase tracking-widest text-xs">
+                      No payment ledger found. Change filter queries to load records.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredPayments.map((p) => (
+                    <tr key={p.id} className="hover:bg-neutral-950/20">
+                      <td className="p-4 font-mono text-neutral-450">{p.date}</td>
+                      <td className="p-4 font-black text-white uppercase text-xs tracking-wide">
+                        <div>{p.studentName}</div>
+                        {p.notes && (
+                          <div className="mt-1 text-[10px] font-mono text-neutral-400 font-bold normal-case flex flex-wrap items-center gap-1.5 leading-snug">
+                            {p.notes.toLowerCase().includes('settled debt') || p.notes.toLowerCase().includes('arrears') ? (
+                              <span className="px-1.5 py-0.5 rounded-xs uppercase text-[8px] font-black bg-red-950/80 text-rose-400 border border-red-900/60 tracking-wider inline-block">
+                                DEBT CLEARANCE
+                              </span>
+                            ) : p.notes.toLowerCase().includes('prepaid') || p.notes.toLowerCase().includes('covered') || p.notes.toLowerCase().includes('advance') ? (
+                              <span className="px-1.5 py-0.5 rounded-xs uppercase text-[8px] font-black bg-sky-955 text-sky-400 border border-sky-900 tracking-wider inline-block">
+                                ADVANCE PREPAID
+                              </span>
+                            ) : null}
+                            <span className="text-neutral-450 uppercase">{p.notes}</span>
+                          </div>
+                        )}
+                      </td>
+                      <td className="p-4 font-mono font-black text-amber-400 text-sm">{p.class}</td>
+                      <td className="p-4 text-neutral-400 text-[11px] font-black uppercase tracking-wider">{p.category}</td>
+                      <td className="p-4 text-right font-black font-mono text-white">GHC {p.amount.toFixed(2)}</td>
+                      <td className="p-4 text-neutral-300 font-bold uppercase text-[11px] truncate max-w-[120px]">{p.collectedBy}</td>
+                      <td className="p-4 text-center">
+                        {p.verified ? (
+                          <span className="inline-flex items-center gap-1 px-3 py-1 bg-neutral-950 text-emerald-400 border border-neutral-850 font-black text-[10px] uppercase tracking-widest">
+                            Approved
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => verifyPayment(p.id)}
+                            className="px-3 py-1 text-[9px] font-black bg-white hover:bg-amber-400 text-black uppercase tracking-widest transition-colors cursor-pointer"
+                          >
+                            Approve Check
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : (
+        /* Monthly Aggregated MTD Audit View */
+        <div className="bg-neutral-900 border-4 border-neutral-800 p-6 space-y-6">
+          {/* Month selector and main numbers overview */}
+          <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 bg-neutral-950 border border-neutral-850 p-4 font-mono">
+            <div className="space-y-1.5 w-full lg:w-auto">
+              <label className="block text-[10px] font-black text-neutral-500 uppercase tracking-widest font-mono">Select Audit Month</label>
+              <select
+                value={auditSelectedMonth}
+                onChange={(e) => {
+                  setAuditSelectedMonth(e.target.value);
+                  setExpandedDailyAuditDate('');
+                }}
+                className="w-full lg:w-64 bg-neutral-900 border-2 border-neutral-800 py-1.5 px-3 text-xs outline-none text-white focus:border-amber-400 font-bold"
+              >
+                {availableMonths.map(m => (
+                  <option key={m} value={m}>{formatMonthKey(m)}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Quick stats for this month */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 w-full lg:w-auto text-[10px]">
+              <div className="bg-neutral-900 border border-neutral-850 p-3 space-y-1">
+                <span className="text-neutral-500 uppercase font-black text-[9px]">MTD Collections</span>
+                <span className="text-white font-black text-xs block font-mono">
+                  GHC {monthlyPayments.reduce((s, p) => s + p.amount, 0).toFixed(2)}
+                </span>
+              </div>
+              <div className="bg-neutral-900 border border-neutral-850 p-3 space-y-1">
+                <span className="text-emerald-500 uppercase font-black text-[9px]">Verified & Audited</span>
+                <span className="text-emerald-400 font-black text-xs block font-mono">
+                  GHC {monthlyPayments.filter(p => p.verified).reduce((s, p) => s + p.amount, 0).toFixed(2)}
+                </span>
+              </div>
+              <div className="bg-neutral-900 border border-neutral-850 p-3 space-y-1">
+                <span className="text-amber-500 uppercase font-black text-[9px]">Pending Approval</span>
+                <span className={`font-black text-xs block font-mono ${monthlyPayments.some(p => !p.verified) ? 'text-amber-400 animate-pulse' : 'text-neutral-300'}`}>
+                  GHC {monthlyPayments.filter(p => !p.verified).reduce((s, p) => s + p.amount, 0).toFixed(2)}
+                </span>
+              </div>
+              <div className="bg-neutral-900 border border-neutral-850 p-3 space-y-1">
+                <span className="text-cyan-500 uppercase font-black text-[9px]">Audit Match Rate</span>
+                <span className="text-cyan-400 font-black text-xs block font-mono">
+                  {((monthlyPayments.filter(p => p.verified).length / (monthlyPayments.length || 1)) * 100).toFixed(1)}% ({monthlyPayments.filter(p => p.verified).length}/{monthlyPayments.length})
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Table of aggregated days */}
+          <div className="border border-neutral-850 overflow-hidden rounded-xs">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="bg-neutral-950 border-b border-neutral-850 text-[10px] font-black text-neutral-450 uppercase tracking-widest font-mono">
+                    <th className="p-4 font-mono">Daily Ledger Date</th>
+                    <th className="p-4 text-right">Fee Rate Volume</th>
+                    <th className="p-4 text-right text-emerald-400">Audited Amount</th>
+                    <th className="p-4 text-right text-amber-400">Pending Amount</th>
+                    <th className="p-4 text-center">Receipts / Checks Status</th>
+                    <th className="p-4 text-right">Audit Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-neutral-850 font-sans text-neutral-300">
+                  {aggregatedDays.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="text-center py-12 text-neutral-500 font-black uppercase tracking-widest text-xs font-mono">
+                        No daily records found in {formatMonthKey(auditSelectedMonth)}.
+                      </td>
+                    </tr>
+                  ) : (
+                    aggregatedDays.map((day) => {
+                      const isExpanded = expandedDailyAuditDate === day.date;
+                      const needsAudit = day.unverifiedAmount > 0;
+                      return (
+                        <React.Fragment key={day.date}>
+                          <tr className={`hover:bg-neutral-950/25 transition-all ${isExpanded ? 'bg-neutral-950/50 border-l-4 border-amber-400' : ''}`}>
+                            <td className="p-4 font-mono flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setExpandedDailyAuditDate(isExpanded ? '' : day.date)}
+                                className="text-neutral-500 hover:text-white transition-colors cursor-pointer font-black text-[10px]"
+                              >
+                                {isExpanded ? '▼' : '▶'}
+                              </button>
+                              <span className="font-extrabold text-neutral-250">{day.date}</span>
+                            </td>
+                            <td className="p-4 text-right font-black font-mono text-white">
+                              GHC {day.totalAmount.toFixed(2)}
+                            </td>
+                            <td className="p-4 text-right font-black font-mono text-emerald-400 font-bold">
+                              GHC {day.verifiedAmount.toFixed(2)}
+                            </td>
+                            <td className="p-4 text-right font-black font-mono">
+                              {day.unverifiedAmount > 0 ? (
+                                <span className="text-amber-400 font-black">
+                                  GHC {day.unverifiedAmount.toFixed(2)}
+                                </span>
+                              ) : (
+                                <span className="text-neutral-550">—</span>
+                              )}
+                            </td>
+                            <td className="p-4 text-center">
+                              <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 font-black text-[9px] uppercase tracking-wider rounded-xs font-mono border ${
+                                day.verifiedCount === day.totalCount
+                                  ? 'bg-emerald-950/50 text-emerald-400 border-emerald-900/60'
+                                  : 'bg-amber-950/50 text-amber-400 border-amber-900/60'
+                              }`}>
+                                {day.verifiedCount === day.totalCount ? '✓ FULLY VERIFIED' : '⚠ PENDING AUDIT'} ({day.verifiedCount} / {day.totalCount})
+                              </span>
+                            </td>
+                            <td className="p-4 text-right space-x-1.5 whitespace-nowrap">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setDateFilter(day.date);
+                                  setAuditViewMode('daily');
+                                }}
+                                className="px-2.5 py-1 text-[9px] font-black bg-neutral-950 text-neutral-400 border border-neutral-800 hover:border-neutral-600 hover:text-white uppercase tracking-widest transition-all cursor-pointer font-mono"
+                                title="Set Date filter and jump back to Daily List views"
+                              >
+                                Drill Down
+                              </button>
+                              
+                              {needsAudit && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const unverifiedOnDate = payments.filter(p => p.date === day.date && !p.verified);
+                                    unverifiedOnDate.forEach(p => verifyPayment(p.id));
+                                  }}
+                                  className="px-2.5 py-1 text-[9px] font-black bg-amber-400 text-black uppercase tracking-widest hover:bg-amber-300 transition-all cursor-pointer font-mono"
+                                  title="Approve and verify all unapproved logs for this date"
+                                >
+                                  Audit Pass
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+
+                          {isExpanded && (
+                            <tr className="bg-neutral-950/70">
+                              <td colSpan={6} className="p-4 font-mono text-[10px] text-neutral-400 space-y-3">
+                                <div className="border border-neutral-850 p-4 space-y-3 bg-neutral-950">
+                                  <h4 className="text-[10px] font-black tracking-widest uppercase text-neutral-300 border-b border-neutral-850 pb-2">
+                                    Class-by-Class Revenue Distribution on {day.date}
+                                  </h4>
+                                  
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+                                    {Object.entries(day.classTotals).map(([clsName, rawAmount]) => {
+                                      const amount = rawAmount as number;
+                                      const share = (amount / day.totalAmount) * 100;
+                                      return (
+                                        <div key={clsName} className="p-2 bg-neutral-900 border border-neutral-850/60 space-y-1">
+                                          <div className="flex justify-between font-black text-neutral-300 text-[9px]">
+                                            <span>CLASS: <span className="text-amber-400">{clsName}</span></span>
+                                            <span>{share.toFixed(0)}%</span>
+                                          </div>
+                                          <div className="text-xs font-bold text-white font-mono">
+                                            GHC {amount.toFixed(2)}
+                                          </div>
+                                          <div className="w-full bg-neutral-950 h-1 rounded overflow-hidden">
+                                            <div className="bg-amber-400 h-full" style={{ width: `${share}%` }}></div>
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Automated Email summary slider drawer */}
       {showEmailDrawer && (
@@ -1504,6 +2047,17 @@ B7 to B9: GHC [SUM]`}
           {/* STYLESHEET OVERRIDES FOR PRINTER SYSTEM */}
           <style dangerouslySetInnerHTML={{ __html: `
             @media print {
+              @page {
+                size: portrait;
+                margin: 15mm;
+                @bottom-right {
+                  content: "Page " counter(page) " of " counter(pages);
+                  font-family: 'JetBrains Mono', monospace !important;
+                  font-size: 8px !important;
+                  font-weight: bold !important;
+                  color: #333333 !important;
+                }
+              }
               /* Hide app UI */
               body * {
                 visibility: hidden !important;
@@ -1558,29 +2112,45 @@ B7 to B9: GHC [SUM]`}
               {/* Search filter */}
               <div className="space-y-1.5">
                 <span className="text-[10px] font-mono uppercase font-black text-neutral-400 tracking-wider">Search Student</span>
-                <div className="relative">
-                  <Search className="absolute left-3 top-2.5 text-neutral-500" size={13} />
-                  <input
-                    id="reports-student-search"
-                    type="text"
-                    value={printSearchQuery}
-                    onChange={(e) => setPrintSearchQuery(e.target.value)}
-                    placeholder="Search by name or ID..."
-                    className="w-full bg-neutral-950 border-2 border-neutral-800 py-2 pl-9 pr-16 text-xs outline-none text-white focus:border-amber-400 font-mono"
-                  />
-                  <kbd className="absolute right-2.5 top-2.5 hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 border border-neutral-800 bg-neutral-950 font-mono text-[8px] text-neutral-500 rounded-xs leading-none pointer-events-none uppercase font-bold tracking-wider select-none">
-                    Ctrl+K
-                  </kbd>
-                  {printSearchQuery && (
-                    <button
-                      type="button"
-                      onClick={() => setPrintSearchQuery('')}
-                      className="absolute right-2.5 top-2.5 text-neutral-500 hover:text-white cursor-pointer"
-                      title="Clear Search"
-                    >
-                      <X size={13} className="stroke-[2.5]" />
-                    </button>
-                  )}
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-2.5 text-neutral-500" size={13} />
+                    <input
+                      id="reports-student-search"
+                      type="text"
+                      value={printSearchQuery}
+                      onChange={(e) => setPrintSearchQuery(e.target.value)}
+                      placeholder="Search by name or ID..."
+                      className="w-full bg-neutral-950 border-2 border-neutral-800 py-2 pl-9 pr-16 text-xs outline-none text-white focus:border-amber-400 font-mono"
+                    />
+                    <div className="absolute right-2 top-1.5 flex items-center gap-1.5">
+                      <VoiceSearchButton
+                        inputId="reports-student-search"
+                        onTranscript={(text) => setPrintSearchQuery(text)}
+                      />
+                      {!printSearchQuery ? (
+                        <kbd className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 border border-neutral-800 bg-neutral-950 font-mono text-[8px] text-neutral-500 rounded-xs leading-none pointer-events-none uppercase font-bold tracking-wider select-none">
+                          Ctrl+K
+                        </kbd>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setPrintSearchQuery('')}
+                          className="text-neutral-500 hover:text-white cursor-pointer p-1 rounded-full hover:bg-neutral-800 flex items-center justify-center"
+                          title="Clear Search"
+                        >
+                          <X size={13} className="stroke-[2.5]" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {/* Keyboard shortcut info indicator reminder */}
+                  <div 
+                    className="hidden md:flex items-center justify-center text-neutral-500 hover:text-amber-400 border border-neutral-800 bg-neutral-950 hover:border-amber-400 transition-all cursor-help h-[34px] w-9 shrink-0 select-none"
+                    title="Keyboard Shortcut Reminder: Press 'Ctrl+K' (or 'Cmd+K' on macOS) from anywhere at any time to focus this invoice search box instantly"
+                  >
+                    <Info size={13} className="stroke-[2.5]" />
+                  </div>
                 </div>
               </div>
 
@@ -1796,34 +2366,134 @@ B7 to B9: GHC [SUM]`}
                       return !payments.some(p => p.studentId === sProfile.id && p.date === dStr);
                     });
                     unpaidDaysCount = unpaidDays.length;
-                    totalDebt = unpaidDaysCount * 5;
+                    if (sProfile.paymentType === 'Term') {
+                      const tFee = sProfile.termFee || 350;
+                      const legacyD = sProfile.legacyDebt || 0;
+                      const totalPaidAllTime = payments
+                        .filter(p => p.studentId === sProfile.id && !p.isAbsent)
+                        .reduce((sum, p) => sum + p.amount, 0);
+                      totalDebt = Math.max(0, tFee + legacyD - totalPaidAllTime);
+                    } else {
+                      totalDebt = (unpaidDaysCount * 5) + (sProfile.legacyDebt || 0);
+                    }
                   }
 
                   const schoolOwesStudent = payments
                     .filter(p => p.studentId === group.studentId && p.verified && p.date > currentDate)
                     .reduce((sum, p) => sum + p.amount, 0);
 
+                  const studentHistoryList = (() => {
+                    if (!activeTerm || !activeTerm.schoolDays || !sProfile) return [];
+                    const holidays = activeTerm.publicHolidays || [];
+                    const pastSchoolDays = activeTerm.schoolDays.filter(d => d <= currentDate);
+
+                    return pastSchoolDays.map((dayStr) => {
+                      const pRecord = payments.find(p => p.studentId === group.studentId && p.date === dayStr);
+                      const isHoliday = holidays.includes(dayStr);
+                      const isAbsent = pRecord?.isAbsent || false;
+                      const isVerified = pRecord?.verified || false;
+                      const isTermPayer = sProfile.paymentType === 'Term';
+
+                      let statusLabel = 'Unpaid Arrears';
+                      let feeLabel = 'GHC 5.00';
+                      let paymentRef = '- -';
+                      let collector = '- -';
+
+                      if (isHoliday) {
+                        statusLabel = 'Holiday';
+                        feeLabel = 'Exempt';
+                      } else if (isAbsent) {
+                        statusLabel = 'Absent';
+                        feeLabel = 'Exempt';
+                        paymentRef = pRecord?.id.substring(0, 8).toUpperCase() || 'EXCUSED';
+                        collector = pRecord?.collectedBy || '- -';
+                      } else if (pRecord) {
+                        statusLabel = isVerified ? 'Present (Paid)' : 'Present (Pending)';
+                        feeLabel = `GHC ${pRecord.amount.toFixed(2)}`;
+                        paymentRef = pRecord.id.substring(0, 8).toUpperCase();
+                        collector = pRecord.collectedBy;
+                      } else if (isTermPayer) {
+                        statusLabel = 'Present (Term Paid)';
+                        feeLabel = 'Covered (Term)';
+                        paymentRef = 'TERM-SCHEME';
+                        collector = 'System';
+                      } else {
+                        const isDayUnpaid = !payments.some(p => p.studentId === sProfile.id && p.date === dayStr);
+                        if (!isDayUnpaid) {
+                          statusLabel = 'Present (Pre-paid)';
+                          feeLabel = 'Covered (Prepaid)';
+                          paymentRef = 'PREPAID';
+                          collector = 'System';
+                        }
+                      }
+
+                      return {
+                        date: dayStr,
+                        statusLabel,
+                        feeLabel,
+                        paymentRef,
+                        collector,
+                        isHoliday,
+                        isAbsent,
+                        pRecord
+                      };
+                    }).sort((a, b) => b.date.localeCompare(a.date));
+                  })();
+
                   return (
                     <div 
                       key={group.studentId} 
                       className="print-invoice-page bg-white text-black p-10 shadow-2xl max-w-[210mm] mx-auto min-h-[297mm] flex flex-col justify-between relative border border-neutral-300 font-sans"
                     >
+                      {/* Interactive Sheet Share Bar */}
+                      <div className="no-print bg-neutral-100 border-b border-neutral-250 p-2.5 mb-4 flex items-center justify-between font-mono text-[9px] -mx-10 -mt-10 rounded-t-xs">
+                        <span className="font-bold uppercase text-neutral-500">
+                          📄 Sheet {sectionIndex + 1} of {paymentsByStudent.length}: Invoice Document
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleShareReportOrInvoice('invoice-page', {
+                              studentId: group.studentId,
+                              studentName: group.studentName,
+                              guardianPhone: sGuardian,
+                              rollNumber: sRoll,
+                              studentClass: group.studentClass,
+                              studentCategory: group.studentCategory,
+                              totalPaymentsAllTime: totalPaymentsAllTime,
+                              totalDebt: totalDebt,
+                              unpaidDaysCount: unpaidDaysCount,
+                              schoolOwesStudent: schoolOwesStudent,
+                              totalPaidRecorded: totalPaid,
+                              customFootnote: customMemo
+                            });
+                          }}
+                          className="bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold px-3 py-1 font-mono uppercase tracking-widest transition-all cursor-pointer flex items-center gap-1.5 rounded-xs"
+                        >
+                          <Share2 size={10} />
+                          Share via WhatsApp
+                        </button>
+                      </div>
+
                       {/* Inner invoice sheet header component */}
                       <div className="space-y-6">
                         {/* Header banner structure */}
                         <div className="border-b-4 border-black pb-4 flex justify-between items-start">
-                          <div className="space-y-1">
-                            <span className="text-[11px] font-black uppercase tracking-wider text-black bg-neutral-200 px-2 py-0.5 font-mono">
-                              SAAKO HOLY CHILD ACADEMY
-                            </span>
-                            <h2 className="text-xl font-black uppercase tracking-tight leading-none mt-1">STATEMENT OF SCHOOLING FEE</h2>
-                            <p className="text-[9px] text-neutral-600 font-black uppercase tracking-widest font-mono">
-                              ONLINE SYNCHRONIZED CLOUD DATABASE SYSTEM
-                            </p>
+                          <div className="flex items-center gap-3 text-left">
+                            <SchoolLogo size={42} className="shrink-0" lightBackground={true} />
+                            <div className="space-y-1">
+                              <span className="text-[11px] font-black uppercase tracking-wider text-black bg-neutral-200 px-2 py-0.5 font-mono">
+                                SAAKO HOLY CHILD ACADEMY
+                              </span>
+                              <h2 className="text-xl font-black uppercase tracking-tight leading-none mt-1">STATEMENT OF SCHOOLING FEE</h2>
+                              <p className="text-[9px] text-neutral-600 font-black uppercase tracking-widest font-mono">
+                                ONLINE SYNCHRONIZED CLOUD DATABASE SYSTEM
+                              </p>
+                            </div>
                           </div>
                           
                           <div className="text-right space-y-1 font-mono">
-                            <span className="text-[11px] font-black uppercase px-2.5 py-1 bg-black text-white inline-block">
+                            <span className="text-[11px] font-black uppercase px-2.5 py-1 bg-black text-white inline-block mt-0.5">
                               RECEIPT PRINT OUT
                             </span>
                             <div className="text-[8px] text-neutral-600 uppercase font-bold mt-1">
@@ -1870,44 +2540,49 @@ B7 to B9: GHC [SUM]`}
                         {/* Daily collections check points list log */}
                         <div className="space-y-2">
                           <span className="text-[9px] font-black uppercase tracking-widest text-black font-mono block">
-                            CHECKED DAILY PAYMENTS METRIC BREAKDOWN ({group.paymentsList.length} DAYS)
+                            📋 CHRONOLOGICAL FEES & ATTENDANCE LEDGER ({studentHistoryList.length} DAYS)
                           </span>
                           
-                          <table className="w-full text-[10px]">
+                          <table className="w-full text-[9.5px] table-auto">
                             <thead>
-                              <tr className="border-b-2 border-black text-left uppercase text-neutral-500 font-black tracking-wider font-mono">
-                                <th className="py-2">DATE CHECKED</th>
-                                <th className="py-2 font-mono">TRANSACTION REF</th>
-                                <th className="py-2">VERIFIED GATE</th>
-                                <th className="py-2">COLLECTED BY</th>
-                                <th className="py-2 text-right">FEES REPORTED</th>
+                              <tr className="border-b-2 border-black text-left uppercase text-neutral-500 font-black tracking-wider font-mono text-[8px]">
+                                <th className="py-2 print-col-date">DATE CHECKED</th>
+                                <th className="py-2 print-col-ref">REF CODE</th>
+                                <th className="py-2 text-center font-sans font-bold print-col-status">ATT STATUS</th>
+                                <th className="py-2 text-right print-col-fee">FEES</th>
+                                <th className="py-2 text-right print-col-auditor">AUDITOR</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-neutral-200">
-                              {group.paymentsList.map((record) => (
-                                <tr key={record.id} className="font-medium text-neutral-800">
-                                  <td className="py-2 font-mono text-black font-bold">{record.date}</td>
-                                  <td className="py-2 font-mono text-[9px] text-neutral-600 uppercase">
-                                    <div>{record.id}</div>
-                                    {record.notes && (
-                                      <div className="text-[8px] text-neutral-500 font-sans italic lowercase mt-0.5 max-w-[200px] leading-tight">
-                                        (* {record.notes})
-                                      </div>
-                                    )}
-                                  </td>
-                                  <td className="py-2">
-                                    <span className={`inline-block text-[8px] font-black px-1.5 py-0.5 uppercase ${
-                                      record.verified 
-                                        ? 'bg-neutral-100 text-black' 
-                                        : 'bg-neutral-200 text-neutral-600 font-bold'
-                                    }`}>
-                                      {record.verified ? '✔️ APPROVED' : '⚠️ PENDING'}
-                                    </span>
-                                  </td>
-                                  <td className="py-2 truncate max-w-[120px]">{record.collectedBy}</td>
-                                  <td className="py-2 text-right font-mono font-bold text-black">GHC {record.amount.toFixed(2)}</td>
-                                </tr>
-                              ))}
+                              {studentHistoryList.map((record) => {
+                                const isHoliday = record.isHoliday;
+                                const isAbsent = record.isAbsent;
+                                const attStatusLabel = isHoliday ? 'HOLIDAY' : isAbsent ? 'ABSENT' : 'PRESENT';
+                                
+                                const statusBadgeColor = isHoliday 
+                                  ? 'bg-neutral-100 text-neutral-600 border-neutral-300' 
+                                  : isAbsent 
+                                    ? 'bg-red-50 text-red-700 font-extrabold border-red-200' 
+                                    : 'bg-emerald-50 text-emerald-800 font-extrabold border-emerald-250';
+
+                                return (
+                                  <tr key={record.date} className="font-medium text-neutral-800">
+                                    <td className="py-2 font-mono text-black font-bold whitespace-nowrap print-col-date">{record.date}</td>
+                                    <td className="py-2 font-mono text-[8.5px] text-neutral-600 uppercase max-w-[80px] truncate print-col-ref" title={record.paymentRef}>
+                                      {record.paymentRef}
+                                    </td>
+                                    <td className="py-2 text-center print-col-status">
+                                      <span className={`inline-block text-[7.5px] font-black px-1.5 py-0.5 uppercase rounded-xs border ${statusBadgeColor}`}>
+                                        {attStatusLabel}
+                                      </span>
+                                    </td>
+                                    <td className="py-2 text-right font-mono font-bold text-black whitespace-nowrap print-col-fee">{record.feeLabel}</td>
+                                    <td className="py-2 text-right font-mono text-neutral-600 text-[9px] truncate max-w-[100px] print-col-auditor" title={record.collector}>
+                                      {record.collector}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
                             </tbody>
                           </table>
                         </div>
@@ -2275,6 +2950,17 @@ B7 to B9: GHC [SUM]`}
           {/* CUSTOM STYLE INJECTIONS FOR FLUID AND RELIABLE A4 PORTRAIT PRINTING */}
           <style dangerouslySetInnerHTML={{ __html: `
             @media print {
+              @page {
+                size: portrait;
+                margin: 15mm;
+                @bottom-right {
+                  content: "Page " counter(page) " of " counter(pages);
+                  font-family: 'JetBrains Mono', monospace !important;
+                  font-size: 8px !important;
+                  font-weight: bold !important;
+                  color: #333333 !important;
+                }
+              }
               body * {
                 visibility: hidden !important;
               }
@@ -2398,6 +3084,23 @@ B7 to B9: GHC [SUM]`}
                 className="w-full py-3 text-xs font-black uppercase text-white bg-blue-600 hover:bg-blue-500 disabled:bg-neutral-800 disabled:text-neutral-550 transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm font-mono"
               >
                 <FileText size={14} /> ADAPT IN INTERACTIVE PREVIEW
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  handleShareReportOrInvoice('ledger-report', {
+                    totalRowsMatched: filteredPayments.length,
+                    ledgerValuation: totalsInfo.totalCollected,
+                    unverifiedRows: totalsInfo.unverifiedCount,
+                    authorizedSignatory: printFriendlySignatory,
+                    auditedMemo: printFriendlyMemo
+                  });
+                }}
+                disabled={filteredPayments.length === 0}
+                className="w-full py-3 text-xs font-black uppercase text-white bg-emerald-600 hover:bg-emerald-500 disabled:bg-neutral-800 disabled:text-neutral-550 transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm font-mono"
+              >
+                <Share2 size={14} /> SHARE LEDGER REPORT
               </button>
 
               <button
@@ -2578,15 +3281,37 @@ B7 to B9: GHC [SUM]`}
                 </div>
 
                 {/* SAAKO HOLY CHILD ACADEMY SEAL */}
-                <div className="shrink-0 flex flex-col items-center justify-center">
-                  <div className="h-20 w-20 rounded-full border-2 border-dashed border-indigo-500/80 p-1 flex flex-col items-center justify-center text-center select-none font-mono bg-indigo-50/50 shadow-inner">
-                    <div className="rounded-full border border-amber-500/60 bg-white h-full w-full flex flex-col items-center justify-center p-1 font-mono uppercase text-center leading-[1.1] shadow-sm">
-                      <span className="text-[7px] text-indigo-900 font-extrabold block">SAAKO TRUST</span>
-                      <span className="text-[6px] text-amber-600 font-black block mt-0.5 tracking-wider">VALID SEAL</span>
-                      <span className="text-[5px] text-indigo-700 block font-bold">SAWLA-SAVANNAH</span>
-                    </div>
-                  </div>
-                  <span className="text-[7px] font-mono text-indigo-500 uppercase tracking-widest mt-1 block font-bold">OFFICIAL IMPRESS</span>
+                <div className="shrink-0 flex flex-col items-center justify-center bg-white text-black p-1 rounded-full">
+                  <svg width="68" height="68" viewBox="0 0 100 100" className="opacity-100 select-none bg-white">
+                    {/* Nice green outer boundary ring */}
+                    <circle cx="50" cy="50" r="48" fill="#14532d" stroke="#166534" strokeWidth="4" />
+                    <circle cx="50" cy="50" r="42" fill="#22c55e" stroke="#14532d" strokeWidth="1.5" />
+                    {/* Green inside filled details */}
+                    <circle cx="50" cy="50" r="39" fill="#dcfce7" />
+                    <circle cx="50" cy="50" r="36" fill="none" stroke="#16a34a" strokeWidth="1" strokeDasharray="2 1.5" />
+                    <defs>
+                      <path id="reportSealInnerArcTop" d="M 22 50 A 28 28 0 0 1 78 50" fill="none" />
+                      <path id="reportSealInnerArcBottom" d="M 78 50 A 28 28 0 0 1 22 50" fill="none" />
+                    </defs>
+                    <text className="font-sans font-black text-[5.8px] fill-[#14532d] tracking-[0.02em]">
+                      <textPath href="#reportSealInnerArcTop" startOffset="50%" textAnchor="middle">
+                        SAAKO TRUST
+                      </textPath>
+                    </text>
+                    <text className="font-sans font-black text-[5px] fill-emerald-955 tracking-[0.05em]">
+                      <textPath href="#reportSealInnerArcBottom" startOffset="50%" textAnchor="middle">
+                        * EXCELLENCE *
+                      </textPath>
+                    </text>
+                    {/* Beautiful Coiled Python */}
+                    <g transform="translate(42, 42) scale(0.16)" stroke="#14532d" strokeWidth="3.5" fill="none" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55 C 88 75, 70 85, 50 85 C 30 85, 20 70, 25 55 C 30 40, 45 40, 50 45 C 55 50, 52 65, 45 65 C 38 65, 38 52, 44 48" strokeWidth="6" />
+                      <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55" stroke="#f0fdf4" strokeWidth="1.5" />
+                      <circle cx="44" cy="48" r="4.5" fill="#14532d" stroke="none" />
+                      <circle cx="43" cy="47" r="1" fill="#f0fdf4" stroke="none" />
+                    </g>
+                  </svg>
+                  <span className="text-[7px] font-mono text-emerald-800 uppercase tracking-widest mt-1 block font-bold">OFFICIAL IMPRESS</span>
                 </div>
               </div>
 
@@ -2772,6 +3497,22 @@ B7 to B9: GHC [SUM]`}
 
               <button
                 type="button"
+                onClick={() => {
+                  handleShareReportOrInvoice('ledger-report', {
+                    totalRowsMatched: filteredPayments.length,
+                    ledgerValuation: totalsInfo.totalCollected,
+                    unverifiedRows: totalsInfo.unverifiedCount,
+                    authorizedSignatory: printFriendlySignatory,
+                    auditedMemo: printFriendlyMemo
+                  });
+                }}
+                className="w-full py-3.5 text-xs font-black uppercase text-white bg-emerald-600 hover:bg-emerald-500 transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md font-mono"
+              >
+                <Share2 size={14} /> SHARE LEDGER REPORT
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setShowAppPrintPreviewModal(false)}
                 className="w-full py-3 text-xs font-black uppercase text-neutral-450 hover:text-white bg-neutral-900 border border-neutral-800 hover:bg-neutral-850 transition-all cursor-pointer font-mono"
               >
@@ -2950,15 +3691,37 @@ B7 to B9: GHC [SUM]`}
                     </div>
                   </div>
 
-                  <div className="shrink-0 flex flex-col items-center justify-center">
-                    <div className="h-20 w-20 rounded-full border-2 border-dashed border-indigo-500/80 p-1 flex flex-col items-center justify-center text-center select-none font-mono bg-indigo-50/50 shadow-inner">
-                      <div className="rounded-full border border-amber-500/60 bg-white h-full w-full flex flex-col items-center justify-center p-1 font-mono uppercase text-center leading-[1.1] shadow-sm">
-                        <span className="text-[7px] text-indigo-900 font-extrabold block">SAAKO TRUST</span>
-                        <span className="text-[6px] text-amber-600 font-black block mt-0.5 tracking-wider">VALID SEAL</span>
-                        <span className="text-[5px] text-indigo-700 block font-bold">SAWLA-SAVANNAH</span>
-                      </div>
-                    </div>
-                    <span className="text-[7px] font-mono text-indigo-500 uppercase tracking-widest mt-1 block font-bold">OFFICIAL IMPRESS</span>
+                  <div className="shrink-0 flex flex-col items-center justify-center bg-white text-black p-1 rounded-full">
+                    <svg width="68" height="68" viewBox="0 0 100 100" className="opacity-100 select-none bg-white">
+                      {/* Nice green outer boundary ring */}
+                      <circle cx="50" cy="50" r="48" fill="#14532d" stroke="#166534" strokeWidth="4" />
+                      <circle cx="50" cy="50" r="42" fill="#22c55e" stroke="#14532d" strokeWidth="1.5" />
+                      {/* Green inside filled details */}
+                      <circle cx="50" cy="50" r="39" fill="#dcfce7" />
+                      <circle cx="50" cy="50" r="36" fill="none" stroke="#16a34a" strokeWidth="1" strokeDasharray="2 1.5" />
+                      <defs>
+                        <path id="financialSealInnerArcTop" d="M 22 50 A 28 28 0 0 1 78 50" fill="none" />
+                        <path id="financialSealInnerArcBottom" d="M 78 50 A 28 28 0 0 1 22 50" fill="none" />
+                      </defs>
+                      <text className="font-sans font-black text-[5.8px] fill-[#14532d] tracking-[0.02em]">
+                        <textPath href="#financialSealInnerArcTop" startOffset="50%" textAnchor="middle">
+                          SAAKO TRUST
+                        </textPath>
+                      </text>
+                      <text className="font-sans font-black text-[5px] fill-emerald-955 tracking-[0.05em]">
+                        <textPath href="#financialSealInnerArcBottom" startOffset="50%" textAnchor="middle">
+                          * EXCELLENCE *
+                        </textPath>
+                      </text>
+                      {/* Beautiful Coiled Python */}
+                      <g transform="translate(42, 42) scale(0.16)" stroke="#14532d" strokeWidth="3.5" fill="none" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55 C 88 75, 70 85, 50 85 C 30 85, 20 70, 25 55 C 30 40, 45 40, 50 45 C 55 50, 52 65, 45 65 C 38 65, 38 52, 44 48" strokeWidth="6" />
+                        <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55" stroke="#f0fdf4" strokeWidth="1.5" />
+                        <circle cx="44" cy="48" r="4.5" fill="#14532d" stroke="none" />
+                        <circle cx="43" cy="47" r="1" fill="#f0fdf4" stroke="none" />
+                      </g>
+                    </svg>
+                    <span className="text-[7px] font-mono text-emerald-800 uppercase tracking-widest mt-1 block font-bold">OFFICIAL IMPRESS</span>
                   </div>
                 </div>
 
@@ -2968,6 +3731,479 @@ B7 to B9: GHC [SUM]`}
 
           </div>
 
+        </div>
+      )}
+
+      {/* TERM SUMMARY PDF REPORT DISPLAY MODAL */}
+      {showTermSummaryModal && (
+        <div className="fixed inset-0 z-50 overflow-hidden bg-neutral-950 flex flex-col md:flex-row">
+          <style dangerouslySetInnerHTML={{ __html: `
+            @media print {
+              @page {
+                size: portrait;
+                margin: 15mm;
+              }
+              body * {
+                visibility: hidden !important;
+                background: none !important;
+                color: #000 !important;
+                box-shadow: none !important;
+              }
+              #print-term-summaries-area, #print-term-summaries-area * {
+                visibility: visible !important;
+              }
+              #print-term-summaries-area {
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 100% !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                background: white !important;
+              }
+              .print-term-page {
+                page-break-after: always !important;
+                break-after: page !important;
+                margin: 0 !important;
+                padding: 15mm !important;
+                border: none !important;
+                box-shadow: none !important;
+                height: auto !important;
+                min-height: 297mm !important;
+                box-sizing: border-box !important;
+                background: white !important;
+                color: black !important;
+              }
+              .no-print {
+                display: none !important;
+              }
+            }
+          `}} />
+
+          {/* LEFT COLUMN: Controls Dashboard Panel */}
+          <div className="w-full md:w-96 bg-neutral-900 border-r-4 border-neutral-800 flex flex-col h-full overflow-y-auto no-print p-6 space-y-6 shrink-0">
+            <div className="border-b border-neutral-800 pb-4">
+              <span className="text-[10px] text-emerald-450 font-mono tracking-widest font-black uppercase block">ACCOUNTS DEPARTMENT</span>
+              <h3 className="text-sm font-black text-white uppercase tracking-widest flex items-center gap-2 mt-1">
+                <FileText size={18} className="text-emerald-450" /> TERM SUMMARY PDF
+              </h3>
+            </div>
+
+            {/* Config & Filters */}
+            <div className="space-y-4 flex-1">
+              {/* Search filter */}
+              <div className="space-y-1.5">
+                <span className="text-[10px] font-mono uppercase font-black text-neutral-400 tracking-wider">Search Student</span>
+                <div className="relative">
+                  <Search className="absolute left-3 top-2.5 text-neutral-500" size={13} />
+                  <input
+                    type="text"
+                    value={termSummarySearchQuery}
+                    onChange={(e) => setTermSummarySearchQuery(e.target.value)}
+                    placeholder="Search name or ID..."
+                    className="w-full bg-neutral-950 border-2 border-neutral-800 py-2 pl-9 pr-8 text-xs outline-none text-white focus:border-emerald-400 font-mono"
+                  />
+                  {termSummarySearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setTermSummarySearchQuery('')}
+                      className="absolute right-3 top-2.5 text-neutral-500 hover:text-white"
+                    >
+                      <X size={13} />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Class Filter */}
+              <div className="space-y-1.5">
+                <span className="text-[10px] font-mono uppercase font-black text-neutral-400 tracking-wider font-mono">Class Grade</span>
+                <select
+                  value={termSummaryClassFilter}
+                  onChange={(e) => setTermSummaryClassFilter(e.target.value)}
+                  className="w-full bg-neutral-950 border-2 border-neutral-800 px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-400 cursor-pointer font-mono"
+                >
+                  <option value="ALL">ALL CLASSES / GRADES</option>
+                  {classes.map(cls => (
+                    <option key={cls} value={cls}>{cls}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Outstanding checkboxes */}
+              <div className="bg-neutral-950 p-4 border border-neutral-850 space-y-3">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <span className="text-[10px] font-bold text-neutral-400 block uppercase">Only Unpaid Arrears</span>
+                    <p className="text-[9px] text-neutral-500 leading-normal">Limit to pupils with outstanding debt.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setTermSummaryOnlyPending(!termSummaryOnlyPending)}
+                    className={`px-3 py-1.5 text-[9px] font-mono font-black uppercase border-2 transition-all ${
+                      termSummaryOnlyPending 
+                        ? 'bg-red-500/10 border-red-500 text-red-500' 
+                        : 'bg-neutral-900 border-neutral-800 text-neutral-500'
+                    }`}
+                  >
+                    {termSummaryOnlyPending ? '🔴 ON' : '⚪ OFF'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Signatory */}
+              <div className="space-y-1">
+                <label className="text-[10px] font-mono uppercase font-black text-neutral-400">Authorized Signature Block</label>
+                <input
+                  type="text"
+                  value={termSummarySignatory}
+                  onChange={(e) => setTermSummarySignatory(e.target.value)}
+                  className="w-full bg-neutral-950 border-2 border-neutral-800 px-3.5 py-2 text-xs font-mono text-white focus:outline-none focus:border-emerald-400"
+                />
+              </div>
+
+              {/* Footnote */}
+              <div className="space-y-1">
+                <label className="text-[10px] font-mono uppercase font-black text-neutral-400">Disclaimer Statement Footnote</label>
+                <textarea
+                  rows={4}
+                  value={termSummaryMemo}
+                  onChange={(e) => setTermSummaryMemo(e.target.value)}
+                  className="w-full bg-neutral-950 border-2 border-neutral-800 px-3.5 py-2 text-xs font-mono text-white focus:outline-none focus:border-emerald-400 text-[11px] leading-relaxed resize-none"
+                />
+              </div>
+
+              {/* Statistics summary card */}
+              <div className="bg-neutral-950 border border-neutral-800 p-4 space-y-2">
+                <span className="text-[9px] font-mono uppercase text-neutral-500 font-extrabold block">Term Summary Run Details</span>
+                <div className="grid grid-cols-2 gap-2 text-[10px] font-mono font-bold text-neutral-300">
+                  <div className="bg-neutral-900 p-2 border border-neutral-850">
+                    <span className="text-neutral-500 text-[8px] block">PUPILS GENERATING</span>
+                    <span className="text-white text-xs font-black">{termSummaryTotals.kids} PUPILS</span>
+                  </div>
+                  <div className="bg-neutral-900 p-2 border border-neutral-850">
+                    <span className="text-neutral-500 text-[8px] block">TOTAL BILLED</span>
+                    <span className="text-amber-400 text-xs font-black">GHC {termSummaryTotals.totalBilled.toFixed(2)}</span>
+                  </div>
+                  <div className="bg-neutral-900 p-2 border border-neutral-850">
+                    <span className="text-neutral-500 text-[8px] block font-mono">FUNDS RECOVERED</span>
+                    <span className="text-emerald-400 text-xs font-black">GHC {termSummaryTotals.totalCleared.toFixed(2)}</span>
+                  </div>
+                  <div className="bg-neutral-900 p-2 border border-neutral-850">
+                    <span className="text-neutral-500 text-[8px] block">TOTAL ARREARS</span>
+                    <span className="text-red-400 text-xs font-black">GHC {termSummaryTotals.totalArrears.toFixed(2)}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Bottom Actions */}
+            <div className="pt-4 space-y-2 shrink-0 border-t border-neutral-800">
+              <button
+                type="button"
+                onClick={() => {
+                  if (typeof window !== 'undefined') {
+                    window.focus();
+                    window.print();
+                  }
+                }}
+                disabled={termSummaryReportsByStudent.length === 0}
+                className="w-full py-4 text-xs font-black uppercase text-black bg-emerald-400 hover:bg-emerald-300 disabled:bg-neutral-800 disabled:text-neutral-500 transition-colors flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Printer size={16} /> LAUNCH PRINTER PANEL
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowTermSummaryModal(false)}
+                className="w-full py-3.5 text-xs font-black uppercase text-neutral-400 hover:text-white bg-neutral-950 hover:bg-neutral-850 border border-neutral-800 transition-colors cursor-pointer"
+              >
+                CLOSE PORTAL
+              </button>
+            </div>
+          </div>
+
+          {/* RIGHT COLUMN: Continuous high-fidelity print documents catalog container */}
+          <div className="flex-1 overflow-y-auto bg-neutral-950 p-4 md:p-8 space-y-8 no-print-scroll scrollbar-thin">
+            <div className="max-w-[210mm] mx-auto flex items-center justify-between no-print border-b border-neutral-850 pb-3">
+              <span className="text-[10px] font-mono font-black uppercase text-neutral-450 flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                TERM TRANSCRIPT LEDGERS ({termSummaryReportsByStudent.length} STUDENTS DETECTED)
+              </span>
+              <span className="text-[10px] font-mono text-neutral-500">A4 PORTRAIT PRINTER SHEETS</span>
+            </div>
+
+            {/* Container mapping our printable documents */}
+            <div id="print-term-summaries-area" className="space-y-8">
+              {termSummaryReportsByStudent.length === 0 ? (
+                <div className="bg-neutral-900 border-2 border-dashed border-neutral-800 p-12 text-center max-w-[210mm] mx-auto text-neutral-400 no-print">
+                  <FileText className="mx-auto text-neutral-600 mb-3" size={32} />
+                  <p className="text-[11px] font-mono font-black uppercase text-emerald-400">No pupil records match parameters.</p>
+                  <p className="text-[10px] text-neutral-500 mt-1">Adjust search input or toggle Arrears checking filters on the left.</p>
+                </div>
+              ) : (
+                termSummaryReportsByStudent.map((item, index) => {
+                  const student = item.student;
+                  const refCode = `SHC-TERM-${(activeTerm?.id || 'TERM').substring(0,6).toUpperCase()}-${student.id.substring(0,6).toUpperCase()}`;
+                  
+                  return (
+                    <div 
+                      key={student.id} 
+                      className="print-term-page bg-white text-black p-10 shadow-2xl max-w-[210mm] mx-auto min-h-[297mm] flex flex-col justify-between relative border border-neutral-300 font-sans text-left"
+                    >
+                      {/* Top notification bar */}
+                      <div className="no-print bg-neutral-100 border-b border-neutral-250 p-2.5 mb-6 flex items-center justify-between font-mono text-[9px] -mx-10 -mt-10 rounded-t-xs">
+                        <span className="font-bold uppercase text-neutral-500">
+                          📄 Page {index + 1} of {termSummaryReportsByStudent.length}: Term Statement for {student.name}
+                        </span>
+                        <span className="font-bold text-emerald-600">
+                          READY TO PRINT
+                        </span>
+                      </div>
+
+                      <div className="space-y-6">
+                        {/* Header Banner */}
+                        <div className="border-b-4 border-black pb-4 flex justify-between items-start">
+                          <div className="flex items-center gap-3 text-left">
+                            <SchoolLogo size={42} className="shrink-0" lightBackground={true} />
+                            <div className="space-y-1">
+                              <span className="text-[11px] font-black uppercase tracking-wider text-black bg-neutral-200 px-2 py-0.5 font-mono">
+                                SAAKO HOLY CHILD ACADEMY
+                              </span>
+                              <h1 className="text-xl font-black text-black uppercase tracking-tight">
+                                Term Summary Ledger Statement
+                              </h1>
+                              <p className="text-[8px] font-mono uppercase text-neutral-500 tracking-wider">
+                                Excellence, faith & Discipline • Ghana Education Service Registered
+                              </p>
+                            </div>
+                          </div>
+                          
+                          <div className="text-right">
+                            <div className="text-[8px] font-black uppercase bg-black text-amber-400 px-2.5 py-1 font-mono tracking-widest inline-block mb-1">
+                              CONSOLIDATED TRANSCRIPT
+                            </div>
+                            <div className="text-[9px] font-mono text-neutral-500">
+                              Statement Date: {currentDate}
+                            </div>
+                            <div className="text-[9px] font-mono text-neutral-500 font-bold uppercase">
+                              Term Period: {activeTerm?.name || 'Academic Semester'}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Student profile grids */}
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-y-4 gap-x-2 border border-neutral-300 bg-neutral-50/50 p-4 font-mono text-[10px] leading-relaxed uppercase">
+                          <div>
+                            <span className="text-[8px] text-neutral-500 font-black block">PUPIL BENEFICIARY:</span>
+                            <span className="font-extrabold text-black text-xs">{student.name}</span>
+                          </div>
+                          <div>
+                            <span className="text-[8px] text-neutral-500 font-black block">GRADE / CLASS:</span>
+                            <span className="font-extrabold text-black">{student.class} ({student.category})</span>
+                          </div>
+                          <div>
+                            <span className="text-[8px] text-neutral-500 font-black block">LEDGER REFERENCE:</span>
+                            <span className="font-extrabold text-black font-mono">{refCode}</span>
+                          </div>
+                          <div>
+                            <span className="text-[8px] text-neutral-500 font-black block">ROLL REGISTER ID:</span>
+                            <span className="font-extrabold text-black font-mono">{student.rollNumber || `FT-${student.class.toUpperCase()}-${student.id.substring(0,5).toUpperCase()}`}</span>
+                          </div>
+                          <div>
+                            <span className="text-[8px] text-neutral-500 font-black block">BILLING PLAN MODEL:</span>
+                            <span className="font-extrabold text-black">
+                              {item.isTermPayer ? 'Term Subscription Scheme' : 'Daily Gate Ingress Scheme'}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-[8px] text-neutral-500 font-black block">GUARDIAN CONTACT:</span>
+                            <span className="font-extrabold text-black font-mono">{student.guardianPhone || 'No registered contact'}</span>
+                          </div>
+                        </div>
+
+                        {/* SCORECARDS GRIDS */}
+                        <div className="space-y-2">
+                          <h3 className="text-xs font-black uppercase tracking-widest border-b-2 border-neutral-800 pb-1 font-mono text-neutral-800 flex items-center justify-between">
+                            <span>1. Registration & Attendance Tracker</span>
+                            <span className="text-[9px] font-normal text-neutral-500 font-mono tracking-normal capitalize">Up to School date {currentDate}</span>
+                          </h3>
+                          <div className="grid grid-cols-4 gap-3 text-center">
+                            <div className="bg-neutral-50 border border-neutral-300 p-2.5">
+                              <span className="text-[8px] text-neutral-500 font-black block font-mono">DAYS PRESENT</span>
+                              <span className="text-lg font-black text-emerald-700 font-mono">{item.presentCount} school days</span>
+                            </div>
+                            <div className="bg-neutral-50 border border-neutral-300 p-2.5">
+                              <span className="text-[8px] text-neutral-500 font-black block font-mono">DAYS ABSENT (EXCUSED)</span>
+                              <span className="text-lg font-black text-neutral-600 font-mono">{item.absentCount} school days</span>
+                            </div>
+                            <div className="bg-neutral-50 border border-neutral-300 p-2.5">
+                              <span className="text-[8px] text-neutral-500 font-black block font-mono">UNPAID OVERDUE DAYS</span>
+                              <span className="text-lg font-black text-red-600 font-mono">{item.unpaidCount} school days</span>
+                            </div>
+                            <div className="bg-neutral-50 border border-neutral-300 p-2.5">
+                              <span className="text-[8px] text-neutral-500 font-black block font-mono font-bold">ATTENDANCE RATE</span>
+                              <span className="text-lg font-black text-blue-700 font-mono">{item.attendanceRate.toFixed(1)}%</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* FINANCIAL SECTION */}
+                        <div className="space-y-2">
+                          <h3 className="text-xs font-black uppercase tracking-widest border-b-2 border-neutral-800 pb-1 font-mono text-neutral-800">
+                            2. Term Financial Statement Summary
+                          </h3>
+                          <div className="grid grid-cols-3 gap-3 text-center">
+                            <div className="bg-neutral-50 border border-neutral-300 p-3">
+                              <span className="text-[8px] text-neutral-500 font-black block font-mono">CUMULATIVE FEES CHARGED</span>
+                              <span className="text-xl font-black text-black font-mono">GHC {item.totalCharged.toFixed(2)}</span>
+                              <span className="text-[8.5px] text-neutral-500 block font-mono mt-1">
+                                {item.isTermPayer ? 'Flat term subscription rate' : `Calculated check-ins (@ GHC 5.00)`}
+                              </span>
+                            </div>
+                            <div className="bg-emerald-50/40 border border-emerald-300 p-3">
+                              <span className="text-[8px] text-emerald-800 font-black block font-mono">TOTAL FUNDS RECOVERED</span>
+                              <span className="text-xl font-black text-emerald-700 font-mono">GHC {item.totalPaid.toFixed(2)}</span>
+                              <span className="text-[8.5px] text-emerald-600 block font-mono mt-1">
+                                Verified fees cleared to date
+                              </span>
+                            </div>
+                            <div className="bg-red-50/40 border border-red-300 p-3">
+                              <span className="text-[8px] text-red-800 font-black block font-mono">OUTSTANDING ARREARS</span>
+                              <span className={`text-xl font-black font-mono ${item.totalDue > 0 ? 'text-red-605 font-bold' : 'text-emerald-700 font-black'}`}>
+                                GHC {item.totalDue.toFixed(2)}
+                              </span>
+                              <span className="text-[8.5px] text-red-500 block font-mono mt-1">
+                                {item.totalDue > 0 ? 'Due for immediate settlement' : 'Account current & fully cleared'}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* RECENT HISTORICAL ENTRIES */}
+                        <div className="space-y-2">
+                          <h3 className="text-xs font-black uppercase tracking-widest border-b-2 border-neutral-800 pb-1 font-mono text-neutral-800 flex items-center justify-between">
+                            <span>3. Audit Record Verification Logs</span>
+                            <span className="text-[8.5px] font-mono text-neutral-500 leading-normal font-normal">Showing up to latest 6 check-in payments</span>
+                          </h3>
+                          <div className="overflow-hidden border border-neutral-300 font-mono">
+                            <table className="w-full text-left text-[9.5px] border-collapse">
+                              <thead className="bg-neutral-100 text-black border-b border-neutral-300">
+                                <tr>
+                                  <th className="p-2 border-r border-neutral-300 font-bold">Ledger Date</th>
+                                  <th className="p-2 border-r border-neutral-300 font-bold">Secure ID Receipt Range</th>
+                                  <th className="p-2 border-r border-neutral-300 font-bold">Status Detail</th>
+                                  <th className="p-2 border-r border-neutral-300 text-right font-bold w-32">Daily Fee Collected</th>
+                                  <th className="p-2 text-right font-bold w-36">Audited By</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {item.paymentsList.length === 0 ? (
+                                  <tr>
+                                    <td colSpan={5} className="p-4 text-center text-neutral-400 font-bold">
+                                      No direct verified daily school payments are logged inside current active term parameters.
+                                    </td>
+                                  </tr>
+                                ) : (
+                                  item.paymentsList.slice(0, 6).map((log, lIdx) => (
+                                    <tr key={log.id} className={lIdx % 2 === 0 ? 'bg-white' : 'bg-neutral-50/50'}>
+                                      <td className="p-2 border-r border-neutral-250 font-bold">{log.date}</td>
+                                      <td className="p-2 border-r border-neutral-250 select-all font-bold uppercase text-[9px] text-neutral-600">
+                                        SHC-{log.id.substring(0, 10).toUpperCase()}
+                                      </td>
+                                      <td className="p-2 border-r border-neutral-250">
+                                        {log.isAbsent ? (
+                                          <span className="font-extrabold text-neutral-500 uppercase">Excused Absence</span>
+                                        ) : (
+                                          <span className="font-extrabold text-emerald-600 uppercase">Present & Verified</span>
+                                        )}
+                                      </td>
+                                      <td className="p-2 border-r border-neutral-250 text-right font-bold">
+                                        GHC {log.amount.toFixed(2)}
+                                      </td>
+                                      <td className="p-2 text-right text-neutral-500 text-[9px] truncate max-w-[120px]" title={log.collectedBy}>
+                                        {log.collectedBy}
+                                      </td>
+                                    </tr>
+                                  ))
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Bottom signatures and footnotes section */}
+                      <div className="space-y-8 pt-6 border-t-2 border-neutral-800 mt-6 shrink-0">
+                        {/* Custom Memo text */}
+                        <div className="text-[10px] text-neutral-500 leading-relaxed font-bold italic text-center max-w-2xl mx-auto">
+                          "{termSummaryMemo}"
+                        </div>
+
+                        {/* Signatures Row */}
+                        <div className="flex justify-between items-end gap-6 pt-4">
+                          <div className="space-y-4 text-[10px] font-mono leading-relaxed">
+                            <span className="text-neutral-500 font-black uppercase text-[8px] block">PARENT / GUARDIAN ATTESTATION:</span>
+                            <div className="h-10 border-b border-black w-44"></div>
+                            <div>
+                              <span className="text-black font-extrabold uppercase block font-sans">Authorized Signatory</span>
+                              <span className="text-neutral-500 block text-[9px]">Receipt Signature Acknowledgement</span>
+                            </div>
+                          </div>
+
+                          {/* Beautiful official seal of school */}
+                          <div className="shrink-0 flex flex-col items-center justify-center bg-white text-black p-1 rounded-full col-span-1">
+                            <svg width="68" height="68" viewBox="0 0 100 100" className="opacity-100 select-none bg-white">
+                              <circle cx="50" cy="50" r="48" fill="#14532d" stroke="#166534" strokeWidth="4" />
+                              <circle cx="50" cy="50" r="42" fill="#22c55e" stroke="#14532d" strokeWidth="1.5" />
+                              <circle cx="50" cy="50" r="39" fill="#dcfce7" />
+                              <circle cx="50" cy="50" r="36" fill="none" stroke="#16a34a" strokeWidth="1" strokeDasharray="2 1.5" />
+                              <defs>
+                                <path id="tsealInnerArcTop" d="M 22 50 A 28 28 0 0 1 78 50" fill="none" />
+                                <path id="tsealInnerArcBottom" d="M 78 50 A 28 28 0 0 1 22 50" fill="none" />
+                              </defs>
+                              <text className="font-sans font-black text-[5.8px] fill-[#14532d] tracking-[0.02em]">
+                                <textPath href="#tsealInnerArcTop" startOffset="50%" textAnchor="middle">
+                                  SAAKO TRUST
+                                </textPath>
+                              </text>
+                              <text className="font-sans font-black text-[5px] fill-emerald-955 tracking-[0.05em]">
+                                <textPath href="#tsealInnerArcBottom" startOffset="50%" textAnchor="middle">
+                                  * EXCELLENCE *
+                                </textPath>
+                              </text>
+                              <g transform="translate(42, 42) scale(0.16)" stroke="#14532d" strokeWidth="3.5" fill="none" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55 C 88 75, 70 85, 50 85 C 30 85, 20 70, 25 55 C 30 40, 45 40, 50 45 C 55 50, 52 65, 45 65 C 38 65, 38 52, 44 48" strokeWidth="6" />
+                                <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55" stroke="#f0fdf4" strokeWidth="1.5" />
+                                <circle cx="44" cy="48" r="4.5" fill="#14532d" stroke="none" />
+                                <circle cx="43" cy="47" r="1" fill="#f0fdf4" stroke="none" />
+                              </g>
+                            </svg>
+                            <span className="text-[7px] font-mono text-emerald-800 uppercase tracking-widest mt-1 block font-black">OFFICIAL IMPRESS</span>
+                          </div>
+
+                          <div className="space-y-4 text-[10px] font-mono leading-relaxed text-right">
+                            <span className="text-neutral-500 font-black uppercase text-[8px] block">APPROVED & STAMPED BY:</span>
+                            <div className="h-10 border-b border-black w-44 ml-auto"></div>
+                            <div>
+                              <span className="text-black font-extrabold uppercase block font-sans">{termSummarySignatory}</span>
+                              <span className="text-neutral-500 block text-[9px] font-sans">Institutional Auditor & registrar</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Print run unique document tracker code */}
+                        <div className="flex justify-between items-center text-[8px] font-mono font-black text-neutral-400 pt-3 border-t border-neutral-200">
+                          <span>SYSTEM RUN DOCUMENT: {student.id.toUpperCase()}-{(activeTerm?.id || 'TERM').toUpperCase()}</span>
+                          <span>PRINT SUITE VERSION: SAAKO-SUMMARY-V2</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>

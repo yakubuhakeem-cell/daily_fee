@@ -25,9 +25,14 @@ import {
   CreditCard,
   UserCheck,
   Building,
-  Check
+  Check,
+  Copy,
+  Info,
+  MessageSquare,
+  Send
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { VoiceSearchButton } from './VoiceSearchButton';
 
 export const TermPayersTab: React.FC = () => {
   const { 
@@ -36,7 +41,9 @@ export const TermPayersTab: React.FC = () => {
     recordPayment, 
     currentUser, 
     currentDate,
-    theme
+    theme,
+    activeTerm,
+    sendautomatedWhatsApp
   } = useApp();
 
   // Search, Class and Payment Status Filters
@@ -44,6 +51,32 @@ export const TermPayersTab: React.FC = () => {
   const [classFilter, setClassFilter] = useState<string>('ALL');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'OUTSTANDING' | 'PAID'>('ALL');
   
+  // Custom navigation state for directory versus the targeted follow-up view
+  const [viewMode, setViewMode] = useState<'DIRECTORY' | 'PENDING_REGISTRATIONS'>('DIRECTORY');
+
+  // SMS target states for interactive targeted counselor alerts
+  const [smsTarget, setSmsTarget] = useState<{ student: Student; consecutiveDays: number; unpaidDates: string[] } | null>(null);
+  const [isSendingSms, setIsSendingSms] = useState(false);
+  const [smsSuccess, setSmsSuccess] = useState(false);
+
+  // Simple local toast system for smooth feedback
+  const [toast, setToast] = useState<string | null>(null);
+  const showToast = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => {
+      setToast(prev => prev === msg ? null : prev);
+    }, 4500);
+  };
+
+  // Bulk notifications states
+  const [showBulkNotifyModal, setShowBulkNotifyModal] = useState(false);
+  const [isBulkSending, setIsBulkSending] = useState(false);
+  const [bulkNotifyProgress, setBulkNotifyProgress] = useState<{
+    current: number;
+    total: number;
+    logs: { name: string; success: boolean; msg?: string }[];
+  } | null>(null);
+
   // Selected student for detail overlay/modal and quick collection
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
   
@@ -58,6 +91,46 @@ export const TermPayersTab: React.FC = () => {
     return students.filter(s => s.active !== false && s.paymentType === 'Term');
   }, [students]);
 
+  // Find all school days up to currentDate for active term
+  const validSchoolDays = useMemo(() => {
+    if (!activeTerm || !activeTerm.schoolDays) return [];
+    const holidays = activeTerm.publicHolidays || [];
+    return [...activeTerm.schoolDays].filter(d => d <= currentDate && !holidays.includes(d)).sort();
+  }, [activeTerm, currentDate]);
+
+  // Find Term Payer students who missed their daily check-in registrations for 3+ consecutive school days
+  const pendingPaymentsStudents = useMemo(() => {
+    if (validSchoolDays.length < 3) return [];
+    
+    return activeTermPayers.map(student => {
+      let consecutiveUnpaid: string[] = [];
+      let maxConsecutiveUnpaid: string[] = [];
+      
+      for (const day of validSchoolDays) {
+        // A check-in registration exists if there is a verified record for that day that is not marked as absent
+        const hasRegistration = (payments || []).some(
+          p => p.studentId === student.id && p.date === day && p.verified && !p.isAbsent
+        );
+        
+        if (!hasRegistration) {
+          consecutiveUnpaid.push(day);
+          if (consecutiveUnpaid.length > maxConsecutiveUnpaid.length) {
+            maxConsecutiveUnpaid = [...consecutiveUnpaid];
+          }
+        } else {
+          consecutiveUnpaid = [];
+        }
+      }
+      
+      return {
+        student,
+        consecutiveDays: maxConsecutiveUnpaid.length,
+        unpaidDates: maxConsecutiveUnpaid
+      };
+    }).filter(item => item.consecutiveDays >= 3)
+      .sort((a, b) => b.consecutiveDays - a.consecutiveDays);
+  }, [activeTermPayers, payments, validSchoolDays]);
+
   // Compute stats based on ALL active Term Payers
   const stats = useMemo(() => {
     let totalExpected = 0;
@@ -67,13 +140,14 @@ export const TermPayersTab: React.FC = () => {
 
     activeTermPayers.forEach(s => {
       const studentFee = s.termFee || 350;
-      totalExpected += studentFee;
+      const legacyDebt = s.legacyDebt || 0;
+      totalExpected += studentFee + legacyDebt;
 
       const studentPayments = payments.filter(p => p.studentId === s.id && !p.isAbsent);
       const studentTotalPaid = studentPayments.reduce((sum, p) => sum + p.amount, 0);
       totalPaid += studentTotalPaid;
 
-      if (studentTotalPaid >= studentFee) {
+      if (studentTotalPaid >= (studentFee + legacyDebt)) {
         fullySettledCount++;
       } else {
         outstandingCount++;
@@ -93,6 +167,98 @@ export const TermPayersTab: React.FC = () => {
       outstandingCount
     };
   }, [activeTermPayers, payments]);
+
+  // Outstanding students helper for bulk notifications
+  const outstandingStudents = useMemo(() => {
+    return activeTermPayers.map(s => {
+      const studentFee = s.termFee || 350;
+      const legacyDebt = s.legacyDebt || 0;
+      const studentPayments = payments.filter(p => p.studentId === s.id && !p.isAbsent);
+      const studentTotalPaid = studentPayments.reduce((sum, p) => sum + p.amount, 0);
+      const balanceDue = Math.max(0, studentFee + legacyDebt - studentTotalPaid);
+      return {
+        student: s,
+        studentFee,
+        legacyDebt,
+        totalPaid: studentTotalPaid,
+        balanceDue,
+        isOutstanding: balanceDue > 0
+      };
+    }).filter(item => item.isOutstanding);
+  }, [activeTermPayers, payments]);
+
+  // Bulk notifications handler
+  const handleTriggerBulkNotifications = async () => {
+    if (outstandingStudents.length === 0) {
+      showToast("No pupils with outstanding balances found.");
+      return;
+    }
+
+    setIsBulkSending(true);
+    setBulkNotifyProgress({
+      current: 0,
+      total: outstandingStudents.length,
+      logs: []
+    });
+
+    for (let i = 0; i < outstandingStudents.length; i++) {
+      const item = outstandingStudents[i];
+      const s = item.student;
+      const due = item.balanceDue;
+      const fee = item.studentFee;
+      const paid = item.totalPaid;
+      
+      const message = `*SAAKO HOLY CHILD ACADEMY*\n*FEES OUTSTANDING NOTICE*\n\n` +
+        `*Beneficiary/Pupil:* ${s.name}\n` +
+        `*Roll ID:* ${s.rollNumber || 'SHC-' + s.id.substring(0, 5).toUpperCase()}\n` +
+        `*Class:* ${s.class}\n\n` +
+        `Dear Parent/Guardian,\n` +
+        `We wish to remind you that your child has an outstanding Term fee balance of *GHC ${due.toFixed(2)}* (Total Term Fee: GHC ${fee.toFixed(2)}, Paid: GHC ${paid.toFixed(2)}).\n\n` +
+        `Kindly make payments to settle the outstanding arrears. Thank you.\n\n` +
+        `_Authorized Administration System_`;
+
+      let success = false;
+      let errorMsg = '';
+      
+      try {
+        if (sendautomatedWhatsApp) {
+          const res = await sendautomatedWhatsApp(
+            s.guardianPhone || '',
+            message,
+            s.id,
+            s.name,
+            'term-bulk-outstanding'
+          );
+          success = res.success;
+          if (!res.success && res.error) {
+            errorMsg = res.error;
+          }
+        } else {
+          errorMsg = 'API function sendautomatedWhatsApp not available';
+        }
+      } catch (err: any) {
+        errorMsg = err.message || 'Unknown network error';
+      }
+
+      setBulkNotifyProgress(prev => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          current: i + 1,
+          logs: [
+            ...prev.logs,
+            { name: s.name, success, msg: success ? 'Sent' : errorMsg || 'Failed' }
+          ]
+        };
+      });
+
+      // Artificial short delay to prevent network throttling
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+
+    setIsBulkSending(false);
+    showToast(`Bulk dispatch completed for ${outstandingStudents.length} accounts!`);
+  };
 
   // Filter Term Payers for display
   const displayedTermPayers = useMemo(() => {
@@ -124,16 +290,20 @@ export const TermPayersTab: React.FC = () => {
   const selectedStudentFinances = useMemo(() => {
     if (!selectedStudent) return null;
     const studentFee = selectedStudent.termFee || 350;
+    const legacyDebt = selectedStudent.legacyDebt || 0;
     const studentPayments = payments.filter(p => p.studentId === selectedStudent.id);
     const paidPayments = studentPayments.filter(p => !p.isAbsent);
     const totalPaid = paidPayments.reduce((sum, p) => sum + p.amount, 0);
-    const balanceDue = Math.max(0, studentFee - totalPaid);
-    const prepayValue = Math.max(0, totalPaid - studentFee); // If they paid extra
-    const isCompleted = totalPaid >= studentFee;
-    const percentDone = Math.min(100, (totalPaid / studentFee) * 100);
+    const totalTarget = studentFee + legacyDebt;
+    const balanceDue = Math.max(0, totalTarget - totalPaid);
+    const prepayValue = Math.max(0, totalPaid - totalTarget); // If they paid extra
+    const isCompleted = totalPaid >= totalTarget;
+    const percentDone = Math.min(100, (totalPaid / totalTarget) * 100);
 
     return {
       studentFee,
+      legacyDebt,
+      totalTarget,
       studentPayments,
       paidPayments,
       totalPaid,
@@ -183,7 +353,7 @@ export const TermPayersTab: React.FC = () => {
   return (
     <div className="space-y-6" id="term-payers-registry-workspace">
       {/* Upper header section */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between border-b-4 border-neutral-800 pb-5 gap-4">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between border-b-4 border-neutral-800 pb-5 gap-4">
         <div>
           <div className="flex items-center gap-2 mb-1">
             <span className="text-amber-400 font-extrabold text-xs tracking-wider uppercase bg-amber-400/10 border border-amber-400/35 px-2 py-0.5 rounded-xs">
@@ -199,15 +369,27 @@ export const TermPayersTab: React.FC = () => {
           </p>
         </div>
 
-        {/* Global summary count */}
-        <div className="bg-neutral-900 border-2 border-neutral-800 p-3 flex items-center gap-3.5 shrink-0 select-none">
-          <div className="bg-amber-400 text-neutral-950 font-black p-2 rounded-xs">
-            <Users size={18} />
-          </div>
-          <div>
-            <span className="text-[9px] text-neutral-500 font-black uppercase tracking-widest block font-sans">Term Enrollment</span>
-            <div className="text-base font-black text-white font-mono mt-0.5">
-              {activeTermPayers.length} Active Pupils
+        {/* Global actions and summary count */}
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => setShowBulkNotifyModal(true)}
+            className="bg-emerald-600 hover:bg-emerald-500 text-white font-mono font-black uppercase text-xs tracking-wider px-4 py-3 flex items-center justify-center gap-2 rounded-xs border-b-2 border-emerald-800 transition-all shadow-md cursor-pointer hover:-translate-y-0.5"
+            title="Send bulk WhatsApp reminder notifications to guardians of all outstanding term payers"
+          >
+            <MessageSquare size={15} />
+            <span>Notify Arrears</span>
+          </button>
+
+          <div className="bg-neutral-900 border-2 border-neutral-800 p-3 flex items-center gap-3.5 select-none">
+            <div className="bg-amber-400 text-neutral-950 font-black p-2 rounded-xs">
+              <Users size={18} />
+            </div>
+            <div>
+              <span className="text-[9px] text-neutral-500 font-black uppercase tracking-widest block font-sans">Term Enrollment</span>
+              <div className="text-base font-black text-white font-mono mt-0.5">
+                {activeTermPayers.length} Active Pupils
+              </div>
             </div>
           </div>
         </div>
@@ -290,22 +472,68 @@ export const TermPayersTab: React.FC = () => {
         </div>
       </div>
 
-      {/* Advanced Filter, Search, and Status bar */}
+      {/* Sub-Navigation Tabs */}
+      <div className="flex border-b border-neutral-800 gap-2 mb-6">
+        <button
+          onClick={() => setViewMode('DIRECTORY')}
+          className={`px-5 py-3 text-xs font-black uppercase tracking-wider font-mono border-t-2 transition-all cursor-pointer ${
+            viewMode === 'DIRECTORY'
+              ? 'border-t-amber-400 bg-neutral-900/40 text-amber-400'
+              : 'border-t-transparent text-neutral-500 hover:text-neutral-300'
+          }`}
+        >
+          🗂️ Scheme Pupil Registry ({activeTermPayers.length})
+        </button>
+        <button
+          onClick={() => setViewMode('PENDING_REGISTRATIONS')}
+          className={`px-5 py-3 text-xs font-black uppercase tracking-wider font-mono border-t-2 relative transition-all cursor-pointer ${
+            viewMode === 'PENDING_REGISTRATIONS'
+              ? 'border-t-red-500 bg-neutral-900/40 text-red-400'
+              : 'border-t-transparent text-neutral-500 hover:text-neutral-300'
+          }`}
+        >
+          🚨 Pending Payments Alert ({pendingPaymentsStudents.length})
+          {pendingPaymentsStudents.length > 0 && (
+            <span className="absolute -top-1.5 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-655 text-[8px] font-black text-white animate-pulse">
+              {pendingPaymentsStudents.length}
+            </span>
+          )}
+        </button>
+      </div>
+
+      {viewMode === 'DIRECTORY' ? (
+        <>
+          {/* Advanced Filter, Search, and Status bar */}
       <div className="bg-neutral-900 border-2 border-neutral-800 p-4 flex flex-col md:flex-row items-center gap-4">
         {/* Dynamic Search */}
-        <div className="relative w-full md:flex-1">
-          <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-500" />
-          <input
-            id="term-payers-search"
-            type="text"
-            placeholder="Search term payers by pupil name, roll ID..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-neutral-950 border-2 border-neutral-800 pl-10 pr-16 py-2 text-xs text-white font-medium outline-none focus:border-amber-400 focus:ring-0 placeholder:text-neutral-600 transition-colors"
-          />
-          <kbd className="absolute right-3 top-1/2 -translate-y-1/2 hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 border border-neutral-800 bg-neutral-950 font-mono text-[8px] text-neutral-500 rounded-xs leading-none pointer-events-none uppercase font-bold tracking-wider select-none">
-            Ctrl+K
-          </kbd>
+        <div className="flex items-center gap-2 w-full md:flex-1">
+          <div className="relative flex-1">
+            <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-500" />
+            <input
+              id="term-payers-search"
+              type="text"
+              placeholder="Search term payers by pupil name, roll ID..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full bg-neutral-950 border-2 border-neutral-800 pl-10 pr-16 py-2 text-xs text-white font-medium outline-none focus:border-amber-400 focus:ring-0 placeholder:text-neutral-600 transition-colors"
+            />
+            <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
+              <VoiceSearchButton
+                inputId="term-payers-search"
+                onTranscript={(text) => setSearchQuery(text)}
+              />
+              <kbd className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 border border-neutral-800 bg-neutral-950 font-mono text-[8px] text-neutral-500 rounded-xs leading-none pointer-events-none uppercase font-bold tracking-wider select-none">
+                Ctrl+K
+              </kbd>
+            </div>
+          </div>
+          {/* Keyboard shortcut info indicator reminder */}
+          <div 
+            className="hidden md:flex items-center justify-center text-neutral-500 hover:text-amber-400 border border-neutral-800 bg-neutral-950 hover:border-amber-400 transition-all cursor-help h-[36px] w-9 shrink-0 select-none"
+            title="Keyboard Shortcut Reminder: Press 'Ctrl+K' (or 'Cmd+K' on macOS) from anywhere at any time to focus this term payers search box instantly"
+          >
+            <Info size={13} className="stroke-[2.5]" />
+          </div>
         </div>
 
         {/* Filter select by Grade Class */}
@@ -385,11 +613,13 @@ export const TermPayersTab: React.FC = () => {
               <tbody className="divide-y divide-neutral-800 text-xs text-neutral-250 font-medium">
                 {displayedTermPayers.map((student) => {
                   const termFee = student.termFee || 350;
+                  const legacyDebt = student.legacyDebt || 0;
+                  const totalExpected = termFee + legacyDebt;
                   const studentPayments = payments.filter(p => p.studentId === student.id && !p.isAbsent);
                   const totalPaid = studentPayments.reduce((sum, p) => sum + p.amount, 0);
-                  const balanceDue = Math.max(0, termFee - totalPaid);
-                  const isSettled = totalPaid >= termFee;
-                  const percentPaid = Math.min(100, (totalPaid / termFee) * 100);
+                  const balanceDue = Math.max(0, totalExpected - totalPaid);
+                  const isSettled = totalPaid >= totalExpected;
+                  const percentPaid = Math.min(100, (totalPaid / totalExpected) * 100);
                   const isLowProgress = percentPaid < 25;
 
                   // Soft red hue highlighting for low progress (<25%)
@@ -453,7 +683,12 @@ export const TermPayersTab: React.FC = () => {
                       </td>
 
                       <td className="px-6 py-4 font-mono font-black text-white">
-                        GHC {termFee.toFixed(2)}
+                        <div>GHC {termFee.toFixed(2)}</div>
+                        {legacyDebt > 0 && (
+                          <div className="text-[10px] text-red-400 font-bold mt-1" title="Legacy Debt before this system was adopted">
+                            + GHC {legacyDebt.toFixed(2)} Legacy
+                          </div>
+                        )}
                       </td>
 
                       <td className="px-6 py-4">
@@ -534,6 +769,442 @@ export const TermPayersTab: React.FC = () => {
           </div>
         )}
       </div>
+    </>
+  ) : (
+    /* Pending Payments / Daily Registrations Alert view */
+    <div className="space-y-6 animate-fadeIn" id="pending-registrations-container">
+      <div className="bg-neutral-900 border-2 border-red-500/25 p-5 relative overflow-hidden flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="space-y-1">
+          <span className="text-[10px] font-black uppercase text-red-400 bg-red-950/45 border border-red-400/30 px-2 py-0.5 rounded-xs font-mono inline-block">
+            ★ OUTSTANDING REGISTRY ACTION PANEL
+          </span>
+          <h3 className="text-sm font-black text-white uppercase tracking-tight font-sans">
+            Pending Daily Check-In Registers Alert
+          </h3>
+          <p className="text-xs text-neutral-405 max-w-2xl leading-relaxed">
+            The pupils isolated below are registered under the locked <strong>Scholastic Term Scheme</strong>, but have records indicating missed gate fee check-ins for <strong>3 or more consecutive school days</strong>. Use this roster for targeted counselor calls or direct ledger follow-ups with parents.
+          </p>
+        </div>
+        <div className="bg-red-500 text-neutral-950 font-black p-3.5 rounded-xs font-mono text-center shrink-0 min-w-[140px] select-none">
+          <span className="text-[9px] uppercase tracking-wider block leading-none font-bold">Unpaid Alert</span>
+          <div className="text-2xl font-black mt-1 leading-none">{pendingPaymentsStudents.length}</div>
+          <span className="text-[8px] uppercase tracking-widest block leading-none mt-1 text-neutral-905/80 font-bold font-sans">Students Due</span>
+        </div>
+      </div>
+
+      {pendingPaymentsStudents.length === 0 ? (
+        <div className="bg-neutral-900 border-2 border-neutral-800 p-12 text-center text-neutral-400 space-y-4">
+          <CheckCircle2 size={44} className="mx-auto text-emerald-500 animate-bounce" />
+          <div>
+            <h4 className="text-xs uppercase font-mono font-black text-white tracking-widest">Registry Completely Clear</h4>
+            <p className="text-xs text-neutral-500 mt-1 max-w-md mx-auto">
+              Outstanding daily register compliance is 100%! All Term Scheme pupils have checked in at the gate consistently.
+            </p>
+          </div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {pendingPaymentsStudents.map(({ student, consecutiveDays, unpaidDates }) => {
+            const termFee = student.termFee || 350;
+            const legacyDebt = student.legacyDebt || 0;
+            const totalExpected = termFee + legacyDebt;
+            const studentPayments = payments.filter(p => p.studentId === student.id && !p.isAbsent);
+            const totalPaid = studentPayments.reduce((sum, p) => sum + p.amount, 0);
+            const balanceDue = Math.max(0, totalExpected - totalPaid);
+            const percentPaid = Math.min(100, (totalPaid / totalExpected) * 100);
+
+            return (
+              <div key={student.id} className="bg-neutral-900 border-2 border-neutral-800 hover:border-red-500/40 p-5 space-y-4 transition-all hover:shadow-lg relative overflow-hidden" id={`pending-card-${student.id}`}>
+                <div className="absolute top-4 right-4 bg-red-955 border border-red-500/45 text-red-400 text-[10px] font-mono font-black uppercase px-2.5 py-1 select-none animate-pulse">
+                  {consecutiveDays} Consecutive Days missed
+                </div>
+
+                <div className="flex items-center gap-3">
+                  {student.photoUrl ? (
+                    <img 
+                      src={student.photoUrl} 
+                      alt={student.name} 
+                      className="w-12 h-12 object-cover border border-neutral-700 bg-neutral-950 text-xs rounded-xs shrink-0"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <div className="w-12 h-12 bg-neutral-950 text-neutral-500 font-extrabold text-sm uppercase flex items-center justify-center border border-neutral-800 font-mono shrink-0 rounded-xs">
+                      {student.name.slice(0, 2).toUpperCase()}
+                    </div>
+                  )}
+                  <div>
+                    <h4 className="text-sm font-black text-white uppercase tracking-tight group-hover:text-amber-400 transition-colors">
+                      {student.name}
+                    </h4>
+                    <div className="text-[10px] text-neutral-400 mt-1 font-bold space-x-2 flex">
+                      <span className="bg-neutral-950 py-0.5 px-2 border border-neutral-850 font-sans text-neutral-300">{student.class}</span>
+                      <span className="text-neutral-500 font-mono">ID: {student.rollNumber || 'SHC-' + student.id.substring(0, 5).toUpperCase()}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-neutral-955 p-3.5 border border-neutral-850 space-y-2">
+                  <div className="flex justify-between items-baseline text-[9px] font-mono font-black uppercase text-neutral-500">
+                    <span>Term payment {legacyDebt > 0 ? '(incl. legacy debt)' : ''}</span>
+                    <span className="text-white font-black">GHC {totalPaid.toFixed(2)} / GHC {totalExpected.toFixed(2)} ({percentPaid.toFixed(0)}%)</span>
+                  </div>
+                  <div className="w-full bg-neutral-900 h-1.5 rounded-full overflow-hidden">
+                    <div className="bg-amber-400 h-full transition-all" style={{ width: `${percentPaid}%` }} />
+                  </div>
+                  <div className="flex justify-between text-[9px] font-mono text-neutral-500 font-bold">
+                    <span>Overall Arrears Balance:</span>
+                    <span className="text-red-400 font-black">GHC {balanceDue.toFixed(2)}</span>
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-[8.5px] font-black text-neutral-400 uppercase tracking-widest font-mono">
+                    🔴 Unregistered / Missed Check-in Dates ({unpaidDates.length} Days)
+                  </label>
+                  <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
+                    {unpaidDates.map(dateStr => (
+                      <span key={dateStr} className="text-[9.5px] font-mono font-extrabold text-red-200 bg-red-950/40 border border-red-500/35 px-2 py-0.5" title="No presence or verified payment logged for this day">
+                        {dateStr}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex gap-2 pt-2 border-t border-neutral-850">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedStudent(student)}
+                    className="flex-1 bg-neutral-955 hover:bg-neutral-850 text-white border border-neutral-800 hover:border-amber-400 py-2.5 text-[10px] font-black font-mono uppercase tracking-wider transition-all cursor-pointer rounded-xs flex items-center justify-center gap-1.5"
+                    title="Open tuition payment modal logs and registration tools"
+                  >
+                    <Receipt size={11} />
+                    <span>Inspect Tuition Ledger</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSmsSuccess(false);
+                      setSmsTarget({ student, consecutiveDays, unpaidDates });
+                    }}
+                    className="flex-1 bg-red-950/20 hover:bg-red-900/10 text-red-400 border border-red-500/30 hover:border-red-400 py-2.5 text-[10px] font-black font-mono uppercase tracking-wider transition-all cursor-pointer rounded-xs flex items-center justify-center gap-1.5"
+                    title="Draft standard follow-up text alert to guardian"
+                  >
+                    <Calendar size={11} className="text-red-400" />
+                    <span>SMS Registry Warning</span>
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  )}
+
+  {/* SMS Follow-Up Alert Modal Backdrop */}
+  <AnimatePresence>
+    {smsTarget && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          onClick={() => setSmsTarget(null)}
+          className="absolute inset-0 bg-neutral-950/80 backdrop-blur-xs"
+          id="sms-modal-backdrop"
+        />
+        
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95, y: 15 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.95, y: 15 }}
+          className="bg-neutral-900 border-4 border-red-500 w-full max-w-md p-6 md:p-8 rounded shadow-2xl relative z-10 space-y-6"
+          id="targeted-sms-alert-panel"
+        >
+          <button
+            onClick={() => setSmsTarget(null)}
+            className="absolute top-4 right-4 bg-neutral-950 text-neutral-400 hover:text-white hover:border-red-500 p-2 border border-neutral-800 transition-colors cursor-pointer rounded-none"
+            id="btn-close-sms-modal"
+          >
+            <X size={16} />
+          </button>
+
+          <div className="flex items-center gap-2 border-b-2 border-neutral-800 pb-3">
+            <AlertCircle size={20} className="text-red-505 animate-pulse" />
+            <h3 className="text-sm font-black uppercase tracking-widest text-white font-mono">
+              Registry Follow-Up Dispatcher
+            </h3>
+          </div>
+
+          <div className="space-y-4 font-sans text-left">
+            <p className="text-xs text-neutral-400 font-bold leading-relaxed">
+              Generate high-priority attendance warning notice for pupil: <strong className="text-white font-extrabold">{smsTarget.student.name}</strong>.
+            </p>
+
+            <div className="space-y-1.5">
+              <div className="flex justify-between items-center">
+                <label className="block text-[8.5px] font-black text-neutral-405 uppercase tracking-widest font-mono">
+                  Receiver Guardian Phone Number
+                </label>
+                {smsTarget.student.guardianPhone && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(smsTarget.student.guardianPhone || '');
+                      showToast(`Copied Contact Number: ${smsTarget.student.guardianPhone}`);
+                    }}
+                    className="text-[9px] hover:text-white text-amber-400 px-2 py-0.5 border border-amber-500/30 hover:border-amber-450 bg-neutral-950 font-mono uppercase tracking-wider font-extrabold flex items-center gap-1 transition cursor-pointer"
+                  >
+                    <span>Copy Contact</span>
+                  </button>
+                )}
+              </div>
+              <input
+                type="text"
+                value={smsTarget.student.guardianPhone || ''}
+                onChange={(e) => {
+                  const nextPhone = e.target.value.replace(/\D/g, '');
+                  setSmsTarget({
+                    ...smsTarget,
+                    student: { ...smsTarget.student, guardianPhone: nextPhone }
+                  });
+                }}
+                placeholder="Type or verify phone number e.g. 0541234567"
+                className="w-full bg-neutral-955 border border-neutral-800 py-3 px-3.5 font-mono text-xs text-white focus:outline-none focus:border-red-500 placeholder:text-neutral-700 font-extrabold"
+              />
+            </div>
+
+            <div className="relative">
+              <div className="bg-neutral-955 text-neutral-350 font-mono text-[10.5px] p-4 border border-neutral-850 leading-relaxed uppercase space-y-1 select-text">
+                <span className="text-neutral-500 font-black block tracking-widest">Sender Mask: SAAKOCHECK (REGISTRY ALERT)</span>
+                <p className="border-t border-neutral-800/85 my-2 pt-1.5" />
+                <p className="text-red-400 leading-normal normal-case">
+                  Hello. REGISTRY UPDATE: Records show that {smsTarget.student.name} has missed standard daily school register check-ins for {smsTarget.consecutiveDays} consecutive school days (Dates: {smsTarget.unpaidDates.join(', ')}). Under Term Scheme requirements, all daily gate registrations must be logged. Please contact school administration immediately. - Yakubu Hakeem
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const msg = `Hello. REGISTRY UPDATE: Records show that ${smsTarget.student.name} has missed standard daily school register check-ins for ${smsTarget.consecutiveDays} consecutive school days (Dates: ${smsTarget.unpaidDates.join(', ')}). Under Term Scheme requirements, all daily gate registrations must be logged. Please contact school administration immediately. - Yakubu Hakeem`;
+                  navigator.clipboard.writeText(msg);
+                  showToast(`Copied full alert text to clipboard!`);
+                }}
+                className="absolute right-2.5 bottom-2.5 text-[8.5px] text-amber-450 bg-neutral-900 border border-neutral-800 rounded px-2.5 py-1 font-mono font-bold hover:text-white transition cursor-pointer"
+              >
+                Copy Message Text
+              </button>
+            </div>
+
+            {!smsTarget.student.guardianPhone && (
+              <p className="text-[10px] text-amber-505 font-bold font-mono uppercase bg-amber-950/20 border border-amber-900/60 p-2.5 rounded-sm">
+                ⚠️ Alert: No active contact registered. Please input guardian's phone number above.
+              </p>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-2 pt-2">
+            <button
+              type="button"
+              disabled={isSendingSms || !smsTarget.student.guardianPhone}
+              onClick={() => {
+                setIsSendingSms(true);
+                setTimeout(() => {
+                  setIsSendingSms(false);
+                  setSmsSuccess(true);
+                  showToast(`SMS Dispatch Token registered for ${smsTarget.student.name}'s guardian.`);
+                  setTimeout(() => {
+                    setSmsTarget(null);
+                  }, 1200);
+                }, 1500);
+              }}
+              className="w-full text-xs bg-red-650 hover:bg-red-500 disabled:bg-neutral-800 disabled:text-neutral-500 text-white py-3.5 font-mono font-black uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-1.5 rounded-none border border-red-600"
+            >
+              {isSendingSms ? (
+                <span className="animate-pulse">DISPATCHING GATE NOTICE...</span>
+              ) : smsSuccess ? (
+                <span className="text-emerald-400">DISPATCHED SUCCESSFULLY ✓</span>
+              ) : (
+                <span>DISPATCH ACTIVE SMS NOTICE</span>
+              )}
+            </button>
+          </div>
+        </motion.div>
+      </div>
+    )}
+  </AnimatePresence>
+
+  {/* Bulk WhatsApp Notification Dialog */}
+  <AnimatePresence>
+    {showBulkNotifyModal && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          onClick={() => {
+            if (!isBulkSending) setShowBulkNotifyModal(false);
+          }}
+          className="absolute inset-0 bg-neutral-950/80 backdrop-blur-xs"
+        />
+
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95, y: 15 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.95, y: 15 }}
+          className="bg-neutral-900 border-4 border-emerald-500 w-full max-w-2xl p-6 md:p-8 rounded shadow-2xl relative z-10 space-y-6 max-h-[90vh] overflow-y-auto"
+        >
+          <button
+            onClick={() => setShowBulkNotifyModal(false)}
+            disabled={isBulkSending}
+            className="absolute top-4 right-4 bg-neutral-950 text-neutral-405 hover:text-white hover:border-emerald-500 p-2 border border-neutral-800 transition-colors cursor-pointer rounded-none disabled:opacity-50"
+          >
+            <X size={16} />
+          </button>
+
+          <div className="flex items-center gap-2 border-b-2 border-neutral-800 pb-3">
+            <MessageSquare size={20} className="text-emerald-405" />
+            <h3 className="text-sm font-black uppercase tracking-widest text-white font-mono">
+              Bulk Outstanding Fees WhatsApp Dispatcher
+            </h3>
+          </div>
+
+          <p className="text-xs text-neutral-400 font-bold leading-relaxed">
+            Configure and dispatch bulk notifications to guardians of all pupils with outstanding term fee balances.
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* List of affected pupils */}
+            <div className="border border-neutral-800 bg-neutral-950 p-4 space-y-3 max-h-[250px] overflow-y-auto">
+              <span className="text-[9px] font-mono font-black uppercase tracking-widest text-neutral-500 block">
+                Targeted Accounts ({outstandingStudents.length})
+              </span>
+              <div className="divide-y divide-neutral-900 space-y-2">
+                {outstandingStudents.length === 0 ? (
+                  <p className="text-xs text-neutral-500 font-bold font-mono">No students with outstanding balances found.</p>
+                ) : (
+                  outstandingStudents.map(item => (
+                    <div key={item.student.id} className="flex justify-between items-center text-[11px] font-mono py-1">
+                      <div>
+                        <span className="text-white block font-extrabold uppercase">{item.student.name}</span>
+                        <span className="text-neutral-500 text-[9px] block">Phone: {item.student.guardianPhone || 'No active contact'}</span>
+                      </div>
+                      <span className="text-red-400 font-extrabold">GHC {item.balanceDue.toFixed(2)}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Template preview */}
+            <div className="border border-neutral-800 bg-neutral-950 p-4 space-y-2 flex flex-col justify-between">
+              <div>
+                <span className="text-[9px] font-mono font-black uppercase tracking-widest text-neutral-500 block mb-1">
+                  Alert Message Template Preview
+                </span>
+                <div className="bg-neutral-900 border border-neutral-800 p-3 italic text-[10px] text-neutral-350 rounded-xs leading-relaxed max-h-[160px] overflow-y-auto">
+                  <strong>*SAAKO HOLY CHILD ACADEMY*</strong><br />
+                  <strong>*FEES OUTSTANDING NOTICE*</strong><br />
+                  <br />
+                  *Beneficiary/Pupil:* [Pupil Name]<br />
+                  *Class:* [Class]<br />
+                  <br />
+                  We wish to remind you that your child has an outstanding Term fee balance of <strong>*GHC [Balance Due]*</strong> (Total Term Fee: GHC [Term Fee], Paid: GHC [Paid]).<br />
+                  <br />
+                  Kindly make payments to settle the outstanding arrears. Thank you.<br />
+                  <br />
+                  <em>_Authorized Administration System_</em>
+                </div>
+              </div>
+              <span className="text-[8.5px] text-neutral-500 block font-mono">
+                ℹ Bulk messages will be broadcasted individually to each guardian number consecutively.
+              </span>
+            </div>
+          </div>
+
+          {/* Progress list if sending */}
+          {bulkNotifyProgress && (
+            <div className="border border-neutral-800 bg-neutral-950 p-4 space-y-3">
+              <div className="flex justify-between items-center">
+                <span className="text-[9px] font-mono font-black uppercase tracking-widest text-neutral-400">
+                  Broadcast Dispatch Progress
+                </span>
+                <span className="text-emerald-400 font-mono font-black text-xs">
+                  {bulkNotifyProgress.current} / {bulkNotifyProgress.total} Complete
+                </span>
+              </div>
+              <div className="w-full bg-neutral-900 h-2 rounded-full overflow-hidden border border-neutral-800">
+                <div 
+                  className="bg-emerald-500 h-full transition-all duration-300"
+                  style={{ width: `${bulkNotifyProgress.total > 0 ? (bulkNotifyProgress.current / bulkNotifyProgress.total) * 100 : 0}%` }}
+                />
+              </div>
+              {/* Individual logs */}
+              <div className="max-h-[120px] overflow-y-auto divide-y divide-neutral-900">
+                {bulkNotifyProgress.logs.map((log, index) => (
+                  <div key={index} className="flex justify-between items-center py-1.5 text-[10px] font-mono">
+                    <span className="text-neutral-300 uppercase">{log.name}</span>
+                    <span className={log.success ? 'text-emerald-405 font-black' : 'text-red-405 font-black'}>
+                      {log.msg}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Dialog Action buttons */}
+          <div className="flex flex-col sm:flex-row gap-3 pt-2">
+            <button
+              type="button"
+              disabled={isBulkSending || outstandingStudents.length === 0}
+              onClick={handleTriggerBulkNotifications}
+              className="flex-1 text-xs bg-emerald-600 hover:bg-emerald-500 disabled:bg-neutral-850 disabled:text-neutral-550 text-white py-3 px-4 font-mono font-black uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-1.5 border border-emerald-700"
+            >
+              {isBulkSending ? (
+                <span className="animate-pulse flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-305 animate-ping" />
+                  DISPATCHING BROADCAST NOTICES...
+                </span>
+              ) : (
+                <>
+                  <Send size={12} />
+                  <span>Execute Bulk Alert Broadcast</span>
+                </>
+              )}
+            </button>
+            <button
+              type="button"
+              disabled={isBulkSending}
+              onClick={() => setShowBulkNotifyModal(false)}
+              className="text-xs bg-neutral-950 text-neutral-400 hover:text-white border border-neutral-800 py-3 px-6 font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded-none disabled:opacity-50"
+            >
+              Dismiss
+            </button>
+          </div>
+        </motion.div>
+      </div>
+    )}
+  </AnimatePresence>
+
+  {/* Local Toast Portal Notifications */}
+  <AnimatePresence>
+    {toast && (
+      <motion.div
+        initial={{ opacity: 0, y: 50, scale: 0.95 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95, y: 20 }}
+        className="fixed bottom-6 right-6 z-[100] bg-neutral-900 border-2 border-red-500 text-white font-mono text-[10px] font-black uppercase tracking-wide px-5 py-4 shadow-2xl flex items-center gap-3"
+        id="local-toast-notification"
+      >
+        <span className="relative flex h-2 w-2">
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+          <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+        </span>
+        <span>{toast}</span>
+      </motion.div>
+    )}
+  </AnimatePresence>
 
       {/* Slide Drawer / Modal Backdrop for detailed Pupil Record */}
       <AnimatePresence>

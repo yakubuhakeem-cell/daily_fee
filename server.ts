@@ -1,8 +1,11 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
+import dotenv from "dotenv";
 import { initializeApp } from "firebase/app";
 import { initializeFirestore, memoryLocalCache, collection, doc, getDocs, setDoc, deleteDoc, writeBatch } from "firebase/firestore";
+
+dotenv.config();
 
 const DB_FILE = path.join(process.cwd(), "db.json");
 const CONFIG_FILE = path.join(process.cwd(), "firebase-applet-config.json");
@@ -12,18 +15,25 @@ interface DatabaseSchema {
   students: any[];
   payments: any[];
   terms?: any[];
+  expenses?: any[];
+  salaries?: any[];
+  whatsappLogs?: any[];
 }
 
 function loadDatabase(): DatabaseSchema {
   try {
     if (fs.existsSync(DB_FILE)) {
       const raw = fs.readFileSync(DB_FILE, "utf-8");
-      return JSON.parse(raw);
+      const parsed = JSON.parse(raw);
+      if (!parsed.whatsappLogs) {
+        parsed.whatsappLogs = [];
+      }
+      return parsed;
     }
   } catch (error) {
     console.error("Failed to load local DB file, using fallback:", error);
   }
-  return { users: [], students: [], payments: [], terms: [] };
+  return { users: [], students: [], payments: [], terms: [], expenses: [], salaries: [], whatsappLogs: [] };
 }
 
 function saveDatabase(data: DatabaseSchema) {
@@ -639,6 +649,257 @@ async function startServer() {
       }
     }
     res.json({ success: true });
+  });
+
+  // GET /api/expenses
+  app.get("/api/expenses", async (req, res) => {
+    if (firestoreDb) {
+      try {
+        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "expenses")), 1500, "getExpenses");
+        const list = qSnaps.docs.map(d => d.data());
+        // Sync local cache
+        const dbLocal = loadDatabase();
+        dbLocal.expenses = list;
+        saveDatabase(dbLocal);
+        return res.json(list);
+      } catch (e) {
+        console.error("Firestore getExpenses failed, falling back to local database:", e);
+      }
+    }
+    const db = loadDatabase();
+    res.json(db.expenses || []);
+  });
+
+  // POST /api/expenses
+  app.post("/api/expenses", async (req, res) => {
+    const expense = req.body;
+
+    // Save to local cache backup
+    const dbLocal = loadDatabase();
+    if (!dbLocal.expenses) dbLocal.expenses = [];
+    const idx = dbLocal.expenses.findIndex((ex) => ex.id === expense.id);
+    if (idx >= 0) {
+      dbLocal.expenses[idx] = expense;
+    } else {
+      dbLocal.expenses.push(expense);
+    }
+    saveDatabase(dbLocal);
+
+    if (firestoreDb) {
+      try {
+        await withTimeout(setDoc(doc(firestoreDb, "expenses", expense.id), expense), 1500, "saveExpense");
+      } catch (e) {
+        console.error("Firestore saveExpense failed:", e);
+      }
+    }
+    res.json({ success: true });
+  });
+
+  // DELETE /api/expenses/:id
+  app.delete("/api/expenses/:id", async (req, res) => {
+    const id = req.params.id;
+
+    // Save to local cache
+    const dbLocal = loadDatabase();
+    if (dbLocal.expenses) {
+      dbLocal.expenses = dbLocal.expenses.filter((ex) => ex.id !== id);
+      saveDatabase(dbLocal);
+    }
+
+    if (firestoreDb) {
+      try {
+        await withTimeout(deleteDoc(doc(firestoreDb, "expenses", id)), 1500, "deleteExpense");
+      } catch (e) {
+        console.error("Firestore deleteExpense failed:", e);
+      }
+    }
+    res.json({ success: true });
+  });
+
+  // GET /api/salaries
+  app.get("/api/salaries", async (req, res) => {
+    if (firestoreDb) {
+      try {
+        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "salaries")), 1500, "getSalaries");
+        const list = qSnaps.docs.map(d => d.data());
+        // Sync local cache
+        const dbLocal = loadDatabase();
+        dbLocal.salaries = list;
+        saveDatabase(dbLocal);
+        return res.json(list);
+      } catch (e) {
+        console.error("Firestore getSalaries failed, falling back to local database:", e);
+      }
+    }
+    const db = loadDatabase();
+    res.json(db.salaries || []);
+  });
+
+  // POST /api/salaries
+  app.post("/api/salaries", async (req, res) => {
+    const salary = req.body;
+
+    // Save to local cache
+    const dbLocal = loadDatabase();
+    if (!dbLocal.salaries) dbLocal.salaries = [];
+    const idx = dbLocal.salaries.findIndex((s) => s.id === salary.id);
+    if (idx >= 0) {
+      dbLocal.salaries[idx] = salary;
+    } else {
+      dbLocal.salaries.push(salary);
+    }
+    saveDatabase(dbLocal);
+
+    if (firestoreDb) {
+      try {
+        await withTimeout(setDoc(doc(firestoreDb, "salaries", salary.id), salary), 1500, "saveSalary");
+      } catch (e) {
+        console.error("Firestore saveSalary failed:", e);
+      }
+    }
+    res.json({ success: true });
+  });
+
+  // DELETE /api/salaries/:id
+  app.delete("/api/salaries/:id", async (req, res) => {
+    const id = req.params.id;
+
+    // Save to local cache
+    const dbLocal = loadDatabase();
+    if (dbLocal.salaries) {
+      dbLocal.salaries = dbLocal.salaries.filter((s) => s.id !== id);
+      saveDatabase(dbLocal);
+    }
+
+    if (firestoreDb) {
+      try {
+        await withTimeout(deleteDoc(doc(firestoreDb, "salaries", id)), 1500, "deleteSalary");
+      } catch (e) {
+        console.error("Firestore deleteSalary failed:", e);
+      }
+    }
+    res.json({ success: true });
+  });
+
+  // GET /api/whatsapp/logs
+  app.get("/api/whatsapp/logs", async (req, res) => {
+    if (firestoreDb) {
+      try {
+        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "whatsappLogs")), 1500, "getWhatsappLogs");
+        const list = qSnaps.docs.map(d => d.data());
+        const sorted = list.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        const dbLocal = loadDatabase();
+        dbLocal.whatsappLogs = sorted;
+        saveDatabase(dbLocal);
+        return res.json(sorted);
+      } catch (e) {
+        console.error("Firestore getWhatsappLogs failed, falling back to local database:", e);
+      }
+    }
+    const db = loadDatabase();
+    const sorted = (db.whatsappLogs || []).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    res.json(sorted);
+  });
+
+  // POST /api/whatsapp/send
+  app.post("/api/whatsapp/send", async (req, res) => {
+    const { phone, message, studentId, studentName, type, operator } = req.body;
+
+    if (!phone || !message) {
+      return res.status(400).json({ error: "Missing required parameters: 'phone' and 'message' are required." });
+    }
+
+    // Normalize phone number (Ghana style preferred: remove all non-digits, replace leading 0 with 233)
+    let normalizedPhone = phone.replace(/\D/g, "");
+    if (normalizedPhone.startsWith("0") && normalizedPhone.length === 10) {
+      normalizedPhone = "233" + normalizedPhone.substring(1);
+    }
+
+    let responseStatus = "simulated_success";
+    let responseDetails = "Simulated delivery. To trigger real messages, configure WHATSAPP_API_URL in Environment Variables.";
+
+    if (process.env.WHATSAPP_API_URL) {
+      try {
+        const url = process.env.WHATSAPP_API_URL;
+        const apiResponse = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${process.env.WHATSAPP_API_TOKEN || ''}`
+          },
+          body: JSON.stringify({
+            messaging_product: "whatsapp",
+            to: normalizedPhone,
+            type: "text",
+            text: { body: message },
+            sender_phone: process.env.WHATSAPP_SENDER_PHONE,
+            payload: {
+              phone: normalizedPhone,
+              message,
+              studentId,
+              studentName,
+              type
+            }
+          })
+        });
+
+        const responseText = await apiResponse.text();
+        let responseJson;
+        try {
+          responseJson = JSON.parse(responseText);
+        } catch {
+          responseJson = { raw: responseText };
+        }
+
+        if (apiResponse.ok) {
+          responseStatus = "delivered";
+          responseDetails = `Delivered successfully. HTTP ${apiResponse.status}: ${JSON.stringify(responseJson)}`;
+        } else {
+          responseStatus = "api_error";
+          responseDetails = `Gateway returned HTTP ${apiResponse.status}: ${JSON.stringify(responseJson)}`;
+        }
+      } catch (error: any) {
+        responseStatus = "connection_failed";
+        responseDetails = `Could not reach external gateway. Error: ${error?.message || error}`;
+      }
+    }
+
+    // Prepare log record
+    const logId = "wa_" + Math.random().toString(36).substring(2, 11) + "_" + Date.now();
+    const logEntry = {
+      id: logId,
+      timestamp: new Date().toISOString(),
+      studentId: studentId || "N/A",
+      studentName: studentName || "Unknown Pupil",
+      phone,
+      normalizedPhone,
+      message,
+      type: type || "custom",
+      status: responseStatus,
+      details: responseDetails,
+      operator: operator || "Staff Registrar"
+    };
+
+    // Save to local cache
+    const dbLocal = loadDatabase();
+    if (!dbLocal.whatsappLogs) dbLocal.whatsappLogs = [];
+    dbLocal.whatsappLogs.unshift(logEntry);
+    saveDatabase(dbLocal);
+
+    // Save to Firestore if connected
+    if (firestoreDb) {
+      try {
+        await withTimeout(setDoc(doc(firestoreDb, "whatsappLogs", logId), logEntry), 1500, "saveWhatsappLog");
+      } catch (e) {
+        console.error("Firestore saveWhatsappLog failed:", e);
+      }
+    }
+
+    res.json({
+      success: responseStatus === "delivered" || responseStatus === "simulated_success",
+      status: responseStatus,
+      log: logEntry
+    });
   });
 
   const distPath = path.join(process.cwd(), 'dist');

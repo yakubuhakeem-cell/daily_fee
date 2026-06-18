@@ -13,6 +13,7 @@ import { ReportPanel } from './components/ReportPanel';
 import { SchoolLogo } from './components/SchoolLogo';
 import { TermPayersTab } from './components/TermPayersTab';
 import { db } from './lib/firebase';
+import { StudentClass } from './types';
 import { 
   Fingerprint, 
   LayoutDashboard, 
@@ -27,7 +28,16 @@ import {
   Printer,
   Sun,
   Moon,
-  CreditCard
+  CreditCard,
+  Plus,
+  Upload,
+  User,
+  Phone,
+  Coins,
+  Award,
+  AlertCircle,
+  Check,
+  ChevronDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -46,7 +56,9 @@ function NavigationWrapper() {
     payments,
     theme,
     setTheme,
-    saveStatus
+    saveStatus,
+    addStudent,
+    playFeedbackSound
   } = useApp();
 
   // Compute unassigned pupils & missing registration records for the current day
@@ -107,6 +119,93 @@ function NavigationWrapper() {
 
   const [showPrintIframeWarning, setShowPrintIframeWarning] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState(false);
+
+  const [isAddPupilModalOpen, setIsAddPupilModalOpen] = useState(false);
+  const [newPupilName, setNewPupilName] = useState('');
+  const [newPupilClass, setNewPupilClass] = useState<StudentClass>('B1');
+  const [newPupilPhone, setNewPupilPhone] = useState('');
+  const [newPupilGender, setNewPupilGender] = useState<'Male' | 'Female'>('Male');
+  const [newPupilPaymentType, setNewPupilPaymentType] = useState<'Daily' | 'Term'>('Daily');
+  const [newPupilDiscount, setNewPupilDiscount] = useState<number>(0);
+  const [newPupilTermFee, setNewPupilTermFee] = useState<number>(350);
+  const [newPupilLegacyDebt, setNewPupilLegacyDebt] = useState<number>(0);
+  const [newPupilPhoto, setNewPupilPhoto] = useState<string | null>(null);
+
+  const [appToast, setAppToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const triggerAppToast = (message: string, type: 'success' | 'error' = 'success') => {
+    setAppToast({ message, type });
+    setTimeout(() => setAppToast(null), 4000);
+  };
+
+  const PRE_SCHOOL_CLASSES: StudentClass[] = ['Nursery', 'KG1', 'KG2'];
+  const PRIMARY_CLASSES: StudentClass[] = ['B1', 'B2', 'B3', 'B4', 'B5', 'B6'];
+  const JHS_CLASSES: StudentClass[] = ['B7', 'B8', 'B9'];
+
+  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 2 * 1024 * 1024) {
+        triggerAppToast('File size must be strictly under 2MB.', 'error');
+        return;
+      }
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        if (typeof reader.result === 'string') {
+          setNewPupilPhoto(reader.result);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleAddPupilSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newPupilName.trim()) {
+      triggerAppToast('Please enter a valid pupil name.', 'error');
+      return;
+    }
+
+    const isDuplicate = (students || []).some(
+      s => s.name.trim().toLowerCase() === newPupilName.trim().toLowerCase() && s.class === newPupilClass
+    );
+
+    if (isDuplicate) {
+      playFeedbackSound('error');
+      triggerAppToast(`Conflict: Pupil "${newPupilName.trim()}" is already registered in class ${newPupilClass}!`, 'error');
+      return;
+    }
+
+    try {
+      addStudent(
+        newPupilName.trim(),
+        newPupilClass,
+        newPupilPhone.trim() || undefined,
+        newPupilPhoto || undefined,
+        newPupilDiscount,
+        newPupilGender,
+        newPupilPaymentType,
+        newPupilTermFee,
+        newPupilLegacyDebt
+      );
+
+      playFeedbackSound('success');
+      triggerAppToast(`Pupil "${newPupilName.trim()}" enrolled successfully into Class ${newPupilClass}!`, 'success');
+      
+      setNewPupilName('');
+      setNewPupilClass('B1');
+      setNewPupilPhone('');
+      setNewPupilGender('Male');
+      setNewPupilPaymentType('Daily');
+      setNewPupilDiscount(0);
+      setNewPupilTermFee(350);
+      setNewPupilLegacyDebt(0);
+      setNewPupilPhoto(null);
+      setIsAddPupilModalOpen(false);
+    } catch (err) {
+      playFeedbackSound('error');
+      triggerAppToast(err instanceof Error ? err.message : 'Failed to register pupil.', 'error');
+    }
+  };
 
   React.useEffect(() => {
     // Intercept default window.print to handle iframe sandboxing constraints
@@ -251,7 +350,7 @@ function NavigationWrapper() {
       <header className="bg-neutral-900 shrink-0 border-b-4 border-neutral-800">
         <div className="px-8 py-4 flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <SchoolLogo size={44} className="border-2 border-neutral-850" />
+            <SchoolLogo size={44} />
             <div className="bg-amber-400 text-black font-black p-1 text-xl px-3 leading-none tracking-tighter">
               FEETRACK
             </div>
@@ -317,6 +416,22 @@ function NavigationWrapper() {
 
             <div className="h-8 w-[1px] bg-neutral-800" />
 
+            {/* Direct quick registry enrollment action available for Administrators and Teachers */}
+            {(currentUser.role === 'Administrator' || currentUser.role === 'Headmaster' || currentUser.role === 'Teacher') && (
+              <>
+                <button
+                  onClick={() => setIsAddPupilModalOpen(true)}
+                  className="bg-amber-400 hover:bg-amber-300 text-neutral-900 border-2 border-neutral-950 px-4 py-2 font-mono text-xs font-black uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[1px_1px_0px_0px_rgba(0,0,0,1)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none shrink-0 rounded-none no-print"
+                  title="Quick Register Active Pupil"
+                  id="btn-desktop-quick-add-pupil"
+                >
+                  <Plus size={14} className="stroke-[3.5]" />
+                  <span>+ Pupil Quick Add</span>
+                </button>
+                <div className="h-8 w-[1px] bg-neutral-800" />
+              </>
+            )}
+
             <div className="flex gap-2">
               <button
                 onClick={() => setTheme(theme === 'daylight' ? 'dark' : 'daylight')}
@@ -336,13 +451,26 @@ function NavigationWrapper() {
             </div>
           </div>
 
-          {/* Mobile responsive toggle */}
-          <button 
-            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="md:hidden p-2 text-white/85 hover:text-white hover:bg-white/5 border border-neutral-800 transition-all"
-          >
-            {mobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
-          </button>
+          {/* Mobile responsive toggle & actions */}
+          <div className="flex md:hidden items-center gap-2.5">
+            {(currentUser.role === 'Administrator' || currentUser.role === 'Headmaster' || currentUser.role === 'Teacher') && (
+              <button
+                onClick={() => setIsAddPupilModalOpen(true)}
+                className="bg-amber-400 hover:bg-amber-300 text-neutral-900 border-2 border-neutral-950 px-3 py-1.5 font-mono text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-[2px] active:translate-y-[2px] rounded-none no-print"
+                title="Quick Register Active Pupil"
+                id="btn-mobile-quick-add-pupil"
+              >
+                <Plus size={12} className="stroke-[4]" />
+                <span>+ Pupil</span>
+              </button>
+            )}
+            <button 
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              className="p-2 text-white/85 hover:text-white hover:bg-white/5 border border-neutral-800 transition-all"
+            >
+              {mobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
+            </button>
+          </div>
         </div>
       </header>
 
@@ -848,6 +976,337 @@ function NavigationWrapper() {
                 </button>
               </div>
             </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* QUICK ENROLL PUPIL MODAL OVERLAY */}
+      <AnimatePresence>
+        {isAddPupilModalOpen && (
+          <div className="fixed inset-0 bg-neutral-950/95 backdrop-blur-sm flex items-center justify-center p-4 z-50 no-print overflow-y-auto">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 30 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 30 }}
+              transition={{ type: "spring", duration: 0.4 }}
+              className="relative w-full max-w-2xl bg-neutral-900 border-4 border-amber-400 p-6 md:p-8 space-y-6 shadow-[10px_10px_0px_0px_rgba(251,191,36,0.2)] text-white flex flex-col my-8"
+            >
+              {/* Header */}
+              <div className="flex justify-between items-start border-b border-neutral-800 pb-4">
+                <div className="flex items-start gap-3">
+                  <div className="p-2.5 bg-amber-400/10 border border-amber-400 text-amber-300 shrink-0">
+                    <GraduationCap size={22} className="text-amber-400" />
+                  </div>
+                  <div>
+                    <span className="text-[9px] text-amber-400 font-mono tracking-widest font-black uppercase block">CORE REGISTRY ACTION</span>
+                    <h3 className="text-lg font-black uppercase tracking-tight">Quick Enroll Pupil Portal</h3>
+                    <p className="text-[11px] text-neutral-400 mt-0.5">
+                      Directly register and admit a new student into Saako Holy Child Academy. Changes propagate instantly to active databases.
+                    </p>
+                  </div>
+                </div>
+                <button 
+                  type="button"
+                  onClick={() => setIsAddPupilModalOpen(false)} 
+                  className="p-1 cursor-pointer text-neutral-400 hover:text-white hover:bg-neutral-850 border border-transparent hover:border-neutral-800 transition-all"
+                  title="Collapse Register View"
+                  id="btn-close-enroll-pupil-modal"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              {/* Form Body */}
+              <form onSubmit={handleAddPupilSubmit} className="space-y-5">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                  
+                  {/* Student Name */}
+                  <div className="space-y-1.5">
+                    <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest font-mono">
+                      Student Full Name <span className="text-red-500 font-bold">*</span>
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-3.5 top-3 text-neutral-500">
+                        <User size={14} />
+                      </span>
+                      <input 
+                        type="text"
+                        required
+                        value={newPupilName}
+                        onChange={(e) => setNewPupilName(e.target.value)}
+                        placeholder="e.g. Kwame Mensah Kofi"
+                        className="w-full bg-neutral-950 border border-neutral-800 py-2.5 pl-9 pr-4 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder-neutral-600 rounded-none uppercase"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Student Class */}
+                  <div className="space-y-1.5">
+                    <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest font-mono">
+                      Assigned Class Group <span className="text-red-500 font-bold">*</span>
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-3.5 top-3.5 text-neutral-500 pointer-events-none">
+                        <GraduationCap size={14} />
+                      </span>
+                      <select
+                        value={newPupilClass}
+                        onChange={(e) => setNewPupilClass(e.target.value as StudentClass)}
+                        className="w-full bg-neutral-950 border border-neutral-800 py-3 pl-9 pr-10 text-xs font-mono font-black text-amber-400 focus:outline-none focus:border-amber-400 uppercase cursor-pointer appearance-none rounded-none"
+                      >
+                        <optgroup label="Pre-School" className="bg-neutral-950 text-neutral-500">
+                          {PRE_SCHOOL_CLASSES.map(cls => (
+                            <option key={cls} value={cls} className="bg-neutral-900 text-white font-mono">{cls}</option>
+                          ))}
+                        </optgroup>
+                        <optgroup label="Primary School" className="bg-neutral-950 text-neutral-500">
+                          {PRIMARY_CLASSES.map(cls => (
+                            <option key={cls} value={cls} className="bg-neutral-900 text-white font-mono">{cls}</option>
+                          ))}
+                        </optgroup>
+                        <optgroup label="Junior High School (JHS)" className="bg-neutral-950 text-neutral-500">
+                          {JHS_CLASSES.map(cls => (
+                            <option key={cls} value={cls} className="bg-neutral-900 text-white font-mono">{cls}</option>
+                          ))}
+                        </optgroup>
+                      </select>
+                      <div className="absolute right-3.5 top-4 pointer-events-none text-neutral-500">
+                        <ChevronDown size={14} className="stroke-[3]" />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Gender Selector */}
+                  <div className="space-y-1.5">
+                    <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest font-mono">
+                      Pupil Gender <span className="text-red-500 font-bold">*</span>
+                    </label>
+                    <div className="flex gap-4">
+                      {['Male', 'Female'].map((gender) => (
+                        <label 
+                          key={gender}
+                          className={`flex-1 flex items-center justify-center gap-2 border-2 py-2.5 px-4 text-xs font-mono font-black uppercase cursor-pointer transition-all ${
+                            newPupilGender === gender
+                              ? 'bg-amber-400/10 border-amber-400 text-amber-400'
+                              : 'bg-neutral-950 border-neutral-800 text-neutral-400 hover:border-neutral-600'
+                          }`}
+                        >
+                          <input 
+                            type="radio" 
+                            name="pupil-gender"
+                            value={gender}
+                            checked={newPupilGender === gender}
+                            onChange={() => setNewPupilGender(gender as any)}
+                            className="hidden" 
+                          />
+                          <span>{gender}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Guardian Phone */}
+                  <div className="space-y-1.5">
+                    <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest font-mono">
+                      Guardian WhatsApp / SMS contact
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-3.5 top-3 text-neutral-500">
+                        <Phone size={14} />
+                      </span>
+                      <input 
+                        type="tel"
+                        value={newPupilPhone}
+                        onChange={(e) => setNewPupilPhone(e.target.value)}
+                        placeholder="e.g. 0541234567 (defaults fallback)"
+                        className="w-full bg-neutral-950 border border-neutral-800 py-2.5 pl-9 pr-4 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder-neutral-600 rounded-none"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Payment Billing Type Mode */}
+                  <div className="space-y-1.5 col-span-1 md:col-span-2 border-t border-neutral-850 pt-4">
+                    <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest font-mono">
+                      Tuition/Fee Billing Model
+                    </label>
+                    <div className="flex gap-4">
+                      <button
+                        type="button"
+                        onClick={() => setNewPupilPaymentType('Daily')}
+                        className={`flex-1 border-2 py-3 px-4 font-mono text-center transition-all ${
+                          newPupilPaymentType === 'Daily'
+                            ? 'bg-amber-400/10 border-amber-400 text-amber-400'
+                            : 'bg-neutral-950 border-neutral-800 text-neutral-500 hover:border-neutral-700'
+                        }`}
+                      >
+                        <div className="text-xs font-black uppercase">Daily Porter (GHC 5.00)</div>
+                        <div className="text-[9px] mt-0.5 uppercase tracking-wider font-bold">Standard cash-on-check-in daily ledger</div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setNewPupilPaymentType('Term')}
+                        className={`flex-1 border-2 py-3 px-4 font-mono text-center transition-all ${
+                          newPupilPaymentType === 'Term'
+                            ? 'bg-amber-400/10 border-amber-400 text-amber-400'
+                            : 'bg-neutral-950 border-neutral-800 text-neutral-500 hover:border-neutral-700'
+                        }`}
+                      >
+                        <div className="text-xs font-black uppercase">Term Payer (Static Subscription)</div>
+                        <div className="text-[9px] mt-0.5 uppercase tracking-wider font-bold">Consolidated whole-term single billing rate</div>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Conditional billing parameters */}
+                  {newPupilPaymentType === 'Daily' ? (
+                    <div className="space-y-1.5 col-span-1 md:col-span-2 bg-neutral-950/60 p-4 border border-neutral-800/80 flex flex-col sm:flex-row gap-4 items-center justify-between">
+                      <div className="space-y-1 w-full sm:w-1/2">
+                        <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest font-mono">
+                          Daily Discount / Scholarship (GHC)
+                        </label>
+                        <div className="relative">
+                          <span className="absolute left-3 px-1.5 py-0.5 bg-neutral-900 border border-neutral-800 text-[10px] font-mono text-amber-400 font-bold top-2">GHC</span>
+                          <input 
+                            type="number"
+                            min="0"
+                            max="5"
+                            step="0.5"
+                            value={newPupilDiscount}
+                            onChange={(e) => setNewPupilDiscount(parseFloat(e.target.value) || 0)}
+                            className="w-full bg-neutral-900 border border-neutral-800 py-2 pl-14 pr-4 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 rounded-none"
+                          />
+                        </div>
+                      </div>
+                      <div className="w-full sm:w-1/2 text-left sm:text-right font-mono space-y-0.5">
+                        <p className="text-[9px] text-neutral-400 uppercase font-black tracking-widest">Effective Daily Rate</p>
+                        <p className="text-xl font-bold text-white leading-none">
+                          GHC {(5.00 - newPupilDiscount).toFixed(2)}
+                        </p>
+                        <p className="text-[8px] text-neutral-500 uppercase">
+                          Standard GHC 5.00 daily fee subtracted by discount rate
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5 col-span-1 md:col-span-2 bg-neutral-950/60 p-4 border border-neutral-800/80">
+                      <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest font-mono">
+                        Consolidated Term Subscription Fee (GHC)
+                      </label>
+                      <div className="relative">
+                        <span className="absolute left-3 px-1.5 py-0.5 bg-neutral-900 border border-neutral-800 text-[10px] font-mono text-amber-400 font-bold top-2">GHC</span>
+                        <input 
+                          type="number"
+                          min="0"
+                          step="10"
+                          value={newPupilTermFee}
+                          onChange={(e) => setNewPupilTermFee(parseFloat(e.target.value) || 0)}
+                          className="w-full bg-neutral-900 border border-neutral-800 py-2 pl-14 pr-4 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 rounded-none"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Legacy Arrears / Debt */}
+                  <div className="space-y-1.5 col-span-1 md:col-span-2">
+                    <label className="block text-[10px] font-black text-red-400 uppercase tracking-widest font-mono">
+                      Adoption Legacy Outstanding Arrears / Debt (GHC)
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-3 px-1.5 py-0.5 bg-neutral-950 border border-neutral-800 text-[10px] font-mono text-red-400 font-bold top-2.5">GHC</span>
+                      <input 
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={newPupilLegacyDebt}
+                        onChange={(e) => setNewPupilLegacyDebt(parseFloat(e.target.value) || 0)}
+                        placeholder="e.g. 150 (defaults 0)"
+                        className="w-full bg-neutral-950 border border-neutral-800 py-2.5 pl-14 pr-4 text-xs font-mono font-bold text-white focus:outline-none focus:border-red-400 rounded-none"
+                      />
+                    </div>
+                    <p className="text-[8px] font-mono text-neutral-500 uppercase leading-snug">
+                      Outstanding baseline bills outstanding from prior academic years to seed their digital profile ledger.
+                    </p>
+                  </div>
+
+                  {/* Pupil Photograph Picture Upload */}
+                  <div className="space-y-1.5 col-span-1 md:col-span-2">
+                    <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest font-mono">
+                      Pupil Photograph
+                    </label>
+                    {newPupilPhoto ? (
+                      <div className="relative w-full aspect-video bg-neutral-950 border-2 border-dashed border-amber-400 p-4 flex flex-col items-center justify-center gap-3">
+                        <img 
+                          src={newPupilPhoto} 
+                          alt="Pupil passport preview" 
+                          className="w-16 h-16 rounded-full object-cover border-2 border-amber-400"
+                          referrerPolicy="no-referrer"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setNewPupilPhoto(null)}
+                          className="text-[10px] font-mono font-black text-red-500 hover:text-red-400 uppercase tracking-wider bg-neutral-900 border border-neutral-800 px-3 py-1.5 transition-colors cursor-pointer"
+                        >
+                          Remove Photograph
+                        </button>
+                      </div>
+                    ) : (
+                      <label className="flex flex-col items-center justify-center w-full min-h-[96px] bg-neutral-950 border-2 border-dashed border-neutral-800 hover:border-neutral-600 p-4 cursor-pointer transition-all">
+                        <Upload size={18} className="text-neutral-500 mb-1.5" />
+                        <span className="text-[10px] font-mono font-bold text-neutral-400 uppercase tracking-wider text-center">Upload Photo/Passport</span>
+                        <span className="text-[8px] font-mono text-neutral-600 uppercase mt-0.5">JPEG / PNG up to 2MB</span>
+                        <input 
+                          type="file" 
+                          accept="image/*" 
+                          onChange={handlePhotoUpload} 
+                          className="hidden" 
+                        />
+                      </label>
+                    )}
+                  </div>
+
+                </div>
+
+                {/* Confirm Actions */}
+                <div className="border-t border-neutral-800 pt-5 flex gap-3">
+                  <button
+                    type="submit"
+                    className="flex-1 py-3.5 bg-amber-400 hover:bg-amber-300 text-black font-black uppercase text-xs tracking-widest transition-all cursor-pointer text-center font-mono flex items-center justify-center gap-2 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
+                  >
+                    <Check size={14} className="stroke-[3]" />
+                    <span>Confirm Admission Registration</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsAddPupilModalOpen(false)}
+                    className="px-5 py-3 bg-neutral-950 hover:bg-neutral-850 text-neutral-400 hover:text-white font-mono uppercase text-xs tracking-wider transition-colors border border-neutral-800 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* GLOBAL TOAST BANNER */}
+      <AnimatePresence>
+        {appToast && (
+          <motion.div
+            initial={{ opacity: 0, y: -20, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.9, y: -10 }}
+            className={`fixed top-6 right-6 z-[100] border-4 p-4 flex items-center gap-3 shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] ${
+              appToast.type === 'success' 
+                ? 'bg-neutral-900 border-emerald-500 text-emerald-400' 
+                : 'bg-neutral-900 border-red-500 text-red-400'
+            }`}
+          >
+            {appToast.type === 'success' ? <Check size={18} className="stroke-[3]" /> : <AlertCircle size={18} />}
+            <span className="text-xs font-mono font-black uppercase tracking-wider">
+              {appToast.message}
+            </span>
           </motion.div>
         )}
       </AnimatePresence>

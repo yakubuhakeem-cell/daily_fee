@@ -28,7 +28,12 @@
         "rollNumber": { "type": "string", "description": "Official roll code" },
         "active": { "type": "boolean", "description": "Student active status" },
         "guardianPhone": { "type": "string", "description": "Guardian phone contact code" },
-        "photoUrl": { "type": "string", "description": "Base64 encoded student photo data or custom avatar url links" }
+        "photoUrl": { "type": "string", "description": "Base64 encoded student photo data or custom avatar url links" },
+        "discount": { "type": "number", "description": "Optional daily check-in discount amount" },
+        "gender": { "type": "string", "enum": ["Male", "Female"], "description": "Student gender" },
+        "paymentType": { "type": "string", "enum": ["Daily", "Term"], "description": "Billing calculation model: daily vs static term subscription" },
+        "termFee": { "type": "number", "description": "Fixed fee for entire school term for Term Payer" },
+        "legacyDebt": { "type": "number", "description": "Pre-adoption / outstanding legacy debt to be integrated into system balance" }
       },
       "required": ["id", "name", "class", "category", "rollNumber", "active", "guardianPhone"]
     },
@@ -49,6 +54,42 @@
         "verified": { "type": "boolean", "description": "Instant verification status" }
       },
       "required": ["id", "studentId", "studentName", "class", "category", "amount", "date", "timestamp", "collectedBy", "verified"]
+    },
+    "Expense": {
+      "title": "Expense",
+      "description": "Daily school expenses",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique expense ID" },
+        "date": { "type": "string", "description": "Expense date (YYYY-MM-DD)" },
+        "amount": { "type": "number", "description": "Expense amount in GHC" },
+        "category": { "type": "string", "enum": ["Food", "Utilities", "Maintenance", "Transport", "Supplies", "Uniforms", "Others"], "description": "Expense category classification" },
+        "description": { "type": "string", "description": "Details of the expense" },
+        "approvedBy": { "type": "string", "description": "Name of approving staff member" },
+        "timestamp": { "type": "string", "description": "ISO timestamp of creation" }
+      },
+      "required": ["id", "date", "amount", "category", "description", "approvedBy", "timestamp"]
+    },
+    "WorkerSalary": {
+      "title": "WorkerSalary",
+      "description": "Workers salary payments",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique salary payment ID" },
+        "date": { "type": "string", "description": "Payment execution date (YYYY-MM-DD)" },
+        "workerName": { "type": "string", "description": "Worker full name" },
+        "userId": { "type": "string", "description": "Optional staff account ID" },
+        "monthYear": { "type": "string", "description": "Reference month (e.g. June 2026)" },
+        "role": { "type": "string", "description": "Worker job role" },
+        "baseSalary": { "type": "number", "description": "Base salary in GHC" },
+        "allowance": { "type": "number", "description": "Allowances / bonuses in GHC" },
+        "deduction": { "type": "number", "description": "Deductions in GHC" },
+        "netPaid": { "type": "number", "description": "Total net GHC paid" },
+        "paymentMethod": { "type": "string", "enum": ["Cash", "Mobile Money", "Bank Transfer"], "description": "Mode of payment" },
+        "notes": { "type": "string", "description": "Reference or personal notes" },
+        "timestamp": { "type": "string", "description": "ISO timestamp of payment" }
+      },
+      "required": ["id", "date", "workerName", "monthYear", "role", "baseSalary", "allowance", "deduction", "netPaid", "paymentMethod", "timestamp"]
     }
   },
   "firestore": {
@@ -63,6 +104,14 @@
     "/payments/{paymentId}": {
       "schema": "PaymentRecord",
       "description": "Collection of historical fee check-ins"
+    },
+    "/expenses/{expenseId}": {
+      "schema": "Expense",
+      "description": "Collection of custom daily expenditures"
+    },
+    "/salaries/{salaryId}": {
+      "schema": "WorkerSalary",
+      "description": "Collection of tracking logs of employee wages"
     }
   }
 }

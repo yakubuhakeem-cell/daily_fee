@@ -8,6 +8,19 @@
 
 /* HIGH-FIDELITY ADMINISTRATIVE PRINT MEDIA QUERY */
 @media print {
+  /* Set standard margins and dynamic "Page X of Y" page numbering in bottom-right corner */
+  @page {
+    margin: 12mm 15mm 15mm 15mm;
+    @bottom-right {
+      content: "Page " counter(page) " of " counter(pages);
+      font-family: "Space Mono", monospace !important;
+      font-size: 8px !important;
+      font-weight: bold !important;
+      color: #333333 !important;
+      padding-bottom: 5mm;
+    }
+  }
+
   /* 1. Hide navigations, user alerts, sidebars, interactive controls & floating buttons */
   header,
   aside,
@@ -38,7 +51,7 @@
   body,
   #root,
   main,
-  div {
+  div:not([id^="print"]):not([id^="print"] *) {
     background: transparent !important;
     background-color: #ffffff !important;
     color: #000000 !important;
@@ -52,42 +65,93 @@
 
   /* Bring back visibility specifically for the print friendly area container and children */
   #print-friendly-area,
-  #print-friendly-area * {
+  #print-friendly-area *,
+  #print-single-invoice-area-upgrade,
+  #print-single-invoice-area-upgrade * {
     visibility: visible !important;
-    display: block !important;
   }
 
-  /* Keep table components structured like tabulations */
+  /* Specific column-width constraints and roomier padding to prevent table content congestion */
+  .print-col-date,
+  #print-friendly-area .print-col-date,
+  #print-single-invoice-area-upgrade .print-col-date {
+    width: 18% !important;
+    min-width: 100px !important;
+    white-space: nowrap !important;
+    padding: 8px 10px !important;
+    text-align: left !important;
+  }
+
+  .print-col-ref,
+  #print-friendly-area .print-col-ref,
+  #print-single-invoice-area-upgrade .print-col-ref {
+    width: 22% !important;
+    min-width: 115px !important;
+    white-space: nowrap !important;
+    padding: 8px 10px !important;
+    text-align: left !important;
+  }
+
+  .print-col-status,
+  #print-friendly-area .print-col-status,
+  #print-single-invoice-area-upgrade .print-col-status {
+    width: 20% !important;
+    min-width: 110px !important;
+    white-space: nowrap !important;
+    padding: 8px 10px !important;
+    text-align: center !important;
+  }
+
+  .print-col-fee,
+  #print-friendly-area .print-col-fee,
+  #print-single-invoice-area-upgrade .print-col-fee {
+    width: 18% !important;
+    min-width: 90px !important;
+    white-space: nowrap !important;
+    padding: 8px 10px !important;
+    text-align: right !important;
+  }
+
+  .print-col-auditor,
+  #print-friendly-area .print-col-auditor,
+  #print-single-invoice-area-upgrade .print-col-auditor {
+    width: 22% !important;
+    min-width: 125px !important;
+    white-space: nowrap !important;
+    padding: 8px 10px !important;
+    text-align: right !important;
+    text-overflow: ellipsis !important;
+    overflow: hidden !important;
+  }
+
+  /* Apply spacious and clear defaults to all print-ready table rows and headers */
   #print-friendly-area table,
+  #print-single-invoice-area-upgrade table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    margin-top: 14px !important;
+    margin-bottom: 14px !important;
+    table-layout: fixed !important; /* Forces fixed columns based on specified percentages to prevent compression */
+  }
+
   #print-friendly-area th,
-  #print-friendly-area td {
-    display: table !important;
-  }
-
-  #print-friendly-area tr {
-    display: table-row !important;
-  }
-
-  #print-friendly-area thead {
-    display: table-header-group !important;
-  }
-
-  #print-friendly-area tbody {
-    display: table-row-group !important;
-  }
-
   #print-friendly-area td,
-  #print-friendly-area th {
-    display: table-cell !important;
-    border: 1px solid #7f7f7f !important;
-    padding: 6px 8px !important;
-    font-size: 10px !important;
+  #print-single-invoice-area-upgrade th,
+  #print-single-invoice-area-upgrade td {
+    padding: 10px 12px !important; /* Roomier, comfortable padding */
+    font-size: 10px !important; /* Highly readable and clean print text font magnitude */
+    line-height: 1.4 !important;
+    border-bottom: 1px solid #7f7f7f !important;
     color: #000000 !important;
   }
 
-  #print-friendly-area th {
+  #print-friendly-area th,
+  #print-single-invoice-area-upgrade th {
     background-color: #f3f4f6 !important;
-    font-weight: bold !important;
+    color: #000000 !important;
+    font-weight: 800 !important;
+    border-bottom: 2px solid #000000 !important;
+    font-family: inherit !important;
   }
 
   #print-friendly-area {
@@ -210,3 +274,54 @@
   color: #991b1b !important;
 }
 
+/* KEYBOARD SHORTCUT & FOCUS ANIMATIONS FOR SEARCH SHIFTING */
+@keyframes searchFocusGlow {
+  0% {
+    box-shadow: 0 0 0 0px rgba(245, 158, 11, 0);
+    transform: scale(1);
+  }
+  20% {
+    box-shadow: 0 0 0 5px rgba(245, 158, 11, 0.4);
+    transform: scale(1.008);
+  }
+  100% {
+    box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.15);
+    transform: scale(1);
+  }
+}
+
+@keyframes searchTextFocus {
+  0% {
+    text-shadow: 0 0 0px rgba(245, 158, 11, 0);
+    letter-spacing: 0.05em;
+  }
+  30% {
+    text-shadow: 0 0 6px rgba(245, 158, 11, 0.6);
+    letter-spacing: 0.08em;
+  }
+  100% {
+    text-shadow: 0 0 0px rgba(245, 158, 11, 0);
+    letter-spacing: 0.05em;
+  }
+}
+
+/* Subtle border and layout expansion wave when inputs receive focus */
+#class-register-search:focus,
+#dashboard-roster-search:focus,
+#reports-student-search:focus,
+#term-payers-search:focus {
+  animation: searchFocusGlow 0.45s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+/* For admin input matching style constraints */
+#admin-student-search:focus {
+  animation: searchTextFocus 0.45s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+}
+
+/* Highlight parent row containing the admin-student-search input to make it pop visually */
+div:has(> #admin-student-search:focus) {
+  border-bottom-color: #f59e0b !important;
+  box-shadow: 0 2px 12px rgba(245, 158, 11, 0.12) !important;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}

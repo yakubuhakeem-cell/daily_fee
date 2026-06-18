@@ -7,9 +7,12 @@ import React, { useState, useMemo, useEffect } from 'react';
 import QRCode from 'qrcode';
 import { useApp } from '../context/AppContext';
 import { StudentClass, Student, UserRole } from '../types';
-import { Plus, UserPlus, Trash2, Edit2, ShieldAlert, Check, X, ToggleLeft, ToggleRight, Database, Server, RefreshCw, Copy, Share2, Users, BellRing, MessageSquareCode, UserCheck, Camera, Upload, Search, QrCode, Printer, Contact, Award } from 'lucide-react';
+import { Plus, UserPlus, Trash2, Edit2, ShieldAlert, Check, X, ToggleLeft, ToggleRight, Database, Server, RefreshCw, Copy, Share2, Users, BellRing, MessageSquareCode, UserCheck, Camera, Upload, Search, QrCode, Printer, Contact, Award, DollarSign, Info, MessageSquare } from 'lucide-react';
 import { getClassCategory } from '../initialData';
 import { AdjustmentsTab } from './AdjustmentsTab';
+import { ExpendituresTab } from './ExpendituresTab';
+import { WhatsAppLogsTab } from './WhatsAppLogsTab';
+import { VoiceSearchButton } from './VoiceSearchButton';
 
 export const AdminPanel: React.FC = () => {
   const { 
@@ -50,10 +53,12 @@ export const AdminPanel: React.FC = () => {
     nextBackupTimeLeft,
     audioMuted,
     setAudioMuted,
-    playFeedbackSound
+    playFeedbackSound,
+    whatsappLogs,
+    fetchWhatsappLogs
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'students' | 'mfa' | 'gates' | 'database' | 'adjustments'>('students');
+  const [activeTab, setActiveTab] = useState<'students' | 'mfa' | 'gates' | 'database' | 'adjustments' | 'expenditures' | 'whatsapp'>('students');
   const [studentFilter, setStudentFilter] = useState<'all' | 'active' | 'inactive'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [showLedgerSwitchModal, setShowLedgerSwitchModal] = useState(false);
@@ -278,6 +283,7 @@ export const AdminPanel: React.FC = () => {
   const [newStudentGender, setNewStudentGender] = useState<'Male' | 'Female'>('Male');
   const [newStudentPaymentType, setNewStudentPaymentType] = useState<'Daily' | 'Term'>('Daily');
   const [newStudentTermFee, setNewStudentTermFee] = useState<number>(350);
+  const [newStudentLegacyDebt, setNewStudentLegacyDebt] = useState<number>(0);
   const [editStudentObj, setEditStudentObj] = useState<Student | null>(null);
 
   // Arrears log collapse state
@@ -786,7 +792,8 @@ export const AdminPanel: React.FC = () => {
       newStudentDiscount,
       newStudentGender,
       newStudentPaymentType,
-      newStudentTermFee
+      newStudentTermFee,
+      newStudentLegacyDebt
     );
     setNewStudentName('');
     setNewStudentPhone('');
@@ -795,6 +802,7 @@ export const AdminPanel: React.FC = () => {
     setNewStudentGender('Male');
     setNewStudentPaymentType('Daily');
     setNewStudentTermFee(350);
+    setNewStudentLegacyDebt(0);
     showToast('Student successfully registered to the daily ledger catalog.');
   };
 
@@ -807,6 +815,7 @@ export const AdminPanel: React.FC = () => {
     setNewStudentGender('Male');
     setNewStudentPaymentType('Daily');
     setNewStudentTermFee(350);
+    setNewStudentLegacyDebt(0);
     showToast('Student registration form cleared.');
   };
 
@@ -1415,6 +1424,17 @@ export const AdminPanel: React.FC = () => {
             Database Connect
           </button>
           <button
+            onClick={() => setActiveTab('expenditures')}
+            className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
+              activeTab === 'expenditures'
+                ? 'bg-amber-400 text-black'
+                : 'text-neutral-500 hover:text-white'
+            }`}
+          >
+            <DollarSign size={13} />
+            Expenditures
+          </button>
+          <button
             onClick={() => setActiveTab('adjustments')}
             className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
               activeTab === 'adjustments'
@@ -1424,6 +1444,17 @@ export const AdminPanel: React.FC = () => {
           >
             <RefreshCw size={13} />
             Adjust Payments
+          </button>
+          <button
+            onClick={() => setActiveTab('whatsapp')}
+            className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
+              activeTab === 'whatsapp'
+                ? 'bg-amber-400 text-black'
+                : 'text-neutral-550 hover:text-white'
+            }`}
+          >
+            <MessageSquare size={13} />
+            WhatsApp Logs
           </button>
         </div>
       </div>
@@ -1776,6 +1807,23 @@ export const AdminPanel: React.FC = () => {
                       <p className="text-[9px] font-mono text-neutral-550 mt-1 uppercase tracking-wide">
                         Paying a customized static flat charge of <strong className="text-amber-500">GHC {newStudentTermFee.toFixed(2)}</strong> for the entire term (exempt from daily debt).
                       </p>
+
+                      <div className="mt-4">
+                        <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                          Pre-adoption Outstanding Legacy Debt (GHC) - Optional
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={newStudentLegacyDebt || ''}
+                          onChange={(e) => setNewStudentLegacyDebt(Math.max(0, parseFloat(e.target.value) || 0))}
+                          className="w-full bg-neutral-950 border-2 border-neutral-800 py-3 px-4 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-700 font-mono"
+                          placeholder="e.g. 150.00"
+                        />
+                        <p className="text-[9px] font-mono text-neutral-550 mt-1 uppercase tracking-wide">
+                          Manually enter any pre-adoption outstanding debt (e.g. <strong className="text-red-400">GHC {(newStudentLegacyDebt || 0).toFixed(2)}</strong>) to be integrated into this pupil's ledger and outstanding balance.
+                        </p>
+                      </div>
                     </div>
                   ) : (
                     <div>
@@ -1998,6 +2046,23 @@ export const AdminPanel: React.FC = () => {
                       <p className="text-[9px] font-mono text-neutral-550 mt-1 uppercase tracking-wide">
                         Paying a customized static flat charge of <strong className="text-amber-500">GHC {(editStudentObj.termFee !== undefined ? editStudentObj.termFee : 350).toFixed(2)}</strong> for the entire term (exempt from daily debt).
                       </p>
+
+                      <div className="mt-4">
+                        <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                          Pre-adoption Outstanding Legacy Debt (GHC)
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={editStudentObj.legacyDebt !== undefined ? editStudentObj.legacyDebt : 0}
+                          onChange={(e) => setEditStudentObj({ ...editStudentObj, legacyDebt: Math.max(0, parseFloat(e.target.value) || 0) })}
+                          className="w-full bg-neutral-950 border-2 border-neutral-800 py-3 px-4 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-700 font-mono"
+                          placeholder="e.g. 150.00"
+                        />
+                        <p className="text-[9px] font-mono text-neutral-550 mt-1 uppercase tracking-wide">
+                          Manually enter any pre-adoption outstanding debt (e.g. <strong className="text-red-400">GHC {(editStudentObj.legacyDebt || 0).toFixed(2)}</strong>) to be integrated into this pupil's ledger and outstanding balance.
+                        </p>
+                      </div>
                     </div>
                   ) : (
                     <div>
@@ -2411,14 +2476,28 @@ export const AdminPanel: React.FC = () => {
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full bg-transparent border-0 p-0 text-xs text-white placeholder-neutral-650 focus:outline-none focus:ring-0 font-mono font-bold uppercase tracking-wider"
               />
+              <VoiceSearchButton
+                inputId="admin-student-search"
+                onTranscript={(text) => setSearchQuery(text)}
+                className="shrink-0"
+              />
               <kbd className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 border border-neutral-800 bg-neutral-950 font-mono text-[8px] text-neutral-500 rounded-xs leading-none pointer-events-none uppercase font-bold tracking-wider select-none shrink-0">
                 Ctrl+K
               </kbd>
+              
+              {/* Keyboard shortcut info indicator reminder */}
+              <div 
+                className="hidden md:flex items-center justify-center text-neutral-500 hover:text-amber-400 cursor-help select-none shrink-0"
+                title="Keyboard Shortcut Reminder: Press 'Ctrl+K' (or 'Cmd+K' on macOS) from anywhere at any time to focus this student search box instantly"
+              >
+                <Info size={12} className="stroke-[2.5]" />
+              </div>
+
               {searchQuery && (
                 <button
                   type="button"
                   onClick={() => setSearchQuery('')}
-                  className="text-[10px] font-mono font-black text-neutral-400 hover:text-white uppercase transition-all cursor-pointer"
+                  className="text-[10px] font-mono font-black text-neutral-400 hover:text-white uppercase transition-all cursor-pointer shrink-0"
                 >
                   Clear
                 </button>
@@ -3812,8 +3891,10 @@ export const AdminPanel: React.FC = () => {
             </div>
           </div>
         </div>
-      ) : (
+      ) : activeTab === 'adjustments' ? (
         <AdjustmentsTab />
+      ) : (
+        <ExpendituresTab />
       )}
       {/* SMS Urgent notification Modal Overlay */}
       {smsTarget && (

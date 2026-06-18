@@ -26,6 +26,7 @@ import {
   Info
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { VoiceSearchButton } from './VoiceSearchButton';
 import { 
   ResponsiveContainer, 
   LineChart, 
@@ -58,7 +59,8 @@ export const Dashboard: React.FC = () => {
     pendingLocalEdits,
     seedFirebaseFromLocal,
     storageMode,
-    users
+    users,
+    expenses
   } = useApp();
 
   const [syncStatus, setSyncStatus] = useState<{ loading: boolean; error: string | null; successMessage: string | null }>({
@@ -441,6 +443,73 @@ export const Dashboard: React.FC = () => {
       "Target Goal": parseFloat(row.historicalAvg.toFixed(2))
     }));
   }, [weeklyCollectionsData]);
+
+  const dailyExpenditureChartData = useMemo(() => {
+    const groups: { [date: string]: { [category: string]: number } } = {};
+    
+    expenses.forEach(e => {
+      const dateStr = e.date;
+      if (!groups[dateStr]) {
+        groups[dateStr] = {
+          Supplies: 0,
+          Maintenance: 0,
+          Utility: 0,
+          Payroll: 0,
+          Food: 0,
+          Transport: 0,
+          Uniforms: 0,
+          Others: 0,
+        };
+      }
+      
+      const category = e.category === 'Utilities' ? 'Utility' : e.category;
+      if (groups[dateStr][category] !== undefined) {
+        groups[dateStr][category] += e.amount;
+      } else {
+        groups[dateStr].Others += e.amount;
+      }
+    });
+
+    const sortedDates = Object.keys(groups).sort();
+    
+    if (sortedDates.length === 0) {
+      return weeklyCollectionsData.weekdays.map(d => ({
+        date: d.dateStr,
+        name: d.label.substring(0, 3).toUpperCase(),
+        Supplies: 0,
+        Maintenance: 0,
+        Utility: 0,
+        Payroll: 0,
+        Food: 0,
+        Transport: 0,
+        Uniforms: 0,
+        Others: 0,
+        total: 0
+      }));
+    }
+
+    // Map sorted dates to Recharts objects (keep latest 10 days to fit nicely)
+    const recentDates = sortedDates.slice(-10);
+    return recentDates.map(dateStr => {
+      const g = groups[dateStr];
+      const dObj = new Date(dateStr);
+      const name = dObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      const total = g.Supplies + g.Maintenance + g.Utility + g.Payroll + g.Food + g.Transport + g.Uniforms + g.Others;
+      return {
+        date: dateStr,
+        name,
+        Supplies: parseFloat(g.Supplies.toFixed(2)),
+        Maintenance: parseFloat(g.Maintenance.toFixed(2)),
+        Utility: parseFloat(g.Utility.toFixed(2)),
+        Payroll: parseFloat(g.Payroll.toFixed(2)),
+        Food: parseFloat(g.Food.toFixed(2)),
+        Transport: parseFloat(g.Transport.toFixed(2)),
+        Uniforms: parseFloat(g.Uniforms.toFixed(2)),
+        Others: parseFloat(g.Others.toFixed(2)),
+        total: parseFloat(total.toFixed(2))
+      };
+    });
+  }, [expenses, weeklyCollectionsData]);
 
   // Custom Recharts dark-theme tooltip
   const CustomTooltip = ({ active, payload, label }: any) => {
@@ -828,8 +897,45 @@ export const Dashboard: React.FC = () => {
         </div>
       </motion.div>
 
-      {/* 5 Interactive KPI Cards - Heightened Design with Side Accent borders */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
+      {/* 6 Interactive KPI Cards - Heightened Design with Side Accent borders */}
+      <motion.div 
+        key={activeLayout}
+        variants={containerVariants}
+        initial="hidden"
+        animate="show"
+        className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-6"
+      >
+
+        {/* Metric: Daily Summary for Selected Date */}
+        <motion.div variants={itemVariants} className="bg-neutral-900 border-4 border-neutral-800 border-l-amber-400 p-6 flex flex-col justify-between min-h-[145px] hover:border-r-neutral-700 transition-all">
+          <div className="flex justify-between items-start">
+            <span className="text-[10px] font-black text-amber-400 uppercase tracking-widest font-mono">Daily Summary ({dateFilter})</span>
+            <Calendar size={16} className="text-amber-400" />
+          </div>
+          <div className="mt-3">
+            <div className="text-[10px] text-neutral-500 uppercase font-black tracking-wider leading-none mb-1">
+              Collected for {dateFilter}
+            </div>
+            <h3 className="text-3xl font-black font-mono text-white tracking-tight leading-none">
+              GHC {stats.totalCollected.toFixed(2)}
+            </h3>
+            
+            <div className="mt-3 pt-2.5 border-t border-neutral-800/80 space-y-1.5 text-[9px] font-mono uppercase">
+              <div className="flex justify-between text-neutral-400 font-bold">
+                <span>Pre-School:</span>
+                <span className="text-white font-extrabold">GHC {stats.byCategory['Pre-school'].toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between text-neutral-400 font-bold">
+                <span>Primary:</span>
+                <span className="text-white font-extrabold">GHC {stats.byCategory['Primary'].toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between text-neutral-400 font-bold">
+                <span>JHS:</span>
+                <span className="text-white font-extrabold">GHC {stats.byCategory['JHS'].toFixed(2)}</span>
+              </div>
+            </div>
+          </div>
+        </motion.div>
 
         {/* Metric 1: Total Accumulated Revenue */}
         <motion.div variants={itemVariants} className="bg-neutral-900 border-4 border-neutral-800 border-l-amber-400 p-6 flex flex-col justify-between min-h-[145px] hover:border-r-neutral-700 transition-all">
@@ -1122,7 +1228,7 @@ export const Dashboard: React.FC = () => {
             </p>
           </div>
         </motion.div>
-      </div>
+      </motion.div>
 
       {/* Enrollment & Today's Attendance & Sync Health Banner Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -1820,19 +1926,34 @@ export const Dashboard: React.FC = () => {
               {/* Filters & Inputs Bar */}
               <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3 bg-neutral-950/50 p-4 border border-neutral-850">
                 {/* Search Box */}
-                <div className="relative flex-1 max-w-md">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-neutral-500" size={14} />
-                  <input
-                    id="dashboard-roster-search"
-                    type="text"
-                    value={dutySearch}
-                    onChange={(e) => setDutySearch(e.target.value)}
-                    placeholder="Search roster by staff name, class grade or specific duty..."
-                    className="w-full bg-neutral-950 border border-neutral-800 focus:border-neutral-604 focus:ring-0 text-white placeholder-neutral-500 text-xs pl-9 pr-16 py-2 uppercase font-mono tracking-wide rounded-none"
-                  />
-                  <kbd className="absolute right-2 top-1/2 -translate-y-1/2 hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 border border-neutral-800 bg-neutral-950 font-mono text-[8px] text-neutral-500 rounded-xs leading-none pointer-events-none uppercase font-bold tracking-wider select-none">
-                    Ctrl+K
-                  </kbd>
+                <div className="flex items-center gap-2 flex-1 max-w-md">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-neutral-500" size={14} />
+                    <input
+                      id="dashboard-roster-search"
+                      type="text"
+                      value={dutySearch}
+                      onChange={(e) => setDutySearch(e.target.value)}
+                      placeholder="Search roster by staff name, class grade or specific duty..."
+                      className="w-full bg-neutral-950 border border-neutral-800 focus:border-neutral-604 focus:ring-0 text-white placeholder-neutral-500 text-xs pl-9 pr-16 py-2 uppercase font-mono tracking-wide rounded-none"
+                    />
+                    <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
+                      <VoiceSearchButton
+                        inputId="dashboard-roster-search"
+                        onTranscript={(text) => setDutySearch(text)}
+                      />
+                      <kbd className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 border border-neutral-800 bg-neutral-950 font-mono text-[8px] text-neutral-500 rounded-xs leading-none pointer-events-none uppercase font-bold tracking-wider select-none">
+                        Ctrl+K
+                      </kbd>
+                    </div>
+                  </div>
+                  {/* Keyboard shortcut info indicator reminder */}
+                  <div 
+                    className="hidden md:flex items-center justify-center text-neutral-500 hover:text-amber-400 border border-neutral-800 bg-neutral-950 hover:border-amber-400 transition-all cursor-help h-[34px] w-9 shrink-0 select-none"
+                    title="Keyboard Shortcut Reminder: Press 'Ctrl+K' (or 'Cmd+K' on macOS) from anywhere at any time to focus the search box instantly"
+                  >
+                    <Info size={13} className="stroke-[2.5]" />
+                  </div>
                 </div>
 
                 {/* Filter Tabs */}
@@ -2402,6 +2523,112 @@ export const Dashboard: React.FC = () => {
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
+              </div>
+            </div>
+
+            {/* Daily Expenditures Breakdown Stacked Bar Chart */}
+            <div className="bg-neutral-950 border-2 border-neutral-850 p-6 space-y-4 animate-fade-in">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <div>
+                  <h4 className="text-xs font-black text-white uppercase tracking-wider font-mono">Total Daily Expenditures Breakdown</h4>
+                  <p className="text-[9px] text-neutral-500 font-mono uppercase tracking-widest mt-0.5">Chronological summary of overhead expenditures categorized by functional areas</p>
+                </div>
+                {/* Visual Legend Key highlights */}
+                <div className="flex flex-wrap gap-x-3 gap-y-1.5 text-[8.5px] font-mono uppercase text-neutral-400 font-black">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 bg-[#60a5fa] rounded-sm" />
+                    <span>Supplies</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 bg-[#fbbf24] rounded-sm" />
+                    <span>Maintenance</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 bg-[#22d3ee] rounded-sm" />
+                    <span>Utility</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 bg-[#34d399] rounded-sm" />
+                    <span>Payroll</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 bg-[#818cf8] rounded-sm" />
+                    <span>Food</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 bg-[#f472b6] rounded-sm" />
+                    <span>Transport</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 bg-[#a78bfa] rounded-sm" />
+                    <span>Uniforms</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 bg-[#737373] rounded-sm" />
+                    <span>Others</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="h-64 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={dailyExpenditureChartData} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1c1c1c" vertical={false} />
+                    <XAxis 
+                      dataKey="name" 
+                      stroke="#4b5563" 
+                      fontSize={9} 
+                      tickLine={false} 
+                      axisLine={false}
+                    />
+                    <YAxis 
+                      stroke="#4b5563" 
+                      fontSize={9} 
+                      tickLine={false} 
+                      axisLine={false}
+                      tickFormatter={(v) => `GHC ${v}`}
+                    />
+                    <RechartsTooltip 
+                      content={({ active, payload, label }) => {
+                        if (active && payload && payload.length) {
+                          const rawLabel = payload[0].payload.date;
+                          const totalAmt = payload[0].payload.total;
+                          return (
+                            <div className="bg-neutral-900 border-2 border-neutral-800 p-3.5 font-mono text-[9.5px] uppercase space-y-2.5 shadow-2xl min-w-[200px]">
+                              <div className="border-b border-neutral-800 pb-1.5 flex justify-between items-center">
+                                <span className="font-extrabold text-neutral-400">{rawLabel}</span>
+                                <span className="text-amber-400 font-black">GHC {totalAmt.toFixed(2)}</span>
+                              </div>
+                              <div className="space-y-1">
+                                {payload.map((entry: any) => {
+                                  if (!entry.value) return null;
+                                  return (
+                                    <div key={entry.name} className="flex justify-between items-center gap-4">
+                                      <span className="flex items-center gap-1.5 font-bold text-neutral-300">
+                                        <span className="w-2 h-2 rounded-xs" style={{ backgroundColor: entry.color }} />
+                                        {entry.name}
+                                      </span>
+                                      <span className="font-extrabold text-white">GHC {entry.value.toFixed(2)}</span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        }
+                        return null;
+                      }} 
+                    />
+                    <Bar dataKey="Supplies" stackId="exp" fill="#60a5fa" maxBarSize={28} />
+                    <Bar dataKey="Maintenance" stackId="exp" fill="#fbbf24" maxBarSize={28} />
+                    <Bar dataKey="Utility" stackId="exp" fill="#22d3ee" maxBarSize={28} />
+                    <Bar dataKey="Payroll" stackId="exp" fill="#34d399" maxBarSize={28} />
+                    <Bar dataKey="Food" stackId="exp" fill="#818cf8" maxBarSize={28} />
+                    <Bar dataKey="Transport" stackId="exp" fill="#f472b6" maxBarSize={28} />
+                    <Bar dataKey="Uniforms" stackId="exp" fill="#a78bfa" maxBarSize={28} />
+                    <Bar dataKey="Others" stackId="exp" fill="#737373" maxBarSize={28} radius={[2, 2, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
             </div>
 
