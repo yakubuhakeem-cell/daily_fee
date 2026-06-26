@@ -17,7 +17,7 @@ import {
   memoryLocalCache
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { Student, PaymentRecord, UserAccount, Term, Expense, WorkerSalary } from '../types';
+import { Student, PaymentRecord, UserAccount, Term, Expense, WorkerSalary, SystemSettings, BudgetTarget } from '../types';
 
 const dbId = (!firebaseConfig.firestoreDatabaseId || firebaseConfig.firestoreDatabaseId === 'default') 
   ? undefined 
@@ -33,10 +33,11 @@ export const firestoreDb = initializeFirestore(app, {
 
 // Core Timeout helper to prevent infinite hangs in sandbox, network filters, or offline situations
 async function withTimeout<T>(promise: Promise<T>, timeoutMs = 8000, context = 'Firestore Operation'): Promise<T> {
+  const finalTimeoutMs = Math.max(timeoutMs, 8000);
   const timeoutPromise = new Promise<never>((_, reject) => {
     setTimeout(() => {
-      reject(new Error(`[Timeout Error] ${context} timed out after ${timeoutMs}ms. Possible database setup missing or slow connection.`));
-    }, timeoutMs);
+      reject(new Error(`[Timeout Error] ${context} timed out after ${finalTimeoutMs}ms. Possible database setup missing or slow connection.`));
+    }, finalTimeoutMs);
   });
   return Promise.race([promise, timeoutPromise]);
 }
@@ -407,6 +408,72 @@ export const db = {
       return res.ok;
     } catch (e) {
       console.error("Local Server API deleteSalary error: ", e);
+      return false;
+    }
+  },
+
+  async getSystemSettings(): Promise<SystemSettings | null> {
+    try {
+      const res = await fetch("/api/settings");
+      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+      return await res.json();
+    } catch (e) {
+      console.error("Local Server API getSystemSettings error: ", e);
+      return null;
+    }
+  },
+
+  async saveSystemSettings(settings: SystemSettings): Promise<boolean> {
+    try {
+      const res = await fetch("/api/settings", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(settings),
+      });
+      return res.ok;
+    } catch (e) {
+      console.error("Local Server API saveSystemSettings error: ", e);
+      return false;
+    }
+  },
+
+  async getBudgetTargets(): Promise<BudgetTarget[] | null> {
+    try {
+      const res = await fetch("/api/budget_targets");
+      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+      return await res.json();
+    } catch (e) {
+      console.error("Local Server API getBudgetTargets error: ", e);
+      return null;
+    }
+  },
+
+  async saveBudgetTarget(target: BudgetTarget): Promise<boolean> {
+    try {
+      const res = await fetch("/api/budget_targets", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(target),
+      });
+      return res.ok;
+    } catch (e) {
+      console.error("Local Server API saveBudgetTarget error: ", e);
+      return false;
+    }
+  },
+
+  async deleteBudgetTarget(targetId: string): Promise<boolean> {
+    try {
+      const res = await fetch(`/api/budget_targets/${targetId}`, {
+        method: "DELETE",
+      });
+      return res.ok;
+    } catch (e) {
+      console.error("Local Server API deleteBudgetTarget error: ", e);
       return false;
     }
   }

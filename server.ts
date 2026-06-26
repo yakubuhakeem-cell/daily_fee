@@ -3,7 +3,7 @@ import path from "path";
 import fs from "fs";
 import dotenv from "dotenv";
 import { initializeApp } from "firebase/app";
-import { initializeFirestore, memoryLocalCache, collection, doc, getDocs, setDoc, deleteDoc, writeBatch } from "firebase/firestore";
+import { initializeFirestore, memoryLocalCache, collection, doc, getDoc, getDocs, setDoc, deleteDoc, writeBatch } from "firebase/firestore";
 
 dotenv.config();
 
@@ -18,6 +18,8 @@ interface DatabaseSchema {
   expenses?: any[];
   salaries?: any[];
   whatsappLogs?: any[];
+  systemSettings?: any;
+  budgetTargets?: any[];
 }
 
 function loadDatabase(): DatabaseSchema {
@@ -28,12 +30,15 @@ function loadDatabase(): DatabaseSchema {
       if (!parsed.whatsappLogs) {
         parsed.whatsappLogs = [];
       }
+      if (!parsed.budgetTargets) {
+        parsed.budgetTargets = [];
+      }
       return parsed;
     }
   } catch (error) {
     console.error("Failed to load local DB file, using fallback:", error);
   }
-  return { users: [], students: [], payments: [], terms: [], expenses: [], salaries: [], whatsappLogs: [] };
+  return { users: [], students: [], payments: [], terms: [], expenses: [], salaries: [], whatsappLogs: [], systemSettings: null, budgetTargets: [] };
 }
 
 function saveDatabase(data: DatabaseSchema) {
@@ -45,11 +50,12 @@ function saveDatabase(data: DatabaseSchema) {
 }
 
 // Core Timeout helper to prevent infinite hangs in sandbox or offline situations
-async function withTimeout<T>(promise: Promise<T>, timeoutMs = 2000, context = 'Firestore Operation'): Promise<T> {
+async function withTimeout<T>(promise: Promise<T>, timeoutMs = 8000, context = 'Firestore Operation'): Promise<T> {
+  const finalTimeoutMs = Math.max(timeoutMs, 8000);
   const timeoutPromise = new Promise<never>((_, reject) => {
     setTimeout(() => {
-      reject(new Error(`[Timeout Error] ${context} timed out after ${timeoutMs}ms.`));
-    }, timeoutMs);
+      reject(new Error(`[Timeout Error] ${context} timed out after ${finalTimeoutMs}ms.`));
+    }, finalTimeoutMs);
   });
   return Promise.race([promise, timeoutPromise]);
 }
@@ -80,7 +86,7 @@ async function bootstrapCloudSeeding() {
   if (!firestoreDb) return;
   try {
     console.log("Checking Cloud Firestore seed status...");
-    const qSnapshot = await withTimeout(getDocs(collection(firestoreDb, "users")), 2500, "Seed Check");
+    const qSnapshot = await withTimeout(getDocs(collection(firestoreDb, "users")), 15000, "Seed Check");
     if (qSnapshot.empty) {
       console.log("Cloud Firestore is empty. Seeding Firestore with local db.json database...");
       const local = loadDatabase();
@@ -96,7 +102,7 @@ async function bootstrapCloudSeeding() {
               batch.set(doc(firestoreDb, "users", item.id), item);
             }
           });
-          await withTimeout(batch.commit(), 3000, "Seed Users Batch");
+          await withTimeout(batch.commit(), 15000, "Seed Users Batch");
         }
       }
 
@@ -110,7 +116,7 @@ async function bootstrapCloudSeeding() {
               batch.set(doc(firestoreDb, "students", item.id), item);
             }
           });
-          await withTimeout(batch.commit(), 3000, "Seed Students Batch");
+          await withTimeout(batch.commit(), 15000, "Seed Students Batch");
         }
       }
 
@@ -124,7 +130,7 @@ async function bootstrapCloudSeeding() {
               batch.set(doc(firestoreDb, "payments", item.id), item);
             }
           });
-          await withTimeout(batch.commit(), 3000, "Seed Payments Batch");
+          await withTimeout(batch.commit(), 15000, "Seed Payments Batch");
         }
       }
 
@@ -156,7 +162,7 @@ async function bootstrapCloudSeeding() {
               batch.set(doc(firestoreDb, "terms", item.id), item);
             }
           });
-          await withTimeout(batch.commit(), 3000, "Seed Terms Batch");
+          await withTimeout(batch.commit(), 15000, "Seed Terms Batch");
         }
       }
 
@@ -781,6 +787,109 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // GET /api/budget_targets
+  app.get("/api/budget_targets", async (req, res) => {
+    if (firestoreDb) {
+      try {
+        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "budget_targets")), 1500, "getBudgetTargets");
+        const list = qSnaps.docs.map(d => d.data());
+        // Sync local cache
+        const dbLocal = loadDatabase();
+        dbLocal.budgetTargets = list;
+        saveDatabase(dbLocal);
+        return res.json(list);
+      } catch (e) {
+        console.error("Firestore getBudgetTargets failed, falling back to local database:", e);
+      }
+    }
+    const dbLocal = loadDatabase();
+    res.json(dbLocal.budgetTargets || []);
+  });
+
+  // POST /api/budget_targets
+  app.post("/api/budget_targets", async (req, res) => {
+    const target = req.body;
+
+    // Save to local cache
+    const dbLocal = loadDatabase();
+    if (!dbLocal.budgetTargets) dbLocal.budgetTargets = [];
+    const idx = dbLocal.budgetTargets.findIndex((t) => t.id === target.id);
+    if (idx >= 0) {
+      dbLocal.budgetTargets[idx] = target;
+    } else {
+      dbLocal.budgetTargets.push(target);
+    }
+    saveDatabase(dbLocal);
+
+    if (firestoreDb) {
+      try {
+        await withTimeout(setDoc(doc(firestoreDb, "budget_targets", target.id), target), 1500, "saveBudgetTarget");
+      } catch (e) {
+        console.error("Firestore saveBudgetTarget failed:", e);
+      }
+    }
+    res.json({ success: true });
+  });
+
+  // DELETE /api/budget_targets/:id
+  app.delete("/api/budget_targets/:id", async (req, res) => {
+    const id = req.params.id;
+
+    // Save to local cache
+    const dbLocal = loadDatabase();
+    if (dbLocal.budgetTargets) {
+      dbLocal.budgetTargets = dbLocal.budgetTargets.filter((t) => t.id !== id);
+      saveDatabase(dbLocal);
+    }
+
+    if (firestoreDb) {
+      try {
+        await withTimeout(deleteDoc(doc(firestoreDb, "budget_targets", id)), 1500, "deleteBudgetTarget");
+      } catch (e) {
+        console.error("Firestore deleteBudgetTarget failed:", e);
+      }
+    }
+    res.json({ success: true });
+  });
+
+  // GET /api/settings
+  app.get("/api/settings", async (req, res) => {
+    if (firestoreDb) {
+      try {
+        const docSnap = await withTimeout(getDoc(doc(firestoreDb, "systemSettings", "main")), 2500, "getSystemSettings");
+        if (docSnap.exists()) {
+          const settingsObj = docSnap.data();
+          const dbLocal = loadDatabase();
+          dbLocal.systemSettings = settingsObj;
+          saveDatabase(dbLocal);
+          return res.json(settingsObj);
+        }
+      } catch (e) {
+        console.error("Firestore getSystemSettings failed, falling back to local database:", e);
+      }
+    }
+    const dbLocal = loadDatabase();
+    res.json(dbLocal.systemSettings || null);
+  });
+
+  // POST /api/settings
+  app.post("/api/settings", async (req, res) => {
+    const settingsObj = req.body;
+
+    const dbLocal = loadDatabase();
+    dbLocal.systemSettings = settingsObj;
+    saveDatabase(dbLocal);
+
+    if (firestoreDb) {
+      try {
+        await withTimeout(setDoc(doc(firestoreDb, "systemSettings", "main"), settingsObj), 2500, "saveSystemSettings");
+      } catch (e) {
+        console.error("Firestore saveSystemSettings failed:", e);
+      }
+    }
+    res.json({ success: true, settings: settingsObj });
+  });
+
   // GET /api/whatsapp/logs
   app.get("/api/whatsapp/logs", async (req, res) => {
     if (firestoreDb) {
@@ -816,18 +925,100 @@ async function startServer() {
     }
 
     let responseStatus = "simulated_success";
-    let responseDetails = "Simulated delivery. To trigger real messages, configure WHATSAPP_API_URL in Environment Variables.";
+    let responseDetails = "Simulated delivery. To trigger real messages, configure WHATSAPP_PROVIDER and required credentials in Environment Variables.";
 
-    if (process.env.WHATSAPP_API_URL) {
+    const provider = (process.env.WHATSAPP_PROVIDER || "ultramsg").toLowerCase();
+
+    // Check if any API credentials or URLs are configured to decide whether to trigger a real API
+    const isConfigured = 
+      provider === "meta" ||
+      provider === "twilio" ||
+      provider === "ultramsg" ||
+      !!process.env.WHATSAPP_API_URL || 
+      !!process.env.WHATSAPP_TWILIO_SID || 
+      !!process.env.WHATSAPP_PHONE_NUMBER_ID;
+
+    if (isConfigured) {
       try {
-        const url = process.env.WHATSAPP_API_URL;
-        const apiResponse = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${process.env.WHATSAPP_API_TOKEN || ''}`
-          },
-          body: JSON.stringify({
+        let url = "";
+        let method = "POST";
+        let headers: Record<string, string> = { "Content-Type": "application/json" };
+        let body: any = "";
+
+        if (provider === "twilio" || (!!process.env.WHATSAPP_TWILIO_SID && !process.env.WHATSAPP_API_URL)) {
+          // Twilio Integration
+          const twilioSid = process.env.WHATSAPP_TWILIO_SID || "";
+          const twilioAuthToken = process.env.WHATSAPP_TWILIO_AUTH_TOKEN || process.env.WHATSAPP_API_TOKEN || "";
+          let fromNumber = process.env.WHATSAPP_SENDER_PHONE || "";
+          if (fromNumber && !fromNumber.startsWith("whatsapp:")) {
+            fromNumber = `whatsapp:${fromNumber}`;
+          }
+
+          url = `https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/Messages.json`;
+          
+          const authString = Buffer.from(`${twilioSid}:${twilioAuthToken}`).toString("base64");
+          headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Authorization": `Basic ${authString}`
+          };
+
+          // Recipient phone must have + prefix for twilio
+          let twilioTo = normalizedPhone;
+          if (!twilioTo.startsWith("+")) {
+            twilioTo = `+${twilioTo}`;
+          }
+          if (!twilioTo.startsWith("whatsapp:")) {
+            twilioTo = `whatsapp:${twilioTo}`;
+          }
+
+          const params = new URLSearchParams();
+          params.append("To", twilioTo);
+          params.append("From", fromNumber);
+          params.append("Body", message);
+          body = params.toString();
+        } 
+        else if (provider === "meta" || !!process.env.WHATSAPP_PHONE_NUMBER_ID) {
+          // Meta Cloud API Integration
+          const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID || "";
+          const token = process.env.WHATSAPP_API_TOKEN || "";
+          url = `https://graph.facebook.com/v20.0/${phoneId}/messages`;
+          
+          headers = {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${token}`
+          };
+          body = JSON.stringify({
+            messaging_product: "whatsapp",
+            recipient_type: "individual",
+            to: normalizedPhone,
+            type: "text",
+            text: { preview_url: false, body: message }
+          });
+        }
+        else if (provider === "ultramsg" || (process.env.WHATSAPP_API_URL && process.env.WHATSAPP_API_URL.includes("ultramsg.com"))) {
+          // UltraMsg Integration
+          url = process.env.WHATSAPP_API_URL || "https://api.ultramsg.com/instance181469/";
+          const token = process.env.WHATSAPP_API_TOKEN || "uitetqebejgf296w";
+          
+          if (url && !url.endsWith("/messages/chat") && !url.includes("messages/chat")) {
+            url = url.endsWith('/') ? `${url}messages/chat` : `${url}/messages/chat`;
+          }
+          
+          headers = { "Content-Type": "application/x-www-form-urlencoded" };
+          const params = new URLSearchParams();
+          params.append("token", token);
+          params.append("to", normalizedPhone);
+          params.append("body", message);
+          body = params.toString();
+        }
+        else {
+          // Custom / Generic webhook configuration (fallback)
+          url = process.env.WHATSAPP_API_URL || "";
+          headers = {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${process.env.WHATSAPP_API_TOKEN || ""}`
+          };
+          body = JSON.stringify({
             messaging_product: "whatsapp",
             to: normalizedPhone,
             type: "text",
@@ -840,9 +1031,10 @@ async function startServer() {
               studentName,
               type
             }
-          })
-        });
+          });
+        }
 
+        const apiResponse = await fetch(url, { method, headers, body });
         const responseText = await apiResponse.text();
         let responseJson;
         try {
@@ -856,11 +1048,11 @@ async function startServer() {
           responseDetails = `Delivered successfully. HTTP ${apiResponse.status}: ${JSON.stringify(responseJson)}`;
         } else {
           responseStatus = "api_error";
-          responseDetails = `Gateway returned HTTP ${apiResponse.status}: ${JSON.stringify(responseJson)}`;
+          responseDetails = `Gateway response HTTP ${apiResponse.status}: ${JSON.stringify(responseJson)}`;
         }
       } catch (error: any) {
         responseStatus = "connection_failed";
-        responseDetails = `Could not reach external gateway. Error: ${error?.message || error}`;
+        responseDetails = `Failed to contact gateway endpoint. Error: ${error?.message || error}`;
       }
     }
 

@@ -11,7 +11,7 @@ import { StudentClass, UserRole } from '../types';
 import { SchoolLogo } from './SchoolLogo';
 
 export const LoginMFA: React.FC = () => {
-  const { login, users, registerStaff } = useApp();
+  const { login, users, registerStaff, systemSettings } = useApp();
   const [email, setEmail] = useState('');
   const [mfaCode, setMfaCode] = useState('');
   const [password, setPassword] = useState('');
@@ -104,11 +104,11 @@ export const LoginMFA: React.FC = () => {
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-6 mt-4 sm:mt-0">
             <div className="space-y-4">
               <div className="bg-amber-400 text-black font-black p-1 text-2xl px-4 leading-none tracking-tighter w-fit">
-                FEETRACK
+                {systemSettings?.systemName || 'FEETRACK'}
               </div>
               
               <h2 className="text-2xl sm:text-3xl font-black tracking-tight uppercase italic leading-none max-w-[280px]">
-                SAAKO HOLY CHILD ACADEMY
+                {systemSettings?.schoolName || 'SAAKO HOLY CHILD ACADEMY'}
               </h2>
               <p className="text-xs text-neutral-400 font-mono uppercase tracking-[0.12em]">
                 Daily Fee Ledger Tracker & Auditing

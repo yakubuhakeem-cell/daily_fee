@@ -4,6 +4,7 @@
  */
 
 import React from 'react';
+import { useApp } from '../context/AppContext';
 
 interface SchoolLogoProps {
   size?: number;
@@ -16,6 +17,26 @@ export const SchoolLogo: React.FC<SchoolLogoProps> = ({
   className = '', 
   lightBackground = false 
 }) => {
+  const { systemSettings } = useApp();
+
+  if (systemSettings?.schoolLogoUrl) {
+    return (
+      <img 
+        src={systemSettings.schoolLogoUrl} 
+        alt={systemSettings.schoolName || "School Logo"} 
+        width={size}
+        height={size}
+        className={`object-contain select-none shrink-0 rounded-full border border-neutral-800 shadow-sm ${className}`}
+        referrerPolicy="no-referrer"
+        style={{ width: size, height: size }}
+      />
+    );
+  }
+
+  const schoolName = (systemSettings?.schoolName || "SAAKO HOLY CHILD ACADEMY").toUpperCase();
+  const location = systemSettings?.customLocation || "Sawla";
+  const motto = systemSettings?.customMotto || "Holiness Is Our Key";
+
   return (
     <svg 
       width={size} 
@@ -54,7 +75,7 @@ export const SchoolLogo: React.FC<SchoolLogoProps> = ({
         strokeWidth="3.5" 
       />
 
-      {/* 3. Curved Heading: SAAKO HOLY CHILD ACADEMY */}
+      {/* 3. Curved Heading: Dynamic Name */}
       <text>
         <textPath 
           href="#academy-text-arc" 
@@ -66,7 +87,7 @@ export const SchoolLogo: React.FC<SchoolLogoProps> = ({
           letterSpacing="1px" 
           fontFamily="system-ui, -apple-system, sans-serif"
         >
-          SAAKO HOLY CHILD ACADEMY
+          {schoolName}
         </textPath>
       </text>
 
@@ -243,7 +264,7 @@ export const SchoolLogo: React.FC<SchoolLogoProps> = ({
           strokeLinejoin="round"
         />
 
-        {/* Centre Label text 'Sawla' inside banner */}
+        {/* Centre Label text Dynamic Location inside banner */}
         <text 
           x="200" 
           y="304" 
@@ -254,11 +275,11 @@ export const SchoolLogo: React.FC<SchoolLogoProps> = ({
           letterSpacing="1px"
           fontFamily="system-ui, -apple-system, sans-serif"
         >
-          Sawla
+          {location}
         </text>
       </g>
 
-      {/* 9. Motto at bottom: Holiness Is Our Key */}
+      {/* 9. Motto at bottom: Dynamic Motto */}
       <text 
         x="200" 
         y="346" 
@@ -269,7 +290,7 @@ export const SchoolLogo: React.FC<SchoolLogoProps> = ({
         letterSpacing="0.8px"
         fontFamily="Georgia, serif"
       >
-        Holiness Is Our Key
+        {motto}
       </text>
     </svg>
   );

@@ -201,14 +201,14 @@
 }
 
 /* Base elements within daylight theme */
-.daylight main, .daylight div, .daylight footer, .daylight header {
+.daylight main, .daylight footer, .daylight header {
   background-color: var(--color-neutral-950) !important;
   color: var(--color-neutral-400) !important;
 }
 
 .daylight h1, .daylight h2, .daylight h3, .daylight h4, .daylight p,
-.daylight span, .daylight th, .daylight td, .daylight button, .daylight label, .daylight strong {
-  color: #0f172a !important;
+.daylight th, .daylight td, .daylight button, .daylight label, .daylight strong {
+  color: #0f172a;
 }
 
 /* Card components & background panels */

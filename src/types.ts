@@ -67,6 +67,9 @@ export interface UserAccount {
   passwordEnabled?: boolean;
   password?: string;
   active?: boolean;
+  stipendSalary?: number; // Teacher monthly stipend/salary
+  momoNumber?: string; // Teacher Momo contact number
+  momoName?: string; // Teacher Momo registered name
 }
 
 export interface Term {
@@ -143,7 +146,46 @@ export interface WorkerSalary {
   paymentMethod: PaymentMethod;
   notes?: string;
   timestamp: string; // ISO timestamp
+  momoNumber?: string; // Momo payment contact number
+  momoName?: string; // Momo payment name
+  ssnitDeduction?: number;         // SSNIT (Option 1)
+  incomeTaxDeduction?: number;     // Income Tax / PAYE (Option 2)
+  welfareDeduction?: number;       // Welfare Contribution (Option 3)
+  healthInsDeduction?: number;     // Health Insurance (Option 4)
+  responsibilityAllowance?: number; // Responsibility (Option 5)
+  transportAllowance?: number;     // Transport (Option 6)
+  rentAllowance?: number;          // Rent (Option 7)
+  momoFeeAbsorbed?: number;        // MOMO Fee (Option 8)
 }
+
+export interface SystemSettings {
+  schoolName: string;
+  systemName: string;
+  schoolLogoUrl: string;
+  baselineDailyFee: number;
+  baselineTermFee: number;
+  currencyCode: string;
+  customMotto?: string;
+  customLocation?: string;
+  autoSendCheckInAlert?: boolean;
+  autoSendArrearsAlert?: boolean;
+  primaryColor?: string;
+  adminWhatsAppPhone?: string;
+}
+
+export interface BudgetTarget {
+  id: string;
+  itemName: string;
+  targetAmount: number;
+  savedPercentage: number;
+  createdAt: string; // ISO date string (YYYY-MM-DD or full timestamp)
+  active: boolean;
+  completed: boolean;
+  description?: string;
+  category?: string;
+  notifiedThresholds?: number[];
+}
+
 
 
 

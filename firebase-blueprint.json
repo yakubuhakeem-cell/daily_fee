@@ -90,6 +90,22 @@
         "timestamp": { "type": "string", "description": "ISO timestamp of payment" }
       },
       "required": ["id", "date", "workerName", "monthYear", "role", "baseSalary", "allowance", "deduction", "netPaid", "paymentMethod", "timestamp"]
+    },
+    "BudgetTarget": {
+      "title": "BudgetTarget",
+      "description": "Savings action plans for buying target properties using daily received fee percentages",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique target item ID" },
+        "itemName": { "type": "string", "description": "Name of target item, e.g. School bus" },
+        "targetAmount": { "type": "number", "description": "Target purchase cost in GHC" },
+        "savedPercentage": { "type": "number", "description": "Specified percentage from total daily collections" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" },
+        "active": { "type": "boolean", "description": "Target active status" },
+        "completed": { "type": "boolean", "description": "Flag indicating target is fully funded and bought" },
+        "description": { "type": "string", "description": "Extra details and notes" }
+      },
+      "required": ["id", "itemName", "targetAmount", "savedPercentage", "createdAt", "active", "completed"]
     }
   },
   "firestore": {
@@ -112,6 +128,10 @@
     "/salaries/{salaryId}": {
       "schema": "WorkerSalary",
       "description": "Collection of tracking logs of employee wages"
+    },
+    "/budget_targets/{targetId}": {
+      "schema": "BudgetTarget",
+      "description": "Collection of saving target action plans"
     }
   }
 }

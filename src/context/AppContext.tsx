@@ -4,10 +4,50 @@
  */
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { Student, PaymentRecord, UserAccount, UserRole, StudentClass, SchoolCategory, Term, PendingEdit, BackupRecord, Expense, ExpenseCategory, PaymentMethod, WorkerSalary } from '../types';
+import { Student, PaymentRecord, UserAccount, UserRole, StudentClass, SchoolCategory, Term, PendingEdit, BackupRecord, Expense, ExpenseCategory, PaymentMethod, WorkerSalary, SystemSettings, BudgetTarget } from '../types';
 import { INITIAL_USERS, INITIAL_STUDENTS, generateSeedPayments, getClassCategory } from '../initialData';
 import { db as rawDb } from '../lib/firebase';
 import { generateSchoolDays } from '../utils/termUtils';
+
+
+// Safe wrapper over browser's localStorage to prevent QuotaExceededError and sandbox blocking from crashing the application.
+const localStorage = {
+  getItem(key: string): string | null {
+    try {
+      return typeof window !== 'undefined' ? window.localStorage.getItem(key) : null;
+    } catch (e) {
+      console.warn(`[LocalStorage Read Warning] Key "${key}":`, e);
+      return null;
+    }
+  },
+  setItem(key: string, value: string): void {
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(key, value);
+      }
+    } catch (e) {
+      console.error(`[LocalStorage Write Error] Exceeded quota or blocked for key "${key}":`, e);
+    }
+  },
+  removeItem(key: string): void {
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.removeItem(key);
+      }
+    } catch (e) {
+      console.warn(`[LocalStorage Remove Warning] Key "${key}":`, e);
+    }
+  },
+  clear(): void {
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.clear();
+      }
+    } catch (e) {
+      console.warn(`[LocalStorage Clear Warning]`, e);
+    }
+  }
+};
 
 let globalOnSaveProgress: ((change: number) => void) | null = null;
 
@@ -63,17 +103,20 @@ interface AppContextType {
   deleteStudent: (studentId: string) => void;
   purgeDeactivatedStudents: () => void;
   promoteAllStudents: () => void;
-  recordPayment: (studentId: string, verified?: boolean, customAmount?: number) => void;
+  recordPayment: (studentId: string, verified?: boolean, customAmount?: number, customNotes?: string, allowDuplicate?: boolean) => void;
+  recordPresentZeroPay: (studentId: string) => void;
   recordAbsent: (studentId: string) => void;
   recordAdvancePayment: (studentId: string, amount: number, verified?: boolean) => void;
   recordBackwardPayment: (studentId: string, amount: number, verified?: boolean) => void;
-  bulkRecordPayments: (studentIds: string[], verified?: boolean) => void;
+  bulkRecordPayments: (studentIds: string[], verified?: boolean, customAmount?: number) => void;
+  recordPupilBulkDates: (studentId: string, dates: string[], actionType: 'paid' | 'absent' | 'present_zero' | 'clear', customAmount?: number) => void;
   verifyPayment: (paymentId: string) => void;
   deletePayment: (paymentId: string) => void;
+  clearDailyPaymentsForClass: (classId: StudentClass, date: string) => void;
   deleteStudentPayments: (studentId: string) => void;
   adjustPayment: (paymentId: string, updatedAmount: number, updatedIsAbsent: boolean, notes: string, reason: string) => void;
-  registerStaff: (name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled?: boolean, passwordEnabled?: boolean, password?: string, assignedClasses?: StudentClass[]) => { success: boolean; error?: string };
-  updateStaff: (userId: string, name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled?: boolean, passwordEnabled?: boolean, password?: string, assignedClasses?: StudentClass[]) => { success: boolean; error?: string };
+  registerStaff: (name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled?: boolean, passwordEnabled?: boolean, password?: string, assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string) => { success: boolean; error?: string };
+  updateStaff: (userId: string, name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled?: boolean, passwordEnabled?: boolean, password?: string, assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string) => { success: boolean; error?: string };
   deleteStaff: (userId: string) => { success: boolean; error?: string };
   toggleStaffActive: (userId: string) => { success: boolean; error?: string };
   getDailyStats: (date: string) => DailyStats;
@@ -102,7 +145,6 @@ interface AppContextType {
   restoreBackup: (backupId: string) => void;
   deleteBackup: (backupId: string) => void;
   clearAllBackups: () => void;
-  nextBackupTimeLeft: number; // in seconds
   audioMuted: boolean;
   setAudioMuted: (muted: boolean) => void;
   playFeedbackSound: (type: 'success' | 'error' | 'warning') => void;
@@ -112,11 +154,42 @@ interface AppContextType {
   salaries: WorkerSalary[];
   addExpense: (amount: number, category: ExpenseCategory, description: string, approvedBy: string, date: string) => void;
   deleteExpense: (expenseId: string) => void;
-  addSalary: (workerName: string, role: string, baseSalary: number, allowance: number, deduction: number, paymentMethod: PaymentMethod, monthYear: string, date: string, notes?: string, userId?: string) => void;
+  addSalary: (
+    workerName: string,
+    role: string,
+    baseSalary: number,
+    allowance: number,
+    deduction: number,
+    paymentMethod: PaymentMethod,
+    monthYear: string,
+    date: string,
+    notes?: string,
+    userId?: string,
+    momoNumber?: string,
+    momoName?: string,
+    ssnitDeduction?: number,
+    incomeTaxDeduction?: number,
+    welfareDeduction?: number,
+    healthInsDeduction?: number,
+    responsibilityAllowance?: number,
+    transportAllowance?: number,
+    rentAllowance?: number,
+    momoFeeAbsorbed?: number
+  ) => void;
   deleteSalary: (salaryId: string) => void;
   whatsappLogs: any[];
   sendautomatedWhatsApp: (phone: string, message: string, studentId?: string, studentName?: string, type?: string) => Promise<{ success: boolean; log?: any; error?: string }>;
   fetchWhatsappLogs: () => Promise<void>;
+  systemSettings: SystemSettings;
+  updateSystemSettings: (newSettings: Partial<SystemSettings>) => Promise<boolean>;
+  autoSendCheckInAlert: boolean;
+  setAutoSendCheckInAlert: (enabled: boolean) => void;
+  autoSendArrearsAlert: boolean;
+  setAutoSendArrearsAlert: (enabled: boolean) => void;
+  budgetTargets: BudgetTarget[];
+  addBudgetTarget: (itemName: string, targetAmount: number, savedPercentage: number, description?: string, category?: string) => Promise<void>;
+  updateBudgetTarget: (target: BudgetTarget) => Promise<void>;
+  deleteBudgetTarget: (targetId: string) => Promise<void>;
 }
 
 export interface DailyStats {
@@ -159,8 +232,10 @@ export function calculateStudentFinancialState(
   student: Student,
   payments: PaymentRecord[],
   activeTerm: Term | null,
-  currentDate: string
+  currentDate: string,
+  baselineDailyFee?: number
 ) {
+  const baseDailyFee = baselineDailyFee ?? 5.00;
   if (student.paymentType === 'Term') {
     const termFee = student.termFee || 350;
     const legacyDebt = student.legacyDebt || 0;
@@ -170,19 +245,20 @@ export function calculateStudentFinancialState(
       .filter(p => !p.isAbsent)
       .reduce((sum, p) => sum + p.amount, 0);
     const runningBalance = totalPaid - totalTarget;
+    const isCheckedInToday = studentPayments.some(p => p.date === currentDate && !p.isAbsent);
     return {
       paymentType: 'Term' as const,
       runningBalance,
       totalRequired: totalTarget,
       totalPaid,
       pastUnpaidDays: [] as string[],
-      isPaidToday: totalPaid >= totalTarget,
+      isPaidToday: isCheckedInToday,
       totalDebt: runningBalance < 0 ? Math.abs(runningBalance) : 0,
       prepaidDaysCount: 0
     };
   }
 
-  const dailyRate = Math.max(0.01, 5.00 - (student.discount || 0));
+  const dailyRate = Math.max(0.01, baseDailyFee - (student.discount || 0));
   const studentPayments = payments.filter(p => p.studentId === student.id);
 
   if (!activeTerm || !activeTerm.schoolDays) {
@@ -277,6 +353,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [salaries, setSalaries] = useState<WorkerSalary[]>([]);
   const [whatsappLogs, setWhatsappLogs] = useState<any[]>([]);
+  const [budgetTargets, setBudgetTargets] = useState<BudgetTarget[]>([]);
+
+  const DEFAULT_SETTINGS: SystemSettings = {
+    schoolName: "SAAKO HOLY CHILD ACADEMY",
+    systemName: "FEETRACK",
+    schoolLogoUrl: "",
+    baselineDailyFee: 5.00,
+    baselineTermFee: 350.00,
+    currencyCode: "GHC",
+    customMotto: "Holiness Is Our Key",
+    customLocation: "Sawla",
+    autoSendCheckInAlert: false,
+    autoSendArrearsAlert: false,
+    primaryColor: "#fbbf24"
+  };
+
+  const [systemSettings, setSystemSettingsState] = useState<SystemSettings>(() => {
+    try {
+      const saved = localStorage.getItem('s_system_settings');
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch (e) {
+      console.warn("Failed parsing local system settings: ", e);
+    }
+    return DEFAULT_SETTINGS;
+  });
+
+  const updateSystemSettings = async (newSettings: Partial<SystemSettings>): Promise<boolean> => {
+    const updated = { ...systemSettings, ...newSettings };
+    setSystemSettingsState(updated);
+    localStorage.setItem('s_system_settings', JSON.stringify(updated));
+
+    try {
+      const success = await db.saveSystemSettings(updated);
+      return success;
+    } catch (e) {
+      console.error("Failed to save system settings:", e);
+      return false;
+    }
+  };
 
   const activeTerm = terms.find(t => t.active) || null;
 
@@ -313,6 +430,92 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.setItem('s_theme', t);
     setThemeState(t);
   };
+
+  useEffect(() => {
+    const primaryColor = systemSettings?.primaryColor || '#fbbf24';
+    
+    // Simple helper to get darker shade for hover/active states
+    const getHoverColor = (hex: string): string => {
+      let cleaned = hex.replace('#', '');
+      if (cleaned.length === 3) {
+        cleaned = cleaned.split('').map(c => c + c).join('');
+      } else if (cleaned.length !== 6) {
+        return '#d97706'; // fallback to standard dark amber
+      }
+      let r = parseInt(cleaned.substring(0, 2), 16);
+      let g = parseInt(cleaned.substring(2, 4), 16);
+      let b = parseInt(cleaned.substring(4, 6), 16);
+
+      r = Math.max(0, Math.min(255, Math.round(r * 0.85)));
+      g = Math.max(0, Math.min(255, Math.round(g * 0.85)));
+      b = Math.max(0, Math.min(255, Math.round(b * 0.85)));
+
+      const rs = r.toString(16).padStart(2, '0');
+      const gs = g.toString(16).padStart(2, '0');
+      const bs = b.toString(16).padStart(2, '0');
+
+      return `#${rs}${gs}${bs}`;
+    };
+
+    const hoverColor = getHoverColor(primaryColor);
+
+    // Remove old style element if it exists
+    const existingStyle = document.getElementById('dynamic-brand-styles');
+    if (existingStyle) {
+      existingStyle.remove();
+    }
+
+    // Create a new style element with comprehensive color override rules
+    const styleEl = document.createElement('style');
+    styleEl.id = 'dynamic-brand-styles';
+    styleEl.innerHTML = `
+      /* Dynamic dynamic-brand-styles */
+      .bg-amber-400 {
+        background-color: ${primaryColor} !important;
+      }
+      .text-amber-400 {
+        color: ${primaryColor} !important;
+      }
+      .border-amber-400 {
+        border-color: ${primaryColor} !important;
+      }
+      .selection\\:bg-amber-400::selection {
+        background-color: ${primaryColor} !important;
+        color: #000000 !important;
+      }
+      .hover\\:bg-amber-400:hover {
+        background-color: ${primaryColor} !important;
+      }
+      .hover\\:text-amber-400:hover {
+        color: ${primaryColor} !important;
+      }
+      .hover\\:border-amber-400:hover {
+        border-color: ${primaryColor} !important;
+      }
+      .focus\\:border-amber-400:focus {
+        border-color: ${primaryColor} !important;
+      }
+      .hover\\:bg-amber-500:hover {
+        background-color: ${hoverColor} !important;
+      }
+      .bg-amber-500 {
+        background-color: ${hoverColor} !important;
+      }
+      .text-amber-500 {
+        color: ${hoverColor} !important;
+      }
+      .border-amber-500 {
+        border-color: ${hoverColor} !important;
+      }
+      .daylight .text-amber-400 {
+         color: ${hoverColor} !important;
+      }
+      .focus\\:ring-amber-400:focus {
+        --tw-ring-color: ${primaryColor} !important;
+      }
+    `;
+    document.head.appendChild(styleEl);
+  }, [systemSettings?.primaryColor]);
 
   const playFeedbackSound = (type: 'success' | 'error' | 'warning') => {
     if (audioMuted) return;
@@ -414,8 +617,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const saved = localStorage.getItem('s_backups');
     return saved ? JSON.parse(saved) : [];
   });
-
-  const [nextBackupTimeLeft, setNextBackupTimeLeft] = useState<number>(30 * 60);
 
   // Sync to refs for safe closure lookup in setInterval loop without re-triggering effect
   const studentsRef = React.useRef(students);
@@ -523,14 +724,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Background backup task - running every 30 minutes
   useEffect(() => {
     const intervalId = setInterval(() => {
-      setNextBackupTimeLeft(prev => {
-        if (prev <= 1) {
-          createBackup(undefined, true);
-          return 30 * 60; // Reset countdown
-        }
-        return prev - 1;
-      });
-    }, 1000);
+      createBackup(undefined, true);
+    }, 30 * 60 * 1000); // 30 minutes
 
     return () => clearInterval(intervalId);
   }, []);
@@ -585,15 +780,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     setBgSyncStatus('syncing');
     try {
-      const [dbUsers, dbStudents, dbPayments, dbExpenses, dbSalaries] = await Promise.all([
+      const [dbUsers, dbStudents, dbPayments, dbExpenses, dbSalaries, dbBudgetTargets] = await Promise.all([
         db.getUsers(),
         db.getStudents(),
         db.getPayments(),
         db.getExpenses(),
-        db.getSalaries()
+        db.getSalaries(),
+        db.getBudgetTargets()
       ]);
 
-      if (dbUsers === null || dbStudents === null || dbPayments === null || dbExpenses === null || dbSalaries === null) {
+      if (dbUsers === null || dbStudents === null || dbPayments === null || dbExpenses === null || dbSalaries === null || dbBudgetTargets === null) {
         setBgSyncStatus('error');
         return;
       }
@@ -603,6 +799,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setPayments(dbPayments);
       setExpenses(dbExpenses);
       setSalaries(dbSalaries);
+      setBudgetTargets(dbBudgetTargets);
 
       // Cache locally to keep quick sync speed
       localStorage.setItem('s_users', JSON.stringify(dbUsers));
@@ -610,6 +807,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.setItem('s_payments', JSON.stringify(dbPayments));
       localStorage.setItem('s_expenses', JSON.stringify(dbExpenses));
       localStorage.setItem('s_salaries', JSON.stringify(dbSalaries));
+      localStorage.setItem('s_budget_targets', JSON.stringify(dbBudgetTargets));
 
       setBgSyncStatus('success');
       setLastBgSyncTime(new Date().toLocaleTimeString());
@@ -642,6 +840,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [bgSyncEnabled, storageMode]);
 
   const initializeData = async () => {
+    try {
+      const dbSettings = await db.getSystemSettings();
+      if (dbSettings) {
+        setSystemSettingsState(dbSettings);
+        localStorage.setItem('s_system_settings', JSON.stringify(dbSettings));
+      }
+    } catch (e) {
+      console.warn("Failed loading initial system settings from local/cloud server:", e);
+    }
+
     const active = db.isActive() && storageMode === 'cloud';
     setFirebaseConnected(active);
     setFirebaseError(null);
@@ -653,6 +861,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const localUser = localStorage.getItem('s_current_user');
     const localExpenses = localStorage.getItem('s_expenses');
     const localSalaries = localStorage.getItem('s_salaries');
+    const localBudgetTargets = localStorage.getItem('s_budget_targets');
 
     // 1. Session authentication state loading
     try {
@@ -676,21 +885,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       
       try {
         // Run lookups in parallel to minimize wait times (cut 24s sequence down to 8s)
-        const [dbUsers, dbStudents, dbPayments, dbTerms, dbExpenses, dbSalaries] = await Promise.all([
+        const [dbUsers, dbStudents, dbPayments, dbTerms, dbExpenses, dbSalaries, dbBudgetTargets] = await Promise.all([
           db.getUsers(),
           db.getStudents(),
           db.getPayments(),
           db.getTerms(),
           db.getExpenses(),
-          db.getSalaries()
+          db.getSalaries(),
+          db.getBudgetTargets()
         ]);
 
-        if (dbUsers === null || dbStudents === null || dbPayments === null || dbTerms === null || dbExpenses === null || dbSalaries === null) {
+        if (dbUsers === null || dbStudents === null || dbPayments === null || dbTerms === null || dbExpenses === null || dbSalaries === null || dbBudgetTargets === null) {
           console.warn('Cloud database collections are offline/misconfigured. Falling back to LocalStorage...');
           setFirebaseConnected(false);
           setStorageModeState('local');
           setFirebaseError('Cloud database returned null. Reverting to local storage mode.');
-          loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries);
+          loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries, localBudgetTargets);
           return;
         }
 
@@ -755,7 +965,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setFirebaseConnected(false);
             setStorageModeState('local');
             setFirebaseError('Relational seeding transaction failed. Reverting to safe local storage mode.');
-            loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries);
+            loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries, localBudgetTargets);
             return;
           }
         }
@@ -765,6 +975,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setPayments(dbPayments);
         setExpenses(dbExpenses);
         setSalaries(dbSalaries);
+        setBudgetTargets(dbBudgetTargets);
 
         // Sync local copies as high speed cache
         localStorage.setItem('s_users', JSON.stringify(dbUsers));
@@ -772,6 +983,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         localStorage.setItem('s_payments', JSON.stringify(dbPayments));
         localStorage.setItem('s_expenses', JSON.stringify(dbExpenses));
         localStorage.setItem('s_salaries', JSON.stringify(dbSalaries));
+        localStorage.setItem('s_budget_targets', JSON.stringify(dbBudgetTargets));
         
         // Sync terms in active cloud mode
         if (dbTerms && dbTerms.length > 0) {
@@ -819,11 +1031,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         
         setFirebaseError(displayError);
-        loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries);
+        loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries, localBudgetTargets);
       }
     } else {
       console.log('FEETRACK running in standard client-persistence mode (Local Storage).');
-      loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries);
+      loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries, localBudgetTargets);
     }
   };
 
@@ -838,7 +1050,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localPayments: string | null,
       localTerms: string | null,
       localExpenses: string | null,
-      localSalaries: string | null
+      localSalaries: string | null,
+      localBudgetTargets: string | null
     ) => {
       // Users list healing
       try {
@@ -949,6 +1162,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setSalaries([]);
         localStorage.setItem('s_salaries', JSON.stringify([]));
       }
+
+      // Budget targets database healing
+      try {
+        if (localBudgetTargets) {
+          setBudgetTargets(JSON.parse(localBudgetTargets));
+        } else {
+          setBudgetTargets([]);
+          localStorage.setItem('s_budget_targets', JSON.stringify([]));
+        }
+      } catch (e) {
+        setBudgetTargets([]);
+        localStorage.setItem('s_budget_targets', JSON.stringify([]));
+      }
     };
 
   // Sync to local backups
@@ -1034,7 +1260,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const registerStaff = (name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled = false, passwordEnabled = false, password = '', assignedClasses?: StudentClass[]) => {
+  const registerStaff = (name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled = false, passwordEnabled = false, password = '', assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string) => {
     const trimmedEmail = email.toLowerCase().trim();
     if (users.some(u => u.email.toLowerCase() === trimmedEmail)) {
       return { success: false, error: 'A staff member with this email is already registered.' };
@@ -1053,7 +1279,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       mfaEnabled,
       mfaSecret: mfaEnabled ? 'SHA-' + Math.random().toString(36).substring(2, 10).toUpperCase() : undefined,
       passwordEnabled,
-      password: passwordEnabled ? password : undefined
+      password: passwordEnabled ? password : undefined,
+      stipendSalary,
+      momoNumber,
+      momoName
     };
 
     const nextUsers = [...users, newUser];
@@ -1067,7 +1296,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
-  const updateStaff = (userId: string, name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled = false, passwordEnabled = false, password = '', assignedClasses?: StudentClass[]) => {
+  const updateStaff = (userId: string, name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled = false, passwordEnabled = false, password = '', assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string) => {
     const trimmedEmail = email.toLowerCase().trim();
     if (users.some(u => u.email.toLowerCase() === trimmedEmail && u.id !== userId)) {
       return { success: false, error: 'A staff member with this email is already registered.' };
@@ -1088,7 +1317,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           mfaEnabled,
           mfaSecret: mfaEnabled ? u.mfaSecret || 'SHA-' + Math.random().toString(36).substring(2, 10).toUpperCase() : undefined,
           passwordEnabled,
-          password: passwordEnabled ? password : u.password
+          password: passwordEnabled ? password : u.password,
+          stipendSalary,
+          momoNumber,
+          momoName
         };
         return updatedUser;
       }
@@ -1253,44 +1485,145 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const recordPayment = (studentId: string, verified = true, customAmount?: number) => {
+  const checkAndSendCheckInAlert = (studentId: string) => {
+    if (!systemSettings?.autoSendCheckInAlert) return;
+
+    const student = students.find(s => s.id === studentId);
+    if (!student || !student.guardianPhone?.trim()) return;
+
+    const phone = student.guardianPhone.trim();
+
+    // Prevent duplicate sendings for the same student on the same day
+    const alreadySentCheckIn = whatsappLogs.some(log => 
+      log.studentId === studentId && 
+      log.type === 'check-in' && 
+      (log.timestamp?.startsWith(currentDate) || log.date === currentDate)
+    );
+
+    if (alreadySentCheckIn) return;
+
+    const timeString = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    const message = `*${systemSettings.schoolName || 'SAAKO HOLY CHILD ACADEMY'}*\n` +
+      `*ATTENDANCE GATE CHECK-IN*\n\n` +
+      `Dear Parent/Guardian,\n` +
+      `Your ward *${student.name}* (Roll: ${student.rollNumber || 'N/A'}, Class: ${student.class}) has checked-in safely at school today on *${currentDate}* at *${timeString}*.\n\n` +
+      `Thank you for choosing ${systemSettings.schoolName || 'Saako Holy Child Academy'}!`;
+
+    // Trigger asynchronously
+    setTimeout(async () => {
+      try {
+        await sendautomatedWhatsApp(phone, message, studentId, student.name, 'check-in');
+      } catch (err) {
+        console.error('Failed auto-sending check-in WhatsApp:', err);
+      }
+    }, 150);
+  };
+
+  const checkAndSendArrearsAlert = (studentId: string) => {
+    if (!systemSettings?.autoSendArrearsAlert) return;
+
+    const student = students.find(s => s.id === studentId);
+    if (!student || !student.guardianPhone?.trim()) return;
+
+    const phone = student.guardianPhone.trim();
+
+    // Prevent duplicate arrears alert for the same student on the same day
+    const alreadySentArrears = whatsappLogs.some(log => 
+      log.studentId === studentId && 
+      log.type === 'arrears_warning' && 
+      (log.timestamp?.startsWith(currentDate) || log.date === currentDate)
+    );
+
+    if (alreadySentArrears) return;
+
+    const baseDailyFee = systemSettings?.baselineDailyFee ?? 5.00;
+    const debtInfo = calculateStudentFinancialState(student, payments, activeTerm, currentDate, baseDailyFee);
+
+    if (!debtInfo || debtInfo.totalDebt <= 0) return;
+
+    const rollNumber = student.rollNumber || 'SHC-' + student.id.substring(0, 5).toUpperCase();
+    const classGroup = `${student.class} (${student.category})`;
+    const isTerm = student.paymentType === 'Term';
+    const totalArrears = debtInfo.totalDebt || 0;
+    const daysCount = debtInfo.pastUnpaidDays?.length || 0;
+
+    let detailsText = '';
+    if (isTerm) {
+      detailsText = `Your child, ${student.name}, is registered on the Term Fee Payment scheme. Currently, there is an accumulated outstanding balance of *GHC ${totalArrears.toFixed(2)}* for school fees and ancillary levies.`;
+    } else {
+      detailsText = `Your child, ${student.name}, currently has *GHC ${totalArrears.toFixed(2)}* in accumulated Daily Ingress arrears (equivalent to *${daysCount} unpaid school days*).`;
+    }
+
+    const message = `*${systemSettings.schoolName || 'SAAKO HOLY CHILD ACADEMY'}*\n` +
+      `⚠️ *IMMEDIATE ATTENTION: OUTSTANDING FEES NOTICE* ⚠️\n\n` +
+      `Dear Guardian,\n\n` +
+      `This is an official administrative notice regarding the financial account of your ward:\n` +
+      `*Student Name:* ${student.name}\n` +
+      `*Roll ID:* ${rollNumber}\n` +
+      `*Class/Grade:* ${classGroup}\n\n` +
+      `${detailsText}\n\n` +
+      `Kindly make arrangements to settle this outstanding balance of *GHC ${totalArrears.toFixed(2)}* at the school gate check-in desk or make a direct transfer to avoid any interruption to your ward's daily registration and classroom entry.\n\n` +
+      `If you have recently made this payment, please present your printed receipt at the main desk to update our ledger records.\n\n` +
+      `Thank you for your prompt cooperation.\n` +
+      `_Office of the Headmaster & Registrar Hub_`;
+
+    // Trigger asynchronously
+    setTimeout(async () => {
+      try {
+        await sendautomatedWhatsApp(phone, message, studentId, student.name, 'arrears_warning');
+      } catch (err) {
+        console.error('Failed auto-sending arrears WhatsApp:', err);
+      }
+    }, 250);
+  };
+
+  const recordPayment = (studentId: string, verified = true, customAmount?: number, customNotes?: string, allowDuplicate = false) => {
     const student = students.find(s => s.id === studentId);
     if (!student) return;
 
     const discountAmount = student.discount || 0;
-    const finalAmount = customAmount !== undefined ? customAmount : Math.max(0, 5.00 - discountAmount);
+    const baseDailyFee = systemSettings?.baselineDailyFee ?? 5.00;
+    const finalAmount = customAmount !== undefined ? customAmount : Math.max(0, baseDailyFee - discountAmount);
 
-    const dailyRate = Math.max(0.01, 5.00 - discountAmount);
+    const dailyRate = Math.max(0.01, baseDailyFee - discountAmount);
 
     // 0. Handle Term Payers differently
     if (student.paymentType === 'Term') {
-      const existingIndex = payments.findIndex(p => p.studentId === studentId && p.date === currentDate && !p.id.endsWith('_debt'));
+      const existingIndex = allowDuplicate ? -1 : payments.findIndex(p => p.studentId === studentId && p.date === currentDate && !p.id.endsWith('_debt'));
       let nextPayments = [...payments];
       let recordToSave: PaymentRecord;
+      
+      const resolvedAmount = customAmount !== undefined ? customAmount : 0.00;
+      const resolvedNotes = customNotes !== undefined 
+        ? customNotes 
+        : customAmount !== undefined 
+          ? `Term fee installment received: GHC ${customAmount.toFixed(2)}` 
+          : "Term Pass Daily Check-in";
+
       if (existingIndex > -1) {
         recordToSave = {
           ...nextPayments[existingIndex],
-          amount: finalAmount,
+          amount: resolvedAmount,
           isAbsent: false,
           verified,
-          notes: `Term Flat Fee payment received: GHC ${finalAmount.toFixed(2)}`,
+          notes: resolvedNotes,
           timestamp: new Date().toISOString()
         };
         nextPayments[existingIndex] = recordToSave;
       } else {
         recordToSave = {
-          id: `p_${studentId}_${currentDate}`,
+          id: allowDuplicate ? `p_${studentId}_${currentDate}_dup_${Date.now()}` : `p_${studentId}_${currentDate}`,
           studentId: student.id,
           studentName: student.name,
           class: student.class,
           category: student.category,
-          amount: finalAmount,
+          amount: resolvedAmount,
           date: currentDate,
           timestamp: new Date().toISOString(),
           collectedBy: currentUser ? currentUser.name : 'System Host',
           verified,
           isAbsent: false,
-          notes: `Term Flat Fee payment received: GHC ${finalAmount.toFixed(2)}`
+          notes: resolvedNotes
         };
         nextPayments.push(recordToSave);
       }
@@ -1299,9 +1632,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (db.isActive() && storageMode === 'cloud') {
         db.savePayment(recordToSave);
       } else {
-        recordLocallyPendingEdit('payment', 'create', `Logged term flat payment of GHC ${finalAmount.toFixed(2)} for pupil: "${student.name}"`);
+        recordLocallyPendingEdit('payment', 'create', `Logged term flat payment of GHC ${resolvedAmount.toFixed(2)} for pupil: "${student.name}"`);
       }
       playFeedbackSound('success');
+      checkAndSendCheckInAlert(studentId);
+      checkAndSendArrearsAlert(studentId);
       return;
     }
 
@@ -1323,6 +1658,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .reduce((sum, p) => sum + p.amount, 0);
 
     const totalDebt = Math.max(0, totalRequired - totalPaid);
+
+    if (totalDebt === 0 && finalAmount > dailyRate) {
+      recordAdvancePayment(studentId, finalAmount, verified);
+      return;
+    }
 
     // Filter which billable past school days are still unpaid
     let runningPaid = totalPaid;
@@ -1540,10 +1880,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         recordLocallyPendingEdit('payment', 'create', `Logged GHC ${finalAmount.toFixed(2)} payment covering arrears and/or standard fee for pupil: "${student.name}"`);
       }
       playFeedbackSound('success');
-
+      checkAndSendCheckInAlert(studentId);
+      checkAndSendArrearsAlert(studentId);
     } else {
       // Standard payment with NO debt
-      const existingIndex = payments.findIndex(p => p.studentId === studentId && p.date === currentDate && !p.id.endsWith('_debt'));
+      const existingIndex = allowDuplicate ? -1 : payments.findIndex(p => p.studentId === studentId && p.date === currentDate && !p.id.endsWith('_debt'));
       let nextPayments = [...payments];
       let recordToSave: PaymentRecord;
 
@@ -1553,13 +1894,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           amount: finalAmount,
           isAbsent: false,
           verified,
-          notes: customAmount !== undefined ? `Custom amount GHC ${finalAmount.toFixed(2)} processed` : (discountAmount > 0 ? `Applied dynamic discount of GHC ${discountAmount.toFixed(2)}` : undefined),
+          notes: customNotes !== undefined ? customNotes : (customAmount !== undefined ? `Custom amount GHC ${finalAmount.toFixed(2)} processed` : (discountAmount > 0 ? `Applied dynamic discount of GHC ${discountAmount.toFixed(2)}` : undefined)),
           timestamp: new Date().toISOString()
         };
         nextPayments[existingIndex] = recordToSave;
       } else {
         recordToSave = {
-          id: `p_${studentId}_${currentDate}`,
+          id: allowDuplicate ? `p_${studentId}_${currentDate}_dup_${Date.now()}` : `p_${studentId}_${currentDate}`,
           studentId: student.id,
           studentName: student.name,
           class: student.class,
@@ -1570,7 +1911,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           collectedBy: currentUser ? currentUser.name : 'System Host',
           verified,
           isAbsent: false,
-          notes: customAmount !== undefined ? `Custom amount GHC ${finalAmount.toFixed(2)} processed` : (discountAmount > 0 ? `Applied dynamic discount of GHC ${discountAmount.toFixed(2)}` : undefined)
+          notes: customNotes !== undefined ? customNotes : (customAmount !== undefined ? `Custom amount GHC ${finalAmount.toFixed(2)} processed` : (discountAmount > 0 ? `Applied dynamic discount of GHC ${discountAmount.toFixed(2)}` : undefined))
         };
         nextPayments.push(recordToSave);
       }
@@ -1583,6 +1924,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         recordLocallyPendingEdit('payment', 'create', `Logged GHC ${finalAmount.toFixed(2)} payment for pupil: "${student.name}"${discountAmount > 0 && customAmount === undefined ? ` (GHC ${discountAmount.toFixed(2)} Discount applied)` : ''}`);
       }
       playFeedbackSound('success');
+      checkAndSendCheckInAlert(studentId);
+      checkAndSendArrearsAlert(studentId);
     }
   };
 
@@ -1640,8 +1983,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
-    // Standard school day rate is GHC 5.00, minus any student custom discount
-    const dailyRate = Math.max(0.01, 5.00 - (student.discount || 0));
+    const baseDailyFee = systemSettings?.baselineDailyFee ?? 5.00;
+    const currencySymbol = systemSettings?.currencyCode || 'GHC';
+    // Standard school day rate is dynamic, minus any student custom discount
+    const dailyRate = Math.max(0.01, baseDailyFee - (student.discount || 0));
     const daysToCover = Math.floor(amount / dailyRate);
     if (daysToCover <= 0) return;
 
@@ -1722,18 +2067,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 1. Log the full advance cash payment on the explicit day it was collected (currentDate)
     const mainExistingIdx = nextPayments.findIndex(p => p.studentId === studentId && p.date === currentDate && !p.id.endsWith('_debt'));
+    const existingAmount = mainExistingIdx > -1 ? nextPayments[mainExistingIdx].amount : 0;
+    const totalNewAmount = amount + existingAmount;
+    
     const mainRecord: PaymentRecord = {
       id: mainExistingIdx > -1 ? nextPayments[mainExistingIdx].id : `p_${studentId}_${currentDate}`,
       studentId: student.id,
       studentName: student.name,
       class: student.class,
       category: student.category,
-      amount: amount,
+      amount: totalNewAmount,
       date: currentDate,
       timestamp: new Date().toISOString(),
       collectedBy: currentUser ? currentUser.name : 'System Host',
       verified,
-      notes: `Advance Fee Primary (Paid GHC ${amount.toFixed(2)} in advance, covering days: ${datesToRecord.join(', ')})`
+      notes: existingAmount > 0
+        ? `Top-Up Added: ${currencySymbol} ${amount.toFixed(2)} added (New total paid today: ${currencySymbol} ${totalNewAmount.toFixed(2)}, covering days: ${datesToRecord.join(', ')})`
+        : `Advance Fee Primary (Paid ${currencySymbol} ${amount.toFixed(2)} in advance, covering days: ${datesToRecord.join(', ')})`
     };
 
     if (mainExistingIdx > -1) {
@@ -1776,7 +2126,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         timestamp: new Date().toISOString(),
         collectedBy: currentUser ? currentUser.name : 'System Host',
         verified,
-        notes: `Covered (Prepaid in advance, GHC ${amount.toFixed(2)} on ${currentDate})`
+        notes: `Covered (Prepaid in advance, ${currencySymbol} ${amount.toFixed(2)} on ${currentDate})`
       };
 
       if (existingIdx > -1) {
@@ -1804,7 +2154,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     recordPayment(studentId, verified, amount);
   };
 
-  const bulkRecordPayments = (studentIds: string[], verified = true) => {
+  const bulkRecordPayments = (studentIds: string[], verified = true, customAmount?: number) => {
     let nextPayments = [...payments];
     const recordsToSync: PaymentRecord[] = [];
     studentIds.forEach(id => {
@@ -1814,7 +2164,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const idx = nextPayments.findIndex(p => p.studentId === id && p.date === currentDate);
       let record: PaymentRecord;
       const discountAmount = student.discount || 0;
-      const finalAmount = Math.max(0, 5.00 - discountAmount);
+      const baseDailyFee = systemSettings?.baselineDailyFee ?? 5.00;
+      const finalAmount = customAmount !== undefined ? customAmount : Math.max(0, baseDailyFee - discountAmount);
       
       if (idx > -1) {
         record = {
@@ -1848,6 +2199,151 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       db.savePayments(recordsToSync);
     } else if (recordsToSync.length > 0) {
       recordLocallyPendingEdit('bulk', 'create', `Bulk logged standard day payments for ${recordsToSync.length} pupils`);
+    }
+
+    // Trigger staggered automatic check-in WhatsApp alerts
+    studentIds.forEach((id, index) => {
+      setTimeout(() => {
+        checkAndSendCheckInAlert(id);
+        checkAndSendArrearsAlert(id);
+      }, index * 250);
+    });
+  };
+
+  const recordPresentZeroPay = (studentId: string) => {
+    const student = students.find(s => s.id === studentId);
+    if (!student) return;
+
+    const existingIndex = payments.findIndex(p => p.studentId === studentId && p.date === currentDate && !p.id.endsWith('_debt'));
+    let nextPayments = [...payments];
+    let recordToSave: PaymentRecord;
+
+    if (existingIndex > -1) {
+      recordToSave = {
+        ...nextPayments[existingIndex],
+        amount: nextPayments[existingIndex].amount,
+        isAbsent: false,
+        verified: true,
+        notes: nextPayments[existingIndex].notes?.includes('Present or ¢0') 
+          ? nextPayments[existingIndex].notes 
+          : (nextPayments[existingIndex].notes ? `${nextPayments[existingIndex].notes} | Present or ¢0` : 'Present or ¢0'),
+        timestamp: new Date().toISOString()
+      };
+      nextPayments[existingIndex] = recordToSave;
+    } else {
+      recordToSave = {
+        id: `p_${studentId}_${currentDate}`,
+        studentId: student.id,
+        studentName: student.name,
+        class: student.class,
+        category: student.category,
+        amount: 0,
+        date: currentDate,
+        timestamp: new Date().toISOString(),
+        collectedBy: currentUser ? currentUser.name : 'System Host',
+        verified: true,
+        isAbsent: false,
+        notes: 'Present or ¢0'
+      };
+      nextPayments.push(recordToSave);
+    }
+
+    setPayments(nextPayments);
+    saveState(users, students, nextPayments);
+    if (db.isActive() && storageMode === 'cloud') {
+      db.savePayment(recordToSave);
+    } else {
+      recordLocallyPendingEdit('payment', 'create', `Marked pupil: "${student.name}" as Present or ¢0`);
+    }
+    checkAndSendCheckInAlert(studentId);
+    checkAndSendArrearsAlert(studentId);
+  };
+
+  const recordPupilBulkDates = (
+    studentId: string, 
+    dates: string[], 
+    actionType: 'paid' | 'absent' | 'present_zero' | 'clear', 
+    customAmount?: number
+  ) => {
+    const student = students.find(s => s.id === studentId);
+    if (!student) return;
+
+    let nextPayments = [...payments];
+    const recordsToSync: PaymentRecord[] = [];
+    const paymentIdsToDelete: string[] = [];
+
+    dates.forEach(dayStr => {
+      const idx = nextPayments.findIndex(p => p.studentId === studentId && p.date === dayStr && !p.id.endsWith('_debt'));
+
+      if (actionType === 'clear') {
+        if (idx > -1) {
+          const matched = nextPayments[idx];
+          paymentIdsToDelete.push(matched.id);
+          nextPayments.splice(idx, 1);
+        }
+      } else {
+        let record: PaymentRecord;
+        const discountAmount = student.discount || 0;
+        const baseDailyFee = systemSettings?.baselineDailyFee ?? 5.00;
+        const finalAmount = actionType === 'paid' 
+          ? (customAmount !== undefined ? customAmount : Math.max(0, baseDailyFee - discountAmount)) 
+          : 0;
+        const isAbsent = actionType === 'absent';
+        const currencySymbol = systemSettings?.currencyCode || 'GHC';
+        const notesStr = actionType === 'paid'
+          ? (customAmount !== undefined ? `Custom bulk ${currencySymbol} ${customAmount.toFixed(2)}` : `Bulk standard payment`)
+          : actionType === 'absent'
+            ? 'Marked absent via bulk'
+            : 'Present or ¢0 via bulk';
+
+        if (idx > -1) {
+          record = {
+            ...nextPayments[idx],
+            amount: finalAmount,
+            isAbsent,
+            verified: true,
+            notes: notesStr,
+            timestamp: new Date().toISOString()
+          };
+          nextPayments[idx] = record;
+        } else {
+          record = {
+            id: `p_${studentId}_${dayStr}`,
+            studentId,
+            studentName: student.name,
+            class: student.class,
+            category: student.category,
+            amount: finalAmount,
+            date: dayStr,
+            timestamp: new Date().toISOString(),
+            collectedBy: currentUser ? currentUser.name : 'System Host',
+            verified: true,
+            isAbsent,
+            notes: notesStr
+          };
+          nextPayments.push(record);
+        }
+        recordsToSync.push(record);
+      }
+    });
+
+    setPayments(nextPayments);
+    saveState(users, students, nextPayments);
+
+    if (db.isActive() && storageMode === 'cloud') {
+      if (recordsToSync.length > 0) {
+        recordsToSync.forEach(rec => db.savePayment(rec));
+      }
+      if (paymentIdsToDelete.length > 0) {
+        paymentIdsToDelete.forEach(pId => db.deletePayment(pId));
+      }
+    } else {
+      if (recordsToSync.length > 0) {
+        recordLocallyPendingEdit('bulk', 'create', `Bulk logged ${recordsToSync.length} checks for ${student.name}`);
+      }
+      if (paymentIdsToDelete.length > 0) {
+        recordLocallyPendingEdit('bulk', 'delete', `Bulk cleared ${paymentIdsToDelete.length} records for ${student.name}`);
+      }
     }
   };
 
@@ -1910,6 +2406,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (storageMode !== 'cloud') {
       const targetS = students.find(s => s.id === studentId);
       recordLocallyPendingEdit('payment', 'delete', `Voided all payment transaction history entries for pupil: "${targetS?.name || 'Pupil'}"`);
+    }
+  };
+
+  const clearDailyPaymentsForClass = (classId: StudentClass, dateStr: string) => {
+    // Find all payments for this class and date
+    const paymentsToDelete = payments.filter(p => p.class === classId && p.date === dateStr);
+    if (paymentsToDelete.length === 0) return;
+
+    const paymentIdsToDelete = paymentsToDelete.map(p => p.id);
+    const allMarkerIdsToDelete: string[] = [];
+    paymentsToDelete.forEach(p => {
+      if (p.clearedDates && p.clearedDates.length > 0) {
+        p.clearedDates.forEach(dStr => {
+          allMarkerIdsToDelete.push(`p_${p.studentId}_${dStr}`);
+        });
+      }
+    });
+
+    const nextPayments = payments.filter(p => {
+      if (paymentIdsToDelete.includes(p.id)) return false;
+      const matchedDeletedP = paymentsToDelete.find(delP => delP.studentId === p.studentId);
+      if (matchedDeletedP && p.amount === 0 && matchedDeletedP.clearedDates?.includes(p.date)) {
+        return false;
+      }
+      return true;
+    });
+
+    setPayments(nextPayments);
+    saveState(users, students, nextPayments);
+
+    if (db.isActive()) {
+      paymentIdsToDelete.forEach(pId => db.deletePayment(pId));
+      allMarkerIdsToDelete.forEach(mId => db.deletePayment(mId));
+    }
+    if (storageMode !== 'cloud') {
+      recordLocallyPendingEdit('bulk', 'delete', `Bulk cleared ${paymentsToDelete.length} payment records for class ${classId} on ${dateStr}`);
     }
   };
 
@@ -1993,7 +2525,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const pendingCount = Math.max(0, activeStudents.length - paidCount - absentCount);
 
     const totalCollected = targetDatePayments.reduce((acc, p) => acc + ((p.verified && !p.isAbsent) ? p.amount : 0), 0);
-    const totalExpected = activeStudents.reduce((acc, s) => acc + Math.max(0, 5.00 - (s.discount || 0)), 0);
+    const baseDailyFee = systemSettings?.baselineDailyFee ?? 5.00;
+    const totalExpected = activeStudents.reduce((acc, s) => acc + Math.max(0, baseDailyFee - (s.discount || 0)), 0);
 
     const collectionRate = totalExpected > 0 ? (totalCollected / totalExpected) * 100 : 0;
 
@@ -2448,6 +2981,60 @@ School Administration Financial Audit System (MFA Secure)
     }
   };
 
+  const addBudgetTarget = async (itemName: string, targetAmount: number, savedPercentage: number, description?: string, category?: string) => {
+    const newTarget: BudgetTarget = {
+      id: `target-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
+      itemName,
+      targetAmount,
+      savedPercentage,
+      createdAt: new Date().toISOString(),
+      active: true,
+      completed: false,
+      description,
+      category
+    };
+
+    const updated = [newTarget, ...budgetTargets];
+    setBudgetTargets(updated);
+    localStorage.setItem('s_budget_targets', JSON.stringify(updated));
+
+    if (db.isActive() && storageMode === 'cloud') {
+      try {
+        await db.saveBudgetTarget(newTarget);
+      } catch (err) {
+        console.error("Failed to save budget target to cloud:", err);
+      }
+    }
+  };
+
+  const updateBudgetTarget = async (target: BudgetTarget) => {
+    const updated = budgetTargets.map(t => t.id === target.id ? target : t);
+    setBudgetTargets(updated);
+    localStorage.setItem('s_budget_targets', JSON.stringify(updated));
+
+    if (db.isActive() && storageMode === 'cloud') {
+      try {
+        await db.saveBudgetTarget(target);
+      } catch (err) {
+        console.error("Failed to update budget target on cloud:", err);
+      }
+    }
+  };
+
+  const deleteBudgetTarget = async (targetId: string) => {
+    const updated = budgetTargets.filter(t => t.id !== targetId);
+    setBudgetTargets(updated);
+    localStorage.setItem('s_budget_targets', JSON.stringify(updated));
+
+    if (db.isActive() && storageMode === 'cloud') {
+      try {
+        await db.deleteBudgetTarget(targetId);
+      } catch (err) {
+        console.error("Failed to delete budget target from cloud:", err);
+      }
+    }
+  };
+
   const addSalary = (
     workerName: string,
     role: string,
@@ -2458,9 +3045,22 @@ School Administration Financial Audit System (MFA Secure)
     monthYear: string,
     date: string,
     notes?: string,
-    userId?: string
+    userId?: string,
+    momoNumber?: string,
+    momoName?: string,
+    ssnitDeduction?: number,
+    incomeTaxDeduction?: number,
+    welfareDeduction?: number,
+    healthInsDeduction?: number,
+    responsibilityAllowance?: number,
+    transportAllowance?: number,
+    rentAllowance?: number,
+    momoFeeAbsorbed?: number
   ) => {
-    const netPaid = baseSalary + allowance - deduction;
+    const netPaid = baseSalary + allowance - deduction +
+      (responsibilityAllowance || 0) + (transportAllowance || 0) + (rentAllowance || 0) + (momoFeeAbsorbed || 0) -
+      (ssnitDeduction || 0) - (healthInsDeduction || 0) - (incomeTaxDeduction || 0) - (welfareDeduction || 0);
+
     const newSalary: WorkerSalary = {
       id: `sal-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
       date,
@@ -2474,7 +3074,17 @@ School Administration Financial Audit System (MFA Secure)
       netPaid,
       paymentMethod,
       notes,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      momoNumber,
+      momoName,
+      ssnitDeduction,
+      incomeTaxDeduction,
+      welfareDeduction,
+      healthInsDeduction,
+      responsibilityAllowance,
+      transportAllowance,
+      rentAllowance,
+      momoFeeAbsorbed
     };
 
     const updated = [newSalary, ...salaries];
@@ -2550,6 +3160,83 @@ School Administration Financial Audit System (MFA Secure)
     fetchWhatsappLogs();
   }, [storageMode]);
 
+  // Monitor budget progressive targets & trigger automated WhatsApp alerts for thresholds 50%, 75%, 100%
+  useEffect(() => {
+    if (!payments.length || !budgetTargets.length) return;
+    
+    const adminPhone = systemSettings?.adminWhatsAppPhone;
+    if (!adminPhone || adminPhone.trim() === '') return;
+    
+    const totalFeesReceived = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
+    let needsUpdate = false;
+    
+    const updatedTargets = budgetTargets.map(target => {
+      const savingsRatio = target.savedPercentage / 100;
+      const savingsProgress = totalFeesReceived * savingsRatio;
+      
+      const percentProgress = target.targetAmount > 0 
+        ? Math.floor((savingsProgress / target.targetAmount) * 100)
+        : 0;
+        
+      const notified = target.notifiedThresholds || [];
+      const newNotified = [...notified];
+      let triggeredThreshold: number | null = null;
+      
+      const thresholds = [50, 75, 100];
+      for (const t of thresholds) {
+        if (percentProgress >= t && !notified.includes(t)) {
+          newNotified.push(t);
+          triggeredThreshold = t;
+          break; // Trigger one threshold at a time per target update
+        }
+      }
+      
+      if (triggeredThreshold !== null) {
+        needsUpdate = true;
+        const curSym = systemSettings?.currencyCode || 'GHC';
+        const formattedSaved = savingsProgress.toLocaleString('en-US', { maximumFractionDigits: 0 });
+        const formattedTarget = target.targetAmount.toLocaleString('en-US', { maximumFractionDigits: 0 });
+        
+        const message = `*🎯 SAVINGS TARGET ALERT*\n` +
+          `Hello Administrator,\n\n` +
+          `Your strategic budget goal has reached a new milestone!\n\n` +
+          `• *Item*: ${target.itemName}\n` +
+          `• *Category*: ${target.category || 'Uncategorized'}\n` +
+          `• *Goal Milestone*: *${triggeredThreshold}%* achieved! 🚀\n` +
+          `• *Status*: ${curSym} ${formattedSaved} saved of ${curSym} ${formattedTarget}\n` +
+          `• *Allocation Rule*: ${target.savedPercentage}% of all cumulative fee entries\n\n` +
+          `Keep monitoring your school's financial targets!`;
+          
+        sendautomatedWhatsApp(adminPhone, message, undefined, undefined, 'savings-progress');
+        
+        return {
+          ...target,
+          notifiedThresholds: newNotified
+        };
+      }
+      
+      return target;
+    });
+    
+    if (needsUpdate) {
+      setBudgetTargets(updatedTargets);
+      localStorage.setItem('s_budget_targets', JSON.stringify(updatedTargets));
+      
+      if (db.isActive() && storageMode === 'cloud') {
+        updatedTargets.forEach(async (target, idx) => {
+          const oldTarget = budgetTargets[idx];
+          if (JSON.stringify(target.notifiedThresholds) !== JSON.stringify(oldTarget?.notifiedThresholds)) {
+            try {
+              await db.saveBudgetTarget(target);
+            } catch (err) {
+              console.error("Failed to update budget target on cloud:", err);
+            }
+          }
+        });
+      }
+    }
+  }, [payments, budgetTargets, systemSettings?.adminWhatsAppPhone]);
+
   return (
     <AppContext.Provider value={{
       currentUser,
@@ -2575,12 +3262,15 @@ School Administration Financial Audit System (MFA Secure)
       purgeDeactivatedStudents,
       promoteAllStudents,
       recordPayment,
+      recordPresentZeroPay,
       recordAbsent,
       recordAdvancePayment,
       recordBackwardPayment,
       bulkRecordPayments,
+      recordPupilBulkDates,
       verifyPayment,
       deletePayment,
+      clearDailyPaymentsForClass,
       deleteStudentPayments,
       adjustPayment,
       registerStaff,
@@ -2613,7 +3303,6 @@ School Administration Financial Audit System (MFA Secure)
       restoreBackup,
       deleteBackup,
       clearAllBackups,
-      nextBackupTimeLeft,
       audioMuted,
       setAudioMuted,
       playFeedbackSound,
@@ -2627,7 +3316,21 @@ School Administration Financial Audit System (MFA Secure)
       deleteSalary,
       whatsappLogs,
       sendautomatedWhatsApp,
-      fetchWhatsappLogs
+      fetchWhatsappLogs,
+      systemSettings,
+      updateSystemSettings,
+      autoSendCheckInAlert: systemSettings?.autoSendCheckInAlert ?? false,
+      setAutoSendCheckInAlert: (enabled: boolean) => {
+        updateSystemSettings({ autoSendCheckInAlert: enabled });
+      },
+      autoSendArrearsAlert: systemSettings?.autoSendArrearsAlert ?? false,
+      setAutoSendArrearsAlert: (enabled: boolean) => {
+        updateSystemSettings({ autoSendArrearsAlert: enabled });
+      },
+      budgetTargets,
+      addBudgetTarget,
+      updateBudgetTarget,
+      deleteBudgetTarget
     }}>
       {children}
     </AppContext.Provider>

@@ -6,25 +6,30 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useApp, PendingAlert, calculateStudentFinancialState } from '../context/AppContext';
 import { StudentClass, Student, SchoolCategory, PaymentRecord } from '../types';
-import { Check, X, Search, Landmark, BellRing, ChevronRight, ChevronLeft, CheckSquare, Users, MessageSquareCode, CalendarDays, CalendarPlus, CalendarX, Plus, ChevronDown, Trash2, Coins, History, Printer, Camera, Upload, Copy, Pencil, QrCode, AlertCircle, User, Phone, Award, ShieldAlert, CheckCircle2, TrendingUp, Info, Download, MessageSquare, RefreshCw } from 'lucide-react';
+import { Check, X, Search, Landmark, BellRing, ChevronRight, ChevronLeft, CheckSquare, Users, MessageSquareCode, CalendarDays, CalendarPlus, CalendarX, Plus, ChevronDown, Trash2, Coins, History, Printer, Camera, Upload, Copy, Pencil, QrCode, AlertCircle, User, Phone, DollarSign, Award, ShieldAlert, CheckCircle2, TrendingUp, Info, Download, MessageSquare, RefreshCw, Layers } from 'lucide-react';
 import { motion } from 'motion/react';
 import { Html5Qrcode } from 'html5-qrcode';
 import { SchoolLogo } from './SchoolLogo';
 import { VoiceSearchButton } from './VoiceSearchButton';
+import QRCode from 'qrcode';
 
-export const ClassRegister: React.FC = () => {
+export const ClassRegister: React.FC = React.memo(() => {
   const { 
     students, 
     payments, 
     currentDate, 
     setCurrentDate,
     recordPayment, 
+    recordPresentZeroPay,
     recordAbsent,
     recordAdvancePayment,
     recordBackwardPayment,
     bulkRecordPayments,
+    recordPupilBulkDates,
+    adjustPayment,
     currentUser,
     deletePayment,
+    clearDailyPaymentsForClass,
     deleteStudentPayments,
     terms,
     activeTerm,
@@ -39,8 +44,17 @@ export const ClassRegister: React.FC = () => {
     deleteStudent,
     audioMuted,
     playFeedbackSound,
-    sendautomatedWhatsApp
+    sendautomatedWhatsApp,
+    systemSettings,
+    autoSendCheckInAlert,
+    setAutoSendCheckInAlert,
+    autoSendArrearsAlert,
+    setAutoSendArrearsAlert
   } = useApp();
+
+  const baseDailyFee = systemSettings?.baselineDailyFee ?? 5.00;
+  const baseTermFee = systemSettings?.baselineTermFee ?? 350.00;
+  const currencySymbol = systemSettings?.currencyCode || 'GHC';
 
   // Pick initial class based on teacher assignment or default B1
   const initialClass = useMemo(() => {
@@ -57,11 +71,88 @@ export const ClassRegister: React.FC = () => {
 
   const [selectedClass, setSelectedClass] = useState<StudentClass>(initialClass);
   const [searchQuery, setSearchQuery] = useState('');
+  const [highlightedStudentId, setHighlightedStudentId] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<'all' | 'unmarked' | 'present' | 'absent' | 'arrears' | 'term_payers'>('all');
   const [guardianSmsStudent, setGuardianSmsStudent] = useState<Student | null>(null);
   const [successSms, setSuccessSms] = useState(false);
   const [receiptStudent, setReceiptStudent] = useState<Student | null>(null);
   const [selectedRecordForReceipt, setSelectedRecordForReceipt] = useState<{ student: Student; payment: PaymentRecord } | null>(null);
   const [lastLoggedStudent, setLastLoggedStudent] = useState<Student | null>(null);
+  const [showPrintHardcopyModal, setShowPrintHardcopyModal] = useState(false);
+
+  const [qrStudent, setQrStudent] = useState<Student | null>(null);
+  const [generatedQrUrl, setGeneratedQrUrl] = useState<string>('');
+
+  // Pupil-specific bulk check-in/payment state variables
+  const [bulkPupil, setBulkPupil] = useState<Student | null>(null);
+  const [selectedBulkDates, setSelectedBulkDates] = useState<string[]>([]);
+  const [bulkActionType, setBulkActionType] = useState<'paid' | 'absent' | 'present_zero' | 'clear'>('paid');
+  const [bulkCustomAmount, setBulkCustomAmount] = useState<string>('');
+
+  // Pupil-specific daily note state variables
+  const [editingNoteStudentId, setEditingNoteStudentId] = useState<string | null>(null);
+  const [noteInputValue, setNoteInputValue] = useState<string>('');
+
+  // Auto-reset filters when student class is toggled
+  useEffect(() => {
+    setStatusFilter('all');
+    setSearchQuery('');
+  }, [selectedClass]);
+
+  useEffect(() => {
+    if (!qrStudent) {
+      setGeneratedQrUrl('');
+      return;
+    }
+    const generate = async () => {
+      try {
+        const payload = `SAAKOCHECK:STUDENT:${qrStudent.id}`;
+        const url = await QRCode.toDataURL(payload, {
+          width: 360,
+          margin: 3,
+          color: {
+            dark: '#171717',
+            light: '#FFFFFF'
+          }
+        });
+        setGeneratedQrUrl(url);
+      } catch (err) {
+        console.error('Failed to generate QR Code:', err);
+      }
+    };
+    generate();
+  }, [qrStudent]);
+
+  // Global Shortcut: Pressing '/' focuses the register search field instantly
+  useEffect(() => {
+    const handleKeyPress = (e: KeyboardEvent) => {
+      // Don't trigger if within input/textarea/select elements to prevent interrupting text typing
+      const activeEl = document.activeElement;
+      const isInput = activeEl && (
+        activeEl.tagName === 'INPUT' || 
+        activeEl.tagName === 'TEXTAREA' || 
+        activeEl.tagName === 'SELECT' ||
+        activeEl.getAttribute('contenteditable') === 'true'
+      );
+      
+      if (isInput) return;
+
+      if (e.key === '/') {
+        e.preventDefault();
+        const searchInput = document.getElementById('class-register-search');
+        if (searchInput) {
+          searchInput.focus();
+          (searchInput as HTMLInputElement).select();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyPress);
+    return () => {
+      window.removeEventListener('keydown', handleKeyPress);
+    };
+  }, []);
+
   const [lowBalanceThreshold, setLowBalanceThreshold] = useState<number>(() => {
     try {
       const saved = localStorage.getItem('low_balance_threshold');
@@ -81,9 +172,12 @@ export const ClassRegister: React.FC = () => {
 
   // QR code scanner states
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
+  const [testScanStudentId, setTestScanStudentId] = useState<string>('');
   const [scannerError, setScannerError] = useState<string | null>(null);
   const [qrFeedbacks, setQrFeedbacks] = useState<{ id: string; text: string; type: 'success' | 'warning' | 'error' }[]>([]);
-  const [autoPayScanned, setAutoPayScanned] = useState(true);
+  const [qrScanMode, setQrScanMode] = useState<'auto' | 'custom_prompt' | 'view_only'>('auto');
+  const [qrActivePromptStudent, setQrActivePromptStudent] = useState<Student | null>(null);
+  const [qrCustomAmountInput, setQrCustomAmountInput] = useState<string>('');
   const [scanHistoryList, setScanHistoryList] = useState<{ id: string; studentId: string; studentName: string; rollNumber: string; class: string; timestamp: string; statusText: string; success: boolean }[]>([]);
   const lastScanTimeRef = React.useRef<{ code: string; time: number } | null>(null);
 
@@ -106,6 +200,11 @@ export const ClassRegister: React.FC = () => {
   const handleQrCodeScanned = (decodedText: string) => {
     const trimmedText = decodedText.trim();
     if (!trimmedText) return;
+
+    // Ignore additional scans if we are already displaying a custom amount prompt
+    if (qrActivePromptStudent) {
+      return;
+    }
 
     const now = Date.now();
     if (lastScanTimeRef.current && lastScanTimeRef.current.code === trimmedText && (now - lastScanTimeRef.current.time) < 2500) {
@@ -166,6 +265,14 @@ export const ClassRegister: React.FC = () => {
     const isPaidToday = payments.some(p => p.studentId === student.id && p.date === currentDate && !p.id.endsWith('_debt'));
 
     if (isPaidToday) {
+      if (qrScanMode === 'custom_prompt') {
+        playBeep('success');
+        setQrActivePromptStudent(student);
+        setQrCustomAmountInput(baseDailyFee.toFixed(2));
+        addQrFeedback(`🔍 Top-Up Mode: "${student.name}" (${student.class}) is checked in. Enter advance top-up amount!`, 'warning');
+        return;
+      }
+
       playBeep('error');
       addQrFeedback(`⚠️ Already Registered: "${student.name}" (${student.class}) has checked in.`, 'warning');
       setScanHistoryList(prev => [{
@@ -181,12 +288,53 @@ export const ClassRegister: React.FC = () => {
       return;
     }
 
-    const dailyRate = Math.max(0, 5.00 - (student.discount || 0));
+    const debtInfo = studentDebtMap.get(student.id);
+    const isAlreadyCoveredInAdvance = debtInfo?.isPaidToday && !isPaidToday;
 
-    if (autoPayScanned) {
+    if (isAlreadyCoveredInAdvance) {
+      if (qrScanMode === 'view_only') {
+        playBeep('success');
+        addQrFeedback(`🔍 Identified PREPAID: "${student.name}" (Class: ${student.class}). Pupil has an advance/prepaid balance covering today!`, 'success');
+        setScanHistoryList(prev => [{
+          id: Math.random().toString(),
+          studentId: student.id,
+          studentName: student.name,
+          rollNumber: student.rollNumber,
+          class: student.class,
+          timestamp: new Date().toLocaleTimeString(),
+          statusText: 'Prepaid Covered (View)',
+          success: true
+        }, ...prev].slice(0, 8));
+      } else if (qrScanMode === 'custom_prompt') {
+        playBeep('success');
+        setQrActivePromptStudent(student);
+        setQrCustomAmountInput(baseDailyFee.toFixed(2));
+        addQrFeedback(`🔍 Prepaid Top-Up: "${student.name}" (${student.class}) is active. Enter custom overpayment/advance!`, 'warning');
+      } else {
+        // Automatically check them in with GHC 0.00 since they are prepaid
+        recordPayment(student.id, true, 0.00, "Covered (Prepaid in advance block via remainder)");
+        playBeep('success');
+        addQrFeedback(`✅ Checked in: "${student.name}" (Class: ${student.class}) • Attendance registered via PREPAID advance balance (GHC 0.00)!`, 'success');
+        setScanHistoryList(prev => [{
+          id: Math.random().toString(),
+          studentId: student.id,
+          studentName: student.name,
+          rollNumber: student.rollNumber,
+          class: student.class,
+          timestamp: new Date().toLocaleTimeString(),
+          statusText: 'Present (Prepaid)',
+          success: true
+        }, ...prev].slice(0, 8));
+      }
+      return;
+    }
+
+    const dailyRate = Math.max(0, baseDailyFee - (student.discount || 0));
+
+    if (qrScanMode === 'auto') {
       recordPayment(student.id, true);
       playBeep('success');
-      addQrFeedback(`✅ Checked in: "${student.name}" (Class: ${student.class}) • Fee GHC ${dailyRate.toFixed(2)} logged!`, 'success');
+      addQrFeedback(`✅ Checked in: "${student.name}" (Class: ${student.class}) • Fee ${currencySymbol} ${dailyRate.toFixed(2)} logged!`, 'success');
       setScanHistoryList(prev => [{
         id: Math.random().toString(),
         studentId: student.id,
@@ -194,12 +342,17 @@ export const ClassRegister: React.FC = () => {
         rollNumber: student.rollNumber,
         class: student.class,
         timestamp: new Date().toLocaleTimeString(),
-        statusText: `GHC ${dailyRate.toFixed(2)} logged`,
+        statusText: `${currencySymbol} ${dailyRate.toFixed(2)} logged`,
         success: true
       }, ...prev].slice(0, 8));
+    } else if (qrScanMode === 'custom_prompt') {
+      playBeep('success');
+      setQrActivePromptStudent(student);
+      setQrCustomAmountInput(dailyRate.toFixed(2)); // auto-prefill with daily rate for super fast editing
+      addQrFeedback(`🔍 Code Read: "${student.name}" (${student.class}). Enter/Confirm custom amount!`, 'warning');
     } else {
       playBeep('success');
-      addQrFeedback(`🔍 Identified: "${student.name}" (Class: ${student.class}). Ready to record GHC ${dailyRate.toFixed(2)}.`, 'success');
+      addQrFeedback(`🔍 Identified: "${student.name}" (Class: ${student.class}). Ready to record ${currencySymbol} ${dailyRate.toFixed(2)}.`, 'success');
       setScanHistoryList(prev => [{
         id: Math.random().toString(),
         studentId: student.id,
@@ -216,6 +369,7 @@ export const ClassRegister: React.FC = () => {
   useEffect(() => {
     if (!isQrModalOpen) {
       setQrFeedbacks([]);
+      setTestScanStudentId('');
       return;
     }
 
@@ -339,6 +493,46 @@ export const ClassRegister: React.FC = () => {
       }
     };
   }, [isQrModalOpen]);
+
+  const handleQrCustomAmountSubmit = () => {
+    if (!qrActivePromptStudent) return;
+    
+    const parsedAmount = parseFloat(qrCustomAmountInput.trim());
+    if (isNaN(parsedAmount) || parsedAmount < 0) {
+      showToast("Please enter a valid non-negative custom amount.");
+      return;
+    }
+
+    recordPayment(qrActivePromptStudent.id, true, parsedAmount);
+    playBeep('success');
+    addQrFeedback(`✅ Checked in: "${qrActivePromptStudent.name}" (Class: ${qrActivePromptStudent.class}) • Custom Fee GHC ${parsedAmount.toFixed(2)} logged!`, 'success');
+    
+    setScanHistoryList(prev => [{
+      id: Math.random().toString(),
+      studentId: qrActivePromptStudent.id,
+      studentName: qrActivePromptStudent.name,
+      rollNumber: qrActivePromptStudent.rollNumber,
+      class: qrActivePromptStudent.class,
+      timestamp: new Date().toLocaleTimeString(),
+      statusText: `GHC ${parsedAmount.toFixed(2)} logged`,
+      success: true
+    }, ...prev].slice(0, 8));
+
+    setQrActivePromptStudent(null);
+  };
+
+  useEffect(() => {
+    if (qrActivePromptStudent) {
+      const timer = setTimeout(() => {
+        const inputEl = document.getElementById("qr-custom-amount-input");
+        if (inputEl) {
+          (inputEl as HTMLInputElement).focus();
+          (inputEl as HTMLInputElement).select();
+        }
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [qrActivePromptStudent]);
 
   // Success toast notification states
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -545,7 +739,17 @@ export const ClassRegister: React.FC = () => {
   const [historyModalTab, setHistoryModalTab] = useState<'profile' | 'ledger' | 'print'>('profile');
   const [paymentToDelete, setPaymentToDelete] = useState<{ id: string; label: string; studentName: string } | null>(null);
   const [showDeleteAllPaymentsConfirm, setShowDeleteAllPaymentsConfirm] = useState(false);
+  const [showResetDailyConfirm, setShowResetDailyConfirm] = useState(false);
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
+  const [whatsAppShareModal, setWhatsAppShareModal] = useState<{
+    type: 'profile' | 'invoice' | 'receipt' | 'arrears_warning' | 'check_in';
+    student: Student;
+    payment?: PaymentRecord;
+    messageText: string;
+    defaultPhone: string;
+  } | null>(null);
+  const [customWAContact, setCustomWAContact] = useState('');
+  const [selectedStaffPhone, setSelectedStaffPhone] = useState('');
 
   useEffect(() => {
     setSelectedStudentIds([]);
@@ -562,55 +766,23 @@ export const ClassRegister: React.FC = () => {
   const lastSavedValueRef = React.useRef<string>('');
   const autoSaveTimerRef = React.useRef<NodeJS.Timeout | null>(null);
 
-  // Automated debounced save for check-in manual amount fee input
+  // Listen for manual value changes to update row input indicators without triggering background database calls
   useEffect(() => {
     if (!manualAmountStudentId) {
-      if (autoSaveTimerRef.current) {
-        clearTimeout(autoSaveTimerRef.current);
-        autoSaveTimerRef.current = null;
-      }
+      setSaveStatus('idle');
       return;
     }
-
     const amt = parseFloat(manualAmountValue);
     if (isNaN(amt) || amt < 0) {
       setSaveStatus('failed');
-      return; // Do not auto-save invalid amounts
-    }
-
-    // If the input value matches the last saved value, do nothing (keep status as idle / saved)
-    if (manualAmountValue === lastSavedValueRef.current) {
       return;
     }
-
-    setSaveStatus('dirty');
-
-    if (autoSaveTimerRef.current) {
-      clearTimeout(autoSaveTimerRef.current);
+    if (manualAmountValue !== lastSavedValueRef.current) {
+      setSaveStatus('dirty');
+    } else {
+      setSaveStatus('saved');
     }
-
-    autoSaveTimerRef.current = setTimeout(async () => {
-      setSaveStatus('saving');
-      try {
-        await recordPayment(manualAmountStudentId, true, amt);
-        lastSavedValueRef.current = manualAmountValue;
-        setSaveStatus('saved');
-        const matchingStudent = students.find(s => s.id === manualAmountStudentId);
-        const sName = matchingStudent ? matchingStudent.name : 'student';
-        showToast(`Auto-saved GHC ${amt.toFixed(2)} payment for ${sName}!`);
-        if (matchingStudent) setLastLoggedStudent(matchingStudent);
-      } catch (error) {
-        console.error('Auto-save payment failed:', error);
-        setSaveStatus('failed');
-      }
-    }, 1000); // 1-second debounce for comfortable user entry speed
-
-    return () => {
-      if (autoSaveTimerRef.current) {
-        clearTimeout(autoSaveTimerRef.current);
-      }
-    };
-  }, [manualAmountValue, manualAmountStudentId, recordPayment, students]);
+  }, [manualAmountValue, manualAmountStudentId]);
 
   // Grouped classes lists for selection
   const preSchoolClasses: StudentClass[] = ['Nursery', 'KG1', 'KG2'];
@@ -659,21 +831,54 @@ export const ClassRegister: React.FC = () => {
   // Map of student debt: unpaid past school days and total GHC arrears (running balance)
   const studentDebtMap = useMemo(() => {
     const map = new Map<string, ReturnType<typeof calculateStudentFinancialState>>();
-    students.forEach(student => {
-      const state = calculateStudentFinancialState(student, payments, activeTerm, currentDate);
+    
+    // Calculate for active class students
+    classStudents.forEach(student => {
+      const state = calculateStudentFinancialState(student, payments, activeTerm, currentDate, baseDailyFee);
       map.set(student.id, state);
     });
-    return map;
-  }, [students, payments, activeTerm, currentDate]);
 
-  // Filter students by search query
+    // Also calculate for historyStudent if specified and not already calculated
+    if (historyStudent && !map.has(historyStudent.id)) {
+      const state = calculateStudentFinancialState(historyStudent, payments, activeTerm, currentDate, baseDailyFee);
+      map.set(historyStudent.id, state);
+    }
+
+    // Also calculate for debtStudent if specified and not already calculated
+    if (debtStudent && !map.has(debtStudent.id)) {
+      const state = calculateStudentFinancialState(debtStudent, payments, activeTerm, currentDate, baseDailyFee);
+      map.set(debtStudent.id, state);
+    }
+
+    return map;
+  }, [classStudents, payments, activeTerm, currentDate, baseDailyFee, historyStudent, debtStudent]);
+
+  // Filter students by search query and status filter
   const filteredStudents = useMemo(() => {
-    if (!searchQuery.trim()) return classStudents;
-    return classStudents.filter(s => 
+    let list = classStudents;
+
+    if (statusFilter === 'unmarked') {
+      list = list.filter(s => !paidStudentMap.has(s.id));
+    } else if (statusFilter === 'present') {
+      list = list.filter(s => paidStudentMap.has(s.id) && !paidStudentMap.get(s.id)?.isAbsent);
+    } else if (statusFilter === 'absent') {
+      list = list.filter(s => paidStudentMap.has(s.id) && !!paidStudentMap.get(s.id)?.isAbsent);
+    } else if (statusFilter === 'arrears') {
+      list = list.filter(s => {
+        const debtObj = studentDebtMap.get(s.id);
+        const outstanding = (debtObj?.outstandingBalance || 0);
+        return outstanding > 0;
+      });
+    } else if (statusFilter === 'term_payers') {
+      list = list.filter(s => s.paymentType === 'Term');
+    }
+
+    if (!searchQuery.trim()) return list;
+    return list.filter(s => 
       s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       s.rollNumber.toLowerCase().includes(searchQuery.toLowerCase())
     );
-  }, [classStudents, searchQuery]);
+  }, [classStudents, searchQuery, statusFilter, paidStudentMap, studentDebtMap]);
 
   // Find the first unmarked student in the current view to automatically guide high-volume workflow
   const nextUnmarkedStudent = useMemo(() => {
@@ -684,6 +889,37 @@ export const ClassRegister: React.FC = () => {
       return !isP && !isA;
     });
   }, [filteredStudents, paidStudentMap]);
+
+  // Quick-search matches for absolute positioned suggestion overlay
+  const quickSearchMatches = useMemo(() => {
+    if (!searchQuery.trim()) return [];
+    const query = searchQuery.toLowerCase().trim();
+    return classStudents.filter(s => 
+      s.name.toLowerCase().includes(query) ||
+      s.rollNumber.toLowerCase().includes(query)
+    ).slice(0, 5);
+  }, [classStudents, searchQuery]);
+
+  // Handle selecting a student from the quick-search results to automatically scroll-to-view and high-contrast flash/highlight
+  const handleSelectQuickSearchStudent = (student: Student) => {
+    setSearchQuery('');
+    setHighlightedStudentId(student.id);
+
+    showToast(`Located "${student.name}" in today's class ledger.`);
+
+    setTimeout(() => {
+      const targetId = `student-row-${student.id}`;
+      const element = document.getElementById(targetId);
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 150);
+
+    // Auto-clear highlight after 3 seconds
+    setTimeout(() => {
+      setHighlightedStudentId(null);
+    }, 3000);
+  };
 
   // Helper to automatically scroll to the next unmarked student in the current filtered class view after marking a payment or absent
   const scrollToNextUnpaid = (currentStudentId: string) => {
@@ -749,11 +985,15 @@ export const ClassRegister: React.FC = () => {
 
   const classExpectedFees = useMemo(() => {
     return classStudents.reduce((acc, s) => {
-      // Standard daily fee is GHC 5 less discount
-      const dailyRate = Math.max(0, 5.00 - (s.discount || 0));
+      // Term payers do not contribute to daily cash drawer total expectations
+      if (s.paymentType === 'Term') {
+        return acc;
+      }
+      // Standard daily fee is dynamic less discount
+      const dailyRate = Math.max(0, baseDailyFee - (s.discount || 0));
       return acc + dailyRate;
     }, 0);
-  }, [classStudents]);
+  }, [classStudents, baseDailyFee]);
 
   const classCollectionPercentage = useMemo(() => {
     if (classExpectedFees <= 0) return 0;
@@ -851,7 +1091,7 @@ export const ClassRegister: React.FC = () => {
   const advanceCalculatedDays = useMemo(() => {
     if (!advanceStudent || !activeTerm || !activeTerm.schoolDays || activeTerm.schoolDays.length === 0) return [];
     
-    const dailyRate = Math.max(0.01, 5.00 - (advanceStudent.discount || 0));
+    const dailyRate = Math.max(0.01, baseDailyFee - (advanceStudent.discount || 0));
     const daysToCover = Math.floor(advanceAmount / dailyRate);
     if (daysToCover <= 0) return [];
 
@@ -896,7 +1136,7 @@ export const ClassRegister: React.FC = () => {
   const debtCalculatedDays = useMemo(() => {
     if (!debtStudent || !activeTerm) return [];
     
-    const dailyRate = Math.max(0.01, 5.00 - (debtStudent.discount || 0));
+    const dailyRate = Math.max(0.01, baseDailyFee - (debtStudent.discount || 0));
     const daysToCover = Math.floor((debtAmount + 0.005) / dailyRate);
     if (daysToCover <= 0) return [];
 
@@ -949,7 +1189,7 @@ export const ClassRegister: React.FC = () => {
       let statusLabel = 'Unpaid Arrears';
       let statusColor = 'text-red-650 font-extrabold';
       let statusBg = 'bg-red-50 text-red-750 border-red-200';
-      let feeLabel = 'GHC 5.00';
+      let feeLabel = `${currencySymbol} ${baseDailyFee.toFixed(2)}`;
       let paymentRef = '- -';
       let collector = '- -';
       
@@ -971,7 +1211,7 @@ export const ClassRegister: React.FC = () => {
         statusBg = isVerified 
           ? 'bg-emerald-50 text-emerald-800 border-emerald-205'
           : 'bg-amber-50 text-amber-850 border-amber-205';
-        feeLabel = `GHC ${pRecord.amount.toFixed(2)}`;
+        feeLabel = `${currencySymbol} ${pRecord.amount.toFixed(2)}`;
         paymentRef = pRecord.id.substring(0, 8).toUpperCase();
         collector = pRecord.collectedBy;
       } else if (isTermPayer) {
@@ -1049,12 +1289,12 @@ export const ClassRegister: React.FC = () => {
 
   const handleRecordDebtSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!debtStudent || debtAmount < 5) return;
+    if (!debtStudent || debtAmount < baseDailyFee) return;
     
     const isTodayUnpaid = !paidStudentMap.has(debtStudent.id);
     const shouldRecordToday = includeTodayInDebtSettle && isTodayUnpaid;
     const discountAmount = debtStudent.discount || 0;
-    const todayFee = Math.max(0, 5.00 - discountAmount);
+    const todayFee = Math.max(0, baseDailyFee - discountAmount);
 
     // Calculate total physical cash collected in a single integrated payment operation
     const totalAmountToRecord = debtAmount + (shouldRecordToday ? todayFee : 0);
@@ -1065,9 +1305,9 @@ export const ClassRegister: React.FC = () => {
     setDebtSuccess(true);
     
     if (shouldRecordToday) {
-      showToast(`Settled GHC ${debtAmount.toFixed(2)} arrears and logged GHC ${todayFee.toFixed(2)} today's fee for ${debtStudent.name} (Total GHC ${totalAmountToRecord.toFixed(2)})!`);
+      showToast(`Settled ${currencySymbol} ${debtAmount.toFixed(2)} arrears and logged ${currencySymbol} ${todayFee.toFixed(2)} today's fee for ${debtStudent.name} (Total ${currencySymbol} ${totalAmountToRecord.toFixed(2)})!`);
     } else {
-      showToast(`Successfully registered GHC ${debtAmount.toFixed(2)} arrears clearance payment for ${debtStudent.name}!`);
+      showToast(`Successfully registered ${currencySymbol} ${debtAmount.toFixed(2)} arrears clearance payment for ${debtStudent.name}!`);
     }
     setLastLoggedStudent(debtStudent);
 
@@ -1089,7 +1329,7 @@ export const ClassRegister: React.FC = () => {
       // Check if it's prepaid
       const isPrepaid = paidInfo.amount === 0 && (paidInfo.notes?.toLowerCase().includes('covered') || paidInfo.notes?.toLowerCase().includes('prepaid') || paidInfo.notes?.toLowerCase().includes('advance'));
       if (isPrepaid) {
-        if (!window.confirm(`Warning: ${studentName}'s attendance today is covered by an ADVANCE PAYMENT (GHC 0.00 cash today). Deactivating this will remove their prepaid clearance for today and place them in DEBT. Are you sure you want to deactivate today's prepaid status?`)) {
+        if (!window.confirm(`Warning: ${studentName}'s attendance today is covered by an ADVANCE PAYMENT (${currencySymbol} 0.00 cash today). Deactivating this will remove their prepaid clearance for today and place them in DEBT. Are you sure you want to deactivate today's prepaid status?`)) {
           return;
         }
       }
@@ -1097,11 +1337,11 @@ export const ClassRegister: React.FC = () => {
       deletePayment(paidInfo.paymentId);
       showToast(`Removed today's payment record for ${studentName}.`);
     } else {
-      // Unmarked, or marked as absent: record standard GHC 5 payment
+      // Unmarked, or marked as absent: record standard payment
       recordPayment(studentId, true);
       const discountAmount = student?.discount || 0;
-      const actualAmount = Math.max(0, 5.00 - discountAmount);
-      showToast(`Successfully logged GHC ${actualAmount.toFixed(2)} payment for ${studentName}!`);
+      const actualAmount = Math.max(0, baseDailyFee - discountAmount);
+      showToast(`Successfully logged ${currencySymbol} ${actualAmount.toFixed(2)} payment for ${studentName}!`);
       if (student) setLastLoggedStudent(student);
       scrollToNextUnpaid(studentId);
     }
@@ -1127,6 +1367,86 @@ export const ClassRegister: React.FC = () => {
     }
   };
 
+  const handleTogglePresentZeroPay = (studentId: string) => {
+    if (isHoliday) {
+      showToast("Class registry is locked. Date selected is a public holiday.");
+      return;
+    }
+    const student = students.find(s => s.id === studentId);
+    if (!student) return;
+    const studentName = student.name;
+    const paidInfo = paidStudentMap.get(studentId);
+    const isConfirmedPresent = !!paidInfo && !paidInfo.isAbsent && 
+      (paidInfo.notes?.toLowerCase().includes('present') || paidInfo.notes?.toLowerCase().includes('¢0'));
+
+    if (isConfirmedPresent) {
+      if (paidInfo.amount > 0) {
+        const currentRecord = payments.find(p => p.id === paidInfo.paymentId);
+        if (currentRecord) {
+          const updatedNotes = currentRecord.notes
+            ? currentRecord.notes.replace(' | Present or ¢0', '').replace('Present or ¢0', '').trim()
+            : '';
+          adjustPayment(paidInfo.paymentId, currentRecord.amount, false, updatedNotes, 'Toggle off present indication');
+          showToast(`Cleared present indication for ${studentName}.`);
+        }
+      } else {
+        const wasPrepaid = paidInfo.notes?.toLowerCase().includes('covered') || paidInfo.notes?.toLowerCase().includes('prepaid') || paidInfo.notes?.toLowerCase().includes('advance');
+        if (wasPrepaid) {
+          const currentRecord = payments.find(p => p.id === paidInfo.paymentId);
+          if (currentRecord) {
+            const updatedNotes = currentRecord.notes
+              ? currentRecord.notes.replace(' | Present or ¢0', '').replace('Present or ¢0', '').trim()
+              : '';
+            adjustPayment(paidInfo.paymentId, 0, false, updatedNotes, 'Toggle off present indication');
+            showToast(`Cleared present indication for ${studentName}.`);
+          }
+        } else {
+          deletePayment(paidInfo.paymentId);
+          showToast(`Cleared check-in status for ${studentName}.`);
+        }
+      }
+    } else {
+      recordPresentZeroPay(studentId);
+      showToast(`Marked ${studentName} as Present or ¢0 today.`);
+      scrollToNextUnpaid(studentId);
+    }
+  };
+
+  const handleOpenNoteField = (studentId: string, currentNotes: string) => {
+    if (isHoliday) {
+      showToast("Class registry is locked. Date selected is a public holiday.");
+      return;
+    }
+    const paidInfo = paidStudentMap.get(studentId);
+    if (!paidInfo) {
+      recordPresentZeroPay(studentId);
+      setEditingNoteStudentId(studentId);
+      setNoteInputValue('');
+      showToast("Marked pupil present (GHC 0) to attach attendance note.");
+    } else {
+      setEditingNoteStudentId(studentId);
+      setNoteInputValue(currentNotes || '');
+    }
+  };
+
+  const handleSaveDailyNote = (studentId: string) => {
+    if (isHoliday) {
+      showToast("Class registry is locked. Date selected is a public holiday.");
+      return;
+    }
+    const student = students.find(s => s.id === studentId);
+    if (!student) return;
+    const paidInfo = paidStudentMap.get(studentId);
+    if (!paidInfo) {
+      showToast("Please check in pupil first.");
+      return;
+    }
+    adjustPayment(paidInfo.paymentId, paidInfo.amount || 0, !!paidInfo.isAbsent, noteInputValue.trim(), 'Saved pupil daily note');
+    setEditingNoteStudentId(null);
+    setNoteInputValue('');
+    showToast(`Saved daily attendance note for ${student.name}.`);
+  };
+
   const handleMarkAllPaid = () => {
     if (isHoliday) {
       showToast("Class registry is locked. Date selected is a public holiday.");
@@ -1139,6 +1459,148 @@ export const ClassRegister: React.FC = () => {
       bulkRecordPayments(unpaidIds, true);
       showToast(`Successfully logged daily payments for ${unpaidIds.length} pupils!`);
     }
+  };
+
+  const handleMarkAllPresentGHC5 = () => {
+    if (isHoliday) {
+      showToast("Class registry is locked. Date selected is a public holiday.");
+      return;
+    }
+    const targetIds = classStudents.map(s => s.id);
+    if (targetIds.length > 0) {
+      bulkRecordPayments(targetIds, true, 5.00);
+      showToast(`Successfully marked all ${targetIds.length} pupils present & paid GHC 5.00!`);
+      playFeedbackSound?.('success');
+    } else {
+      showToast("No active students in this class to record.");
+    }
+  };
+
+  const handleResetDailyConfirmed = () => {
+    clearDailyPaymentsForClass(selectedClass, currentDate);
+    setSelectedStudentIds([]);
+    setShowResetDailyConfirm(false);
+    showToast(`Successfully reset all today's records for class ${selectedClass}.`);
+    playFeedbackSound?.('success');
+  };
+
+  const handleDownloadCSV = () => {
+    if (classStudents.length === 0) {
+      showToast("No pupils to export in the current class roster.");
+      return;
+    }
+
+    // Prepare CSV headers
+    const headers = [
+      "Pupil ID",
+      "Full Name",
+      "Class",
+      "Registration Number",
+      "Term Subscription",
+      "Ledger Date",
+      "Attendance Status",
+      "Payment Status",
+      "Amount Paid (GHC)",
+      "Collected By / System Notes"
+    ];
+
+    // Build rows
+    const rows = classStudents.map(student => {
+      const debtInfo = studentDebtMap.get(student.id);
+      const paidInfo = paidStudentMap.get(student.id);
+      const isAbsent = !!paidInfo && !!paidInfo.isAbsent;
+      const isPaid = isAbsent ? false : (debtInfo?.isPaidToday || false);
+      const isPrepaid = isPaid && (
+        (!paidInfo && student.paymentType !== 'Term') ||
+        (!!paidInfo && paidInfo.amount === 0 && (paidInfo.notes?.toLowerCase().includes('covered') || paidInfo.notes?.toLowerCase().includes('prepaid') || paidInfo.notes?.toLowerCase().includes('advance')))
+      );
+      const isArrearsCleared = isPaid && !!paidInfo && paidInfo.amount === 0 && (paidInfo.notes?.toLowerCase().includes('arrears') || paidInfo.notes?.toLowerCase().includes('settled') || paidInfo.notes?.toLowerCase().includes('clear'));
+      const isScholarship = isPaid && (
+        student.discount === 5 ||
+        (!!paidInfo && paidInfo.amount === 0 && !isPrepaid && !isArrearsCleared)
+      );
+      const isConfirmedPresent = !!paidInfo && !paidInfo.isAbsent && 
+        (paidInfo.notes?.toLowerCase().includes('present') || paidInfo.notes?.toLowerCase().includes('¢0'));
+      const isPresentOrZeroPay = isConfirmedPresent && !isPaid;
+
+      // Determine Attendance status text
+      let attendanceStatus = "Unmarked";
+      if (isAbsent) {
+        attendanceStatus = "Absent";
+      } else if (isPaid || isConfirmedPresent) {
+        attendanceStatus = "Present";
+      }
+
+      // Determine Payment status text and Amount
+      let paymentStatusStr = "Unpaid";
+      let amountPaidStr = "0.00";
+      let collectorNotes = "No Payment Registered";
+
+      if (isAbsent) {
+        paymentStatusStr = "Absent (Excused)";
+        amountPaidStr = "0.00";
+        collectorNotes = paidInfo?.notes || "Marked Absent";
+      } else if (isPaid) {
+        if (isPrepaid) {
+          paymentStatusStr = "Prepaid (Covered)";
+          amountPaidStr = "0.00";
+        } else if (isScholarship) {
+          paymentStatusStr = "Scholarship/Free";
+          amountPaidStr = "0.00";
+        } else if (isArrearsCleared) {
+          paymentStatusStr = "Arrears Cleared / Debt Clearance";
+          amountPaidStr = (paidInfo ? paidInfo.amount : 0.00).toFixed(2);
+        } else {
+          paymentStatusStr = "Paid";
+          amountPaidStr = (paidInfo ? paidInfo.amount : 5.00).toFixed(2);
+        }
+        collectorNotes = paidInfo 
+          ? `Collected by: ${paidInfo.collectedBy}${paidInfo.notes ? ` (${paidInfo.notes})` : ''}` 
+          : "System Running Balance";
+      } else if (isPresentOrZeroPay) {
+        paymentStatusStr = "Present (GHC 0.00)";
+        amountPaidStr = "0.00";
+        collectorNotes = paidInfo 
+          ? `Collected by: ${paidInfo.collectedBy}${paidInfo.notes ? ` (${paidInfo.notes})` : ''}` 
+          : "System Running Balance";
+      }
+
+      // Format fields to handle quotes/commas
+      const escapeCsv = (val: string) => {
+        const cleaned = String(val).replace(/"/g, '""');
+        return `"${cleaned}"`;
+      };
+
+      return [
+        escapeCsv(student.id),
+        escapeCsv(student.name),
+        escapeCsv(student.class),
+        escapeCsv(student.rollNo || "N/A"),
+        escapeCsv(student.paymentType),
+        escapeCsv(currentDate),
+        escapeCsv(attendanceStatus),
+        escapeCsv(paymentStatusStr),
+        escapeCsv(amountPaidStr),
+        escapeCsv(collectorNotes)
+      ];
+    });
+
+    const csvContent = [
+      headers.join(","),
+      ...rows.map(row => row.join(","))
+    ].join("\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `Class_${selectedClass}_Register_${currentDate}.csv`);
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    showToast(`Successfully downloaded daily CSV sheet for Class ${selectedClass}!`);
   };
 
   const triggerSmsAlert = (student: Student) => {
@@ -1471,7 +1933,7 @@ export const ClassRegister: React.FC = () => {
   };
 
   const handleShareWhatsApp = async (
-    type: 'profile' | 'invoice' | 'receipt',
+    type: 'profile' | 'invoice' | 'receipt' | 'arrears_warning' | 'check_in',
     student: Student,
     payment?: PaymentRecord,
     customOptions?: {
@@ -1549,6 +2011,31 @@ export const ClassRegister: React.FC = () => {
         `${totalArrears > 0 ? `_Polite Notice: An outstanding balance of *GHC ${totalArrears.toFixed(2)}* is pending. Please reconcile at the checkpoint desk immediately._` : `_Account is in good standing. Thank you for your support!_`}\n\n` +
         `_Issued by: ${currentUser ? currentUser.name : 'Authorized Registrar Registration'}_`;
 
+    } else if (type === 'arrears_warning') {
+      const totalArrears = customOptions?.totalArrears !== undefined ? customOptions.totalArrears : 0;
+      const daysCount = customOptions?.unpaidDaysCount !== undefined ? customOptions.unpaidDaysCount : 0;
+      const isTerm = student.paymentType === 'Term';
+
+      let detailsText = '';
+      if (isTerm) {
+        detailsText = `Your child, ${studentName}, is registered on the Term Fee Payment scheme. Currently, there is an accumulated outstanding balance of *GHC ${totalArrears.toFixed(2)}* for school fees and ancillary levies.`;
+      } else {
+        detailsText = `Your child, ${studentName}, currently has *GHC ${totalArrears.toFixed(2)}* in accumulated Daily Ingress arrears (equivalent to *${daysCount} unpaid school days*).`;
+      }
+
+      messageText = `*SAAKO HOLY CHILD ACADEMY*\n` +
+        `⚠️ *IMMEDIATE ATTENTION: OUTSTANDING FEES NOTICE* ⚠️\n\n` +
+        `Dear Guardian,\n\n` +
+        `This is an official administrative notice regarding the financial account of your ward:\n` +
+        `*Student Name:* ${studentName}\n` +
+        `*Roll ID:* ${rollNumber}\n` +
+        `*Class/Grade:* ${classGroup}\n\n` +
+        `${detailsText}\n\n` +
+        `Kindly make arrangements to settle this outstanding balance of *GHC ${totalArrears.toFixed(2)}* at the school gate check-in desk or make a direct transfer to avoid any interruption to your ward's daily registration and classroom entry.\n\n` +
+        `If you have recently made this payment, please present your printed receipt at the main desk to update our ledger records.\n\n` +
+        `Thank you for your prompt cooperation.\n` +
+        `_Office of the Headmaster & Registrar Hub_`;
+
     } else if (type === 'receipt' && payment) {
       const refId = payment.id;
       
@@ -1563,58 +2050,26 @@ export const ClassRegister: React.FC = () => {
         `${payment.notes ? `*Notes:* ${payment.notes}\n` : ''}` +
         `*Status:* VERIFIED SECURE\n\n` +
         `_Thank you for your payment. Verified via Gate Ingress registrar._`;
+    } else if (type === 'check_in') {
+      messageText = `*${systemSettings?.schoolName || 'SAAKO HOLY CHILD ACADEMY'}*\n` +
+        `🔔 *GATE CHECK-IN CONFIRMATION* 🔔\n\n` +
+        `Dear Guardian,\n\n` +
+        `This is to inform you that your ward, *${studentName}* (ID: ${rollNumber}), has successfully checked in at the school gate today at *${new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })}*.\n\n` +
+        `*Status:* Present & Registered\n` +
+        `*Class Group:* ${classGroup}\n` +
+        `*Academic Date:* ${currentDate}\n\n` +
+        `Thank you for choosing ${systemSettings?.schoolName || 'Saako Holy Child Academy'}!`;
     }
 
     if (!messageText) return;
 
-    // Use Web Share API if available (e.g. on mobile browsers, outside sandbox iframes)
-    let sharedViaApi = false;
-    if (typeof navigator !== 'undefined' && navigator.share) {
-      try {
-        await navigator.share({
-          title: type === 'profile' ? 'School Pupil Profile' : type === 'invoice' ? 'Fee Invoice Statement' : 'Official Payment Receipt',
-          text: messageText
-        });
-        sharedViaApi = true;
-        showToast("Successfully shared details!");
-      } catch (err: any) {
-        if (err.name === 'AbortError') return;
-        console.log("Web Share API could not complete. Using fallback:", err);
-      }
-    }
-
-    // Direct Web/App pre-filled URL as fallback
-    if (!sharedViaApi) {
-      let targetPhone = phone.replace(/\D/g, "");
-      if (targetPhone.startsWith("0") && targetPhone.length === 10) {
-        targetPhone = "233" + targetPhone.substring(1);
-      }
-      
-      const urlText = encodeURIComponent(messageText);
-      const waUrl = targetPhone 
-        ? `https://api.whatsapp.com/send?phone=${targetPhone}&text=${urlText}`
-        : `https://api.whatsapp.com/send?text=${urlText}`;
-
-      if (typeof window !== 'undefined') {
-        window.open(waUrl, '_blank', 'noopener,noreferrer');
-        showToast("Pre-filled WhatsApp opened. Please complete the delivery!");
-      }
-    }
-
-    // Always trigger background logging so that it registers in the system audits
-    try {
-      if (typeof useApp !== 'undefined') {
-        await sendautomatedWhatsApp(
-          phone || 'N/A',
-          messageText,
-          studentId,
-          studentName,
-          type
-        );
-      }
-    } catch (err) {
-      console.error("Failed to automatically log dispatch connection:", err);
-    }
+    setWhatsAppShareModal({
+      type,
+      student,
+      payment,
+      messageText,
+      defaultPhone: phone
+    });
   };
 
   const statContainerVariants = {
@@ -2404,98 +2859,177 @@ export const ClassRegister: React.FC = () => {
         </div>
 
         {/* Table Header Filter tools */}
-        <div className="p-6 bg-neutral-950 border-b-2 border-neutral-800 flex flex-col xl:flex-row justify-between items-center gap-4">
-          <div className="flex flex-col md:flex-row items-stretch md:items-center gap-3 w-full xl:max-w-4xl">
-            {/* CLASS SELECTOR QUICK-SWITCHER DROPDOWN */}
-            <div className="relative w-full md:w-56 shrink-0">
-              <span className="absolute left-3.5 top-3.5 text-amber-400 z-10 pointer-events-none">
-                <Users size={14} className="stroke-[2.5]" />
-              </span>
-              <select
-                id="class-quick-dropdown"
-                value={selectedClass}
-                onChange={(e) => {
-                  setSelectedClass(e.target.value as StudentClass);
-                  showToast(`Switched active register roster to: ${e.target.value}`);
-                }}
-                className="w-full bg-neutral-900 border-2 border-neutral-800 py-3 pl-9 pr-8 text-[11px] font-mono font-black text-amber-400 focus:outline-none focus:border-amber-400 uppercase cursor-pointer appearance-none tracking-wider rounded-none"
-                title="Rapid Switch Active Class Group"
+        <div className="p-6 bg-neutral-950 border-b-2 border-neutral-800 flex flex-col gap-5">
+          {/* Row 1: COHORT & STUDENT IDENTIFICATION */}
+          <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4">
+            
+            {/* Left: Class Dropdown and Student Search */}
+            <div className="flex flex-col md:flex-row items-stretch md:items-center gap-3 flex-grow max-w-full lg:max-w-4xl">
+              
+              {/* CLASS SELECTOR QUICK-SWITCHER DROPDOWN */}
+              <div className="relative w-full md:w-56 shrink-0">
+                <span className="absolute left-3.5 top-3.5 text-amber-400 z-10 pointer-events-none">
+                  <Users size={14} className="stroke-[2.5]" />
+                </span>
+                <select
+                  id="class-quick-dropdown"
+                  value={selectedClass}
+                  onChange={(e) => {
+                    setSelectedClass(e.target.value as StudentClass);
+                    showToast(`Switched active register roster to: ${e.target.value}`);
+                  }}
+                  className="w-full bg-neutral-900 border-2 border-neutral-800 py-3 pl-9 pr-8 text-[11px] font-mono font-black text-amber-400 focus:outline-none focus:border-amber-400 uppercase cursor-pointer appearance-none tracking-wider rounded-none"
+                  title="Rapid Switch Active Class Group"
+                >
+                  <optgroup label="PRE-SCHOOL DIVISION" className="bg-neutral-950 text-neutral-450 font-mono font-black text-[10px] uppercase">
+                    {preSchoolClasses.map(cls => (
+                      <option key={cls} value={cls} className="bg-neutral-900 text-white font-mono font-bold text-xs uppercase">
+                        {cls} (Roll: {classEnrolments[cls] || 0} | GHC {classDailyTotals[cls] || 0})
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="PRIMARY DIVISION" className="bg-neutral-950 text-neutral-450 font-mono font-black text-[10px] uppercase">
+                    {primaryClasses.map(cls => (
+                      <option key={cls} value={cls} className="bg-neutral-900 text-white font-mono font-bold text-xs uppercase">
+                        {cls} (Roll: {classEnrolments[cls] || 0} | GHC {classDailyTotals[cls] || 0})
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="JUNIOR HIGH DIVISION (JHS)" className="bg-neutral-950 text-neutral-450 font-mono font-black text-[10px] uppercase">
+                    {jhsClasses.map(cls => (
+                      <option key={cls} value={cls} className="bg-neutral-900 text-white font-mono font-bold text-xs uppercase">
+                        {cls} (Roll: {classEnrolments[cls] || 0} | GHC {classDailyTotals[cls] || 0})
+                      </option>
+                    ))}
+                  </optgroup>
+                </select>
+                <div className="absolute right-3.5 top-4 pointer-events-none text-neutral-550 z-10">
+                  <ChevronDown size={14} className="stroke-[3]" />
+                </div>
+              </div>
+
+              {/* SEARCH INPUT */}
+              <div className="relative flex-grow">
+                <Search className="absolute left-4 top-3.5 text-neutral-500" size={16} />
+                <input
+                  id="class-register-search"
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      if (nextUnmarkedStudent) {
+                        handleTogglePayment(nextUnmarkedStudent.id);
+                        setSearchQuery(''); // Clear search after checking in to auto-advance and reset the roster list to show the next student clearly
+                      } else {
+                        showToast("All pupils in this class roster have been cleared for today!");
+                      }
+                    }
+                  }}
+                  placeholder="SEARCH NAME/ROLL (ENTER TO AUTO-PAY NEXT UP)..."
+                  className="w-full bg-neutral-900 border-2 border-neutral-800 py-3 pl-11 pr-24 text-[11px] font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600 tracking-wide"
+                  title="Type to search, or simply press Enter to record check-in for the active next student and shift forward"
+                />
+                <div className="absolute right-3 top-2.5 flex items-center gap-1.5">
+                  <VoiceSearchButton
+                    inputId="class-register-search"
+                    onTranscript={(text) => setSearchQuery(text)}
+                    className="mr-0.5"
+                  />
+                  <kbd className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 border border-neutral-800 bg-neutral-950 font-mono text-[9px] text-neutral-550 rounded-xs leading-none pointer-events-none uppercase font-bold tracking-wider select-none">
+                    Ctrl+K
+                  </kbd>
+                  <kbd className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 border border-neutral-800 bg-neutral-950 font-mono text-[9px] text-amber-500/80 rounded-xs leading-none pointer-events-none uppercase font-bold tracking-wider select-none" title="Press Enter to toggle payment for the next student up">
+                    ↵ Enter
+                  </kbd>
+                </div>
+
+                {/* FLOATING QUICK-SEARCH SUGGESTIONS GRID */}
+                {quickSearchMatches.length > 0 && (
+                  <div className="absolute left-0 top-full w-full bg-neutral-950 border-2 border-neutral-800 shadow-2xl z-50 mt-1 max-h-72 overflow-y-auto divide-y-2 divide-neutral-900 rounded-none">
+                    <div className="bg-neutral-900/90 backdrop-blur-md px-4 py-2 text-[8px] font-mono text-neutral-550 uppercase font-black tracking-widest flex justify-between items-center select-none border-b border-neutral-850">
+                      <span>Quick Search Suggestions ({quickSearchMatches.length})</span>
+                      <span>Click to Scroll & Highlight</span>
+                    </div>
+                    {quickSearchMatches.map(student => {
+                      const debtInfo = studentDebtMap.get(student.id);
+                      const paidInfo = paidStudentMap.get(student.id);
+                      const isAbsent = !!paidInfo && !!paidInfo.isAbsent;
+                      const isPaid = isAbsent ? false : (debtInfo?.isPaidToday || false);
+                      const isPrepaid = isPaid && (
+                        (!paidInfo && student.paymentType !== 'Term') ||
+                        (!!paidInfo && paidInfo.amount === 0 && (paidInfo.notes?.toLowerCase().includes('covered') || paidInfo.notes?.toLowerCase().includes('prepaid') || paidInfo.notes?.toLowerCase().includes('advance')))
+                      );
+                      const isScholarship = isPaid && (
+                        student.discount === 5 ||
+                        (!!paidInfo && paidInfo.amount === 0 && !isPrepaid)
+                      );
+
+                      let statusTextLabel = 'UNMARKED';
+                      let statusLabelColor = 'text-neutral-450';
+                      if (isAbsent) {
+                        statusTextLabel = 'ABSENT';
+                        statusLabelColor = 'text-red-400';
+                      } else if (isPrepaid) {
+                        statusTextLabel = 'PREPAID';
+                        statusLabelColor = 'text-indigo-400';
+                      } else if (isScholarship) {
+                        statusTextLabel = 'SCHOLARSHIP';
+                        statusLabelColor = 'text-teal-400';
+                      } else if (isPaid) {
+                        statusTextLabel = 'PAID';
+                        statusLabelColor = 'text-emerald-400';
+                      }
+
+                      return (
+                        <button
+                          key={student.id}
+                          type="button"
+                          onClick={() => handleSelectQuickSearchStudent(student)}
+                          className="w-full text-left px-4 py-3 pb-2.5 flex items-center justify-between hover:bg-neutral-900/90 focus:bg-neutral-900 focus:outline-none transition-colors group cursor-pointer"
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div className="w-2 h-2 rounded-full bg-neutral-800 group-hover:bg-amber-400 transition-colors shrink-0" />
+                            <div className="min-w-0">
+                              <span className="block text-[11px] font-mono font-black text-white group-hover:text-amber-400 uppercase tracking-tight truncate">
+                                {student.name}
+                              </span>
+                              <span className="block text-[8px] font-mono text-neutral-500 uppercase tracking-wider font-bold">
+                                Roll: {student.rollNumber} • {student.paymentType === 'Term' ? 'Term Subscription' : 'Daily Scheme'}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-3 shrink-0">
+                            <span className={`text-[9px] font-mono font-black uppercase tracking-widest ${statusLabelColor}`}>
+                              {statusTextLabel}
+                            </span>
+                            <span className="text-[8px] font-mono text-neutral-600 group-hover:text-amber-400 uppercase tracking-tight transition-colors border border-dashed border-neutral-800 group-hover:border-amber-400/30 px-2 py-0.5 font-bold">
+                              locate ↵
+                            </span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Keyboard shortcut info indicator reminder */}
+              <div 
+                className="hidden md:flex items-center justify-center text-neutral-550 hover:text-amber-400 border border-neutral-800 bg-neutral-900 hover:border-amber-400 transition-all cursor-help h-[42px] w-10 shrink-0 select-none"
+                title="Keyboard Shortcut Reminder: Press 'Ctrl+K' (or 'Cmd+K' on macOS) from anywhere at any time to focus the search box instantly"
               >
-                <optgroup label="PRE-SCHOOL DIVISION" className="bg-neutral-950 text-neutral-450 font-mono font-black text-[10px] uppercase">
-                  {preSchoolClasses.map(cls => (
-                    <option key={cls} value={cls} className="bg-neutral-900 text-white font-mono font-bold text-xs uppercase">
-                      {cls} (Roll: {classEnrolments[cls] || 0} | GHC {classDailyTotals[cls] || 0})
-                    </option>
-                  ))}
-                </optgroup>
-                <optgroup label="PRIMARY DIVISION" className="bg-neutral-950 text-neutral-450 font-mono font-black text-[10px] uppercase">
-                  {primaryClasses.map(cls => (
-                    <option key={cls} value={cls} className="bg-neutral-900 text-white font-mono font-bold text-xs uppercase">
-                      {cls} (Roll: {classEnrolments[cls] || 0} | GHC {classDailyTotals[cls] || 0})
-                    </option>
-                  ))}
-                </optgroup>
-                <optgroup label="JUNIOR HIGH DIVISION (JHS)" className="bg-neutral-950 text-neutral-450 font-mono font-black text-[10px] uppercase">
-                  {jhsClasses.map(cls => (
-                    <option key={cls} value={cls} className="bg-neutral-900 text-white font-mono font-bold text-xs uppercase">
-                      {cls} (Roll: {classEnrolments[cls] || 0} | GHC {classDailyTotals[cls] || 0})
-                    </option>
-                  ))}
-                </optgroup>
-              </select>
-              <div className="absolute right-3.5 top-4 pointer-events-none text-neutral-550 z-10">
-                <ChevronDown size={14} className="stroke-[3]" />
+                <Info size={14} className="stroke-[2.5]" />
               </div>
             </div>
 
-            <div className="relative flex-grow">
-              <Search className="absolute left-4 top-3.5 text-neutral-500" size={16} />
-              <input
-                id="class-register-search"
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    if (nextUnmarkedStudent) {
-                      handleTogglePayment(nextUnmarkedStudent.id);
-                      setSearchQuery(''); // Clear search after checking in to auto-advance and reset the roster list to show the next student clearly
-                    } else {
-                      showToast("All pupils in this class roster have been cleared for today!");
-                    }
-                  }
-                }}
-                placeholder="SEARCH NAME/ROLL (ENTER TO AUTO-PAY NEXT UP)..."
-                className="w-full bg-neutral-900 border-2 border-neutral-800 py-3 pl-11 pr-24 text-[11px] font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600 tracking-wide"
-                title="Type to search, or simply press Enter to record check-in for the active next student and shift forward"
-              />
-              <div className="absolute right-3 top-2.5 flex items-center gap-1.5">
-                <VoiceSearchButton
-                  inputId="class-register-search"
-                  onTranscript={(text) => setSearchQuery(text)}
-                  className="mr-0.5"
-                />
-                <kbd className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 border border-neutral-800 bg-neutral-950 font-mono text-[9px] text-neutral-500 rounded-xs leading-none pointer-events-none uppercase font-bold tracking-wider select-none">
-                  Ctrl+K
-                </kbd>
-                <kbd className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 border border-neutral-800 bg-neutral-950 font-mono text-[9px] text-amber-500/80 rounded-xs leading-none pointer-events-none uppercase font-bold tracking-wider select-none" title="Press Enter to toggle payment for the next student up">
-                  ↵ Enter
-                </kbd>
-              </div>
-            </div>
-            
-            {/* Keyboard shortcut info indicator reminder */}
-            <div 
-              className="hidden md:flex items-center justify-center text-neutral-550 hover:text-amber-400 border border-neutral-800 bg-neutral-900 hover:border-amber-400 transition-all cursor-help h-[42px] w-10 shrink-0 select-none"
-              title="Keyboard Shortcut Reminder: Press 'Ctrl+K' (or 'Cmd+K' on macOS) from anywhere at any time to focus the search box instantly"
-            >
-              <Info size={14} className="stroke-[2.5]" />
-            </div>
+            {/* Right: Camera Scan Trigger */}
             <button
               id="qr-scanner-trigger"
               onClick={() => setIsQrModalOpen(true)}
-              className="bg-amber-400 hover:bg-amber-300 text-black py-3 px-4 text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 border-2 border-amber-400 transition-colors cursor-pointer shrink-0"
+              className="bg-amber-400 hover:bg-amber-300 text-black py-3 px-5 text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 border-2 border-amber-400 transition-colors cursor-pointer shrink-0 w-full lg:w-48 animate-pulse hover:animate-none"
               title="Open QR scanner camera station"
             >
               <QrCode size={14} className="stroke-[3]" />
@@ -2503,29 +3037,242 @@ export const ClassRegister: React.FC = () => {
             </button>
           </div>
 
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 w-full sm:w-auto">
-            {classStudents.length > 0 && (
-              <div className="flex flex-col gap-1.5 w-full sm:w-48 bg-neutral-900 border border-neutral-800 p-2">
-                <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-wider font-mono text-neutral-400">
-                  <span>Paid: {paidCount}/{classStudents.length}</span>
-                  <span className="text-amber-400">{Math.round((paidCount / classStudents.length) * 100)}%</span>
+          {/* Row 2: REGISTRY STATS & BULK OPERATIONS (Cleanly separated to prevent squeezing, wrapping gracefully) */}
+          <div className="border-t border-neutral-800/60 pt-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            {/* Progress Bar (Left side) */}
+            <div className="w-full md:max-w-xs shrink-0">
+              {classStudents.length > 0 && (
+                <div className="flex flex-col gap-1.5 w-full bg-neutral-900/60 border border-neutral-800/80 p-2">
+                  <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-wider font-mono text-neutral-450">
+                    <span>Roster Paid: {paidCount}/{classStudents.length}</span>
+                    <span className="text-amber-400">{Math.round((paidCount / classStudents.length) * 100)}%</span>
+                  </div>
+                  <div className="w-full bg-neutral-950 h-2 overflow-hidden border border-neutral-900">
+                    <div 
+                      className="bg-amber-400 h-full transition-all duration-300"
+                      style={{ width: `${(paidCount / classStudents.length) * 100}%` }}
+                    />
+                  </div>
                 </div>
-                <div className="w-full bg-neutral-950 h-2 overflow-hidden border border-neutral-850">
-                  <div 
-                    className="bg-amber-400 h-full transition-all duration-300"
-                    style={{ width: `${(paidCount / classStudents.length) * 100}%` }}
-                  />
-                </div>
-              </div>
-            )}
+              )}
+            </div>
+
+            {/* Bulk Trigger Action Buttons (Right side: wraps beautifully using flex-wrap gap-2) */}
+            <div className="flex flex-wrap items-center gap-2 w-full md:w-auto justify-start md:justify-end">
+              <button
+                type="button"
+                onClick={handleMarkAllPaid}
+                disabled={outstandingCount === 0 || isHoliday}
+                className="flex-grow sm:flex-grow-0 text-[10px] font-mono font-black bg-neutral-900 border border-neutral-800 hover:border-neutral-700 hover:text-white text-neutral-300 py-2.5 px-4 transition-all flex items-center justify-center gap-1.5 uppercase tracking-wider disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer font-bold"
+                title="Only record payments for pupils who are currently Unmarked today"
+              >
+                <CheckSquare size={13} className="stroke-[2.5]" />
+                <span>Bulk Unmarked Paid</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleMarkAllPresentGHC5}
+                disabled={classStudents.length === 0 || isHoliday}
+                className="flex-grow sm:flex-grow-0 text-[10px] font-mono font-black bg-amber-400 hover:bg-amber-300 text-black py-2.5 px-4.5 transition-all flex items-center justify-center gap-1.5 uppercase tracking-widest disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer shadow-md font-bold"
+                title="Mark absolutely all active pupils as present and paid with default GHC 5.00 with a single click"
+              >
+                <Users size={13} className="stroke-[2.5]" />
+                <span>Mark All Present</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (isHoliday) {
+                    showToast("Class registry is locked. Date selected is a public holiday.");
+                    return;
+                  }
+                  setShowResetDailyConfirm(true);
+                }}
+                className="flex-grow sm:flex-grow-0 text-[10px] font-mono font-black bg-neutral-900 border border-neutral-800 hover:border-red-650 hover:text-red-400 text-neutral-450 py-2.5 px-3.5 transition-all flex items-center justify-center gap-1.5 uppercase tracking-wider cursor-pointer font-bold"
+                title="Reset all payment and attendance status records for this class today"
+              >
+                <RefreshCw size={13} className="stroke-[2.5]" />
+                <span>Reset Daily</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleDownloadCSV}
+                className="flex-grow sm:flex-grow-0 text-[10px] font-mono font-black bg-neutral-900 border border-neutral-800 hover:border-amber-400 hover:text-amber-400 text-neutral-300 py-2.5 px-3.5 transition-all flex items-center justify-center gap-1.5 uppercase tracking-wider cursor-pointer font-bold"
+                title="Download Today's Sheet"
+              >
+                <Download size={13} className="stroke-[2.5]" />
+                <span>Download Sheet</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowPrintHardcopyModal(true)}
+                className="flex-grow sm:flex-grow-0 text-[10px] font-mono font-black bg-neutral-900 border border-neutral-800 hover:border-emerald-400 hover:text-emerald-400 text-neutral-300 py-2.5 px-3.5 transition-all flex items-center justify-center gap-1.5 uppercase tracking-wider cursor-pointer font-bold"
+                title="Generate physical printed sheet block for gate collections"
+              >
+                <Printer size={13} className="stroke-[2.5]" />
+                <span>Hardcopy Checklist</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Beautiful secondary interactive filter pills and registration progress HUD */}
+        <div className="px-6 py-4 bg-neutral-900/60 border-b-2 border-neutral-800 flex flex-col lg:flex-row lg:items-center justify-between gap-4 select-none">
+          {/* Status Filter Pills */}
+          <div className="flex flex-wrap items-center gap-2 overflow-x-auto scroller-hidden">
+            <span className="text-[10px] font-mono font-black text-neutral-400 uppercase tracking-widest mr-1.5 shrink-0">FILTER COHORT:</span>
+            
+            <button
+              type="button"
+              onClick={() => setStatusFilter('all')}
+              className={`px-3 py-1.5 text-[10px] font-mono font-black uppercase tracking-wider transition-all flex items-center gap-1.5 border cursor-pointer ${
+                statusFilter === 'all' 
+                  ? 'bg-amber-400 text-black border-amber-400 font-black shadow-sm' 
+                  : 'bg-neutral-950 text-neutral-400 border-neutral-800/80 hover:text-white hover:border-neutral-700'
+              }`}
+            >
+              All ({classStudents.length})
+            </button>
 
             <button
-              onClick={handleMarkAllPaid}
-              disabled={outstandingCount === 0 || isHoliday}
-              className="w-full sm:w-auto text-[10px] font-black bg-white hover:bg-amber-400 text-black py-3 px-5 transition-colors flex items-center justify-center gap-2 uppercase tracking-widest disabled:opacity-30 disabled:cursor-not-allowed"
+              type="button"
+              onClick={() => setStatusFilter('unmarked')}
+              className={`px-3 py-1.5 text-[10px] font-mono font-black uppercase tracking-wider transition-all flex items-center gap-1.5 border cursor-pointer ${
+                statusFilter === 'unmarked' 
+                  ? 'bg-rose-600 text-white border-rose-600 font-black shadow-sm' 
+                  : 'bg-neutral-950 text-neutral-400 border-neutral-800/80 hover:text-rose-400 hover:border-rose-900/40'
+              }`}
+              title="Show only pupils with unresolved attendance or payment status for today"
             >
-              <CheckSquare size={14} /> BULK MARK PAID (GHC 5.00)
+              <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse shrink-0" />
+              Unmarked ({classStudents.filter(s => !paidStudentMap.has(s.id)).length})
             </button>
+
+            <button
+              type="button"
+              onClick={() => setStatusFilter('present')}
+              className={`px-3 py-1.5 text-[10px] font-mono font-black uppercase tracking-wider transition-all flex items-center gap-1.5 border cursor-pointer ${
+                statusFilter === 'present' 
+                  ? 'bg-emerald-500 text-white border-emerald-500 font-black shadow-sm' 
+                  : 'bg-neutral-950 text-neutral-400 border-neutral-800/80 hover:text-emerald-400 hover:border-emerald-900/30'
+              }`}
+            >
+              <Check size={11} className="stroke-[3.5]" />
+              Present ({classStudents.filter(s => {
+                const p = paidStudentMap.get(s.id);
+                return !!p && !p.isAbsent;
+              }).length})
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setStatusFilter('absent')}
+              className={`px-3 py-1.5 text-[10px] font-mono font-black uppercase tracking-wider transition-all flex items-center gap-1.5 border cursor-pointer ${
+                statusFilter === 'absent' 
+                  ? 'bg-neutral-400 text-black border-neutral-400 font-black shadow-sm' 
+                  : 'bg-neutral-950 text-neutral-400 border-neutral-800/80 hover:text-white hover:border-neutral-700'
+              }`}
+            >
+              <X size={11} className="stroke-[3.5]" />
+              Absent ({classStudents.filter(s => {
+                const p = paidStudentMap.get(s.id);
+                return !!p && !!p.isAbsent;
+              }).length})
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setStatusFilter('arrears')}
+              className={`px-3 py-1.5 text-[10px] font-mono font-black uppercase tracking-wider transition-all flex items-center gap-1.5 border cursor-pointer ${
+                statusFilter === 'arrears' 
+                  ? 'bg-amber-550 border-amber-550 text-black font-black shadow-sm' 
+                  : 'bg-neutral-950 text-neutral-400 border-neutral-800/80 hover:text-amber-300 hover:border-amber-900/30'
+              }`}
+              title="Show students with historical outstanding debts"
+            >
+              <Landmark size={11} />
+              Debt ({classStudents.filter(s => {
+                const debt = studentDebtMap.get(s.id);
+                const outstanding = (debt?.outstandingBalance || 0);
+                return outstanding > 0;
+              }).length})
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setStatusFilter('term_payers')}
+              className={`px-3 py-1.5 text-[10px] font-mono font-black uppercase tracking-wider transition-all flex items-center gap-1.5 border cursor-pointer ${
+                statusFilter === 'term_payers' 
+                  ? 'bg-sky-600 text-white border-sky-600 font-black shadow-sm' 
+                  : 'bg-neutral-950 text-neutral-400 border-neutral-800/80 hover:text-sky-400 hover:border-sky-900/30'
+              }`}
+            >
+              Term ({classStudents.filter(s => s.paymentType === 'Term').length})
+            </button>
+          </div>
+
+          {/* Quick HUD Progress & Accessibility Tip */}
+          <div className="flex flex-wrap items-center gap-4 text-[10px] font-mono text-neutral-400">
+            {classStudents.length > 0 && (
+              <div className="flex items-center gap-2.5 bg-neutral-950 px-3 py-1.5 border border-neutral-800/50">
+                <span className="text-neutral-500 uppercase tracking-wider font-bold">DAILY COVERAGE:</span>
+                <span className="text-emerald-400 font-black">
+                  {classStudents.filter(s => paidStudentMap.has(s.id)).length}/{classStudents.length} AUDITED
+                </span>
+                <span className="text-neutral-700">|</span>
+                <span className="text-amber-400 font-black animate-pulse">
+                  {Math.round((classStudents.filter(s => paidStudentMap.has(s.id)).length / classStudents.length) * 100)}% COMPLETE
+                </span>
+              </div>
+            )}
+            
+            <label className="inline-flex items-center gap-2 bg-neutral-950 px-2.5 py-1 text-[9px] font-mono font-bold text-neutral-300 border border-neutral-800/80 hover:border-neutral-700 hover:text-white cursor-pointer select-none transition-all uppercase">
+              <input
+                type="checkbox"
+                checked={autoSendCheckInAlert}
+                onChange={(e) => {
+                  setAutoSendCheckInAlert(e.target.checked);
+                  showToast(
+                    e.target.checked 
+                      ? "Enabled automatic parents WhatsApp alert on safe check-in!" 
+                      : "Disabled automatic parent alerts."
+                  );
+                }}
+                className="w-3.5 h-3.5 accent-amber-400 cursor-pointer text-amber-400 border border-neutral-800 bg-neutral-900 focus:ring-0 focus:outline-none"
+              />
+              <span className="flex items-center gap-1">
+                <span className={`w-1.5 h-1.5 rounded-full ${autoSendCheckInAlert ? 'bg-emerald-400 animate-pulse' : 'bg-neutral-600'} shrink-0`}></span>
+                <span>Auto-alert parent on Check-In</span>
+              </span>
+            </label>
+
+            <label className="inline-flex items-center gap-2 bg-neutral-950 px-2.5 py-1 text-[9px] font-mono font-bold text-neutral-300 border border-neutral-800/80 hover:border-neutral-700 hover:text-white cursor-pointer select-none transition-all uppercase">
+              <input
+                type="checkbox"
+                checked={autoSendArrearsAlert}
+                onChange={(e) => {
+                  setAutoSendArrearsAlert(e.target.checked);
+                  showToast(
+                    e.target.checked 
+                      ? "Enabled automatic parents WhatsApp arrears notification!" 
+                      : "Disabled automatic parents WhatsApp arrears notification."
+                  );
+                }}
+                className="w-3.5 h-3.5 accent-amber-400 cursor-pointer text-amber-400 border border-neutral-800 bg-neutral-900 focus:ring-0 focus:outline-none"
+              />
+              <span className="flex items-center gap-1">
+                <span className={`w-1.5 h-1.5 rounded-full ${autoSendArrearsAlert ? 'bg-rose-400 animate-pulse' : 'bg-neutral-600'} shrink-0`}></span>
+                <span>Auto-alert parent on Arrears</span>
+              </span>
+            </label>
+
+            <div className="hidden md:inline-flex items-center gap-1 bg-neutral-950/40 px-2 py-1 text-[9px] text-neutral-500 border border-neutral-800/50 uppercase" title="Press '/' key on your keyboard to instantly focus search field from anywhere">
+              <span className="text-amber-400 font-bold mr-0.5">/ KEY</span> FOCUS SEARCH
+            </div>
           </div>
         </div>
 
@@ -2673,23 +3420,36 @@ export const ClassRegister: React.FC = () => {
                 student.discount === 5 ||
                 (!!paidInfo && paidInfo.amount === 0 && !isPrepaid && !isArrearsCleared)
               );
+              const isConfirmedPresent = !!paidInfo && !paidInfo.isAbsent && 
+                (paidInfo.notes?.toLowerCase().includes('present') || paidInfo.notes?.toLowerCase().includes('¢0'));
+              const isPresentOrZeroPay = isConfirmedPresent && !isPaid;
 
               const isNextToPay = nextUnmarkedStudent && nextUnmarkedStudent.id === student.id;
 
               return (
-                <div 
-                  key={student.id} 
-                  id={`student-row-${student.id}`}
-                  className={`flex flex-col sm:flex-row justify-between items-start sm:items-center p-6 transition-all gap-4 scroll-mt-24 ${
-                    isNextToPay 
-                      ? 'border-l-4 border-l-amber-400 bg-amber-400/[0.04] ring-2 ring-amber-450/25 shadow-[0_0_15px_rgba(251,191,36,0.08)] scale-[1.002] z-10' 
-                      : hasArrearsAtRisk 
-                        ? 'border-l-4 border-l-red-500 bg-red-950/[0.015] opacity-80 hover:opacity-100' 
-                        : isPaid 
-                          ? 'bg-amber-400/[0.02]' 
-                          : isAbsent 
-                            ? 'bg-red-500/[0.02]' 
-                            : 'hover:bg-neutral-800/10'
+                <motion.div
+                  key={student.id}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.15 }}
+                  className="bg-neutral-900/10"
+                >
+                  <div 
+                    id={`student-row-${student.id}`}
+                    className={`flex flex-col sm:flex-row justify-between items-start sm:items-center p-6 transition-all gap-4 scroll-mt-24 ${
+                    highlightedStudentId === student.id
+                      ? 'border-l-4 border-l-amber-400 bg-amber-400/[0.12] ring-4 ring-amber-400 shadow-[0_0_25px_rgba(251,191,36,0.5)] scale-[1.01] z-30 font-semibold'
+                      : isNextToPay 
+                        ? 'border-l-4 border-l-amber-400 bg-amber-400/[0.04] ring-2 ring-amber-450/25 shadow-[0_0_15px_rgba(251,191,36,0.08)] scale-[1.002] z-10' 
+                        : hasArrearsAtRisk 
+                          ? 'border-l-4 border-l-red-500 bg-red-950/[0.015] opacity-80 hover:opacity-100' 
+                          : isPaid 
+                            ? 'bg-amber-400/[0.02]' 
+                            : isAbsent 
+                              ? 'bg-red-500/[0.02]' 
+                              : isConfirmedPresent
+                                ? 'bg-amber-500/[0.03] border-l-4 border-l-amber-500/60'
+                                : 'hover:bg-neutral-800/10'
                   }`}
                 >
                   <div className="flex items-center gap-4 w-full sm:w-auto">
@@ -2804,7 +3564,11 @@ export const ClassRegister: React.FC = () => {
 
                       {isPaid && (() => {
                         const collector = paidInfo ? users?.find(u => u.name === paidInfo.collectedBy) : undefined;
-                        const displayStatus = isPrepaid ? 'PREPAID COVERED' : isScholarship ? 'SCHOLARSHIP' : 'PAID';
+                        const displayStatus = isPrepaid 
+                          ? isConfirmedPresent ? 'PREPAID [PRESENT]' : 'PREPAID COVERED' 
+                          : isScholarship 
+                            ? isConfirmedPresent ? 'SCHOLARSHIP [PRESENT]' : 'SCHOLARSHIP' 
+                            : isConfirmedPresent ? 'PAID [PRESENT]' : 'PAID';
                         const displayAmount = isPrepaid ? '0 CASH (PREPAID)' : isScholarship ? 'FREE' : `GHC ${(paidInfo ? paidInfo.amount : 5).toFixed(2)}`;
                         const collectedByText = paidInfo ? paidInfo.collectedBy : 'SYSTEM RUNNING BAL';
                         return (
@@ -2814,6 +3578,25 @@ export const ClassRegister: React.FC = () => {
                               STATUS: <strong className="text-emerald-300 uppercase">{displayStatus}</strong>
                               <span className="text-[9px] font-black font-mono bg-emerald-950/40 border border-emerald-900/50 text-emerald-400 px-1.5 py-0.5 tracking-wider uppercase rounded-xs">
                                 {displayAmount}
+                              </span>
+                            </span>
+                            <span className="hidden sm:inline w-1 h-1 bg-neutral-700" />
+                            <span className="flex items-center gap-1.5 text-neutral-400">
+                              BY: <strong className="text-neutral-300 uppercase">{collectedByText}</strong>
+                            </span>
+                          </>
+                        );
+                      })()}
+
+                      {isPresentOrZeroPay && (() => {
+                        const collectedByText = paidInfo ? paidInfo.collectedBy : 'SYSTEM';
+                        return (
+                          <>
+                            <span className="hidden sm:inline w-1 h-1 bg-neutral-700" />
+                            <span className="flex items-center gap-1.5 text-amber-400">
+                              STATUS: <strong className="text-amber-300 uppercase">PRESENT (¢0)</strong>
+                              <span className="text-[9px] font-black font-mono bg-amber-955 border border-amber-900/50 text-amber-400 px-1.5 py-0.5 tracking-wider uppercase rounded-xs">
+                                0 CASH Today
                               </span>
                             </span>
                             <span className="hidden sm:inline w-1 h-1 bg-neutral-700" />
@@ -2851,6 +3634,14 @@ export const ClassRegister: React.FC = () => {
                         </>
                       )}
                     </div>
+                    {/* Render existing note if there is one today */}
+                    {paidInfo && paidInfo.notes && (
+                      <div className="mt-2 flex items-center gap-2 text-xs text-amber-300 font-mono bg-amber-955/40 border border-amber-900/60 px-3 py-1.5 rounded-sm w-fit max-w-full">
+                        <MessageSquare size={13} className="text-amber-400 shrink-0" />
+                        <span className="uppercase font-black tracking-wider text-[9px] text-amber-400">NOTE:</span>
+                        <span className="text-neutral-200 font-medium select-all break-words">"{paidInfo.notes}"</span>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -2894,17 +3685,29 @@ export const ClassRegister: React.FC = () => {
                       <BellRing size={16} />
                     </button>
 
-                    {/* Generate Receipt Button */}
+                    {/* Generate Student QR Button */}
+                    <button
+                      onClick={() => setQrStudent(student)}
+                      title="Generate Student QR Code"
+                      className="p-2.5 text-neutral-400 hover:text-amber-450 border-2 border-neutral-800 hover:border-amber-450 bg-neutral-950 transition-colors cursor-pointer flex items-center justify-center"
+                      id={`btn-generate-qr-${student.id}`}
+                    >
+                      <QrCode size={16} />
+                    </button>
+
+                    {/* Export Receipt Button */}
                     <button
                       onClick={() => setReceiptStudent(student)}
-                      title={isPaid ? "Generate and Print Daily Payment Confirmation Receipt" : "Generate Receipt (No active payment record found)"}
-                      className={`p-2.5 transition-all cursor-pointer flex items-center justify-center border-2 ${
+                      title={isPaid ? "Export Daily Payment PDF Invoice" : "Export Receipt (No active payment record found)"}
+                      id={`btn-export-receipt-${student.id}`}
+                      className={`p-2.5 px-4 font-mono text-[10px] font-black uppercase tracking-widest transition-all cursor-pointer flex items-center justify-center gap-1.5 border-2 ${
                         isPaid 
-                          ? 'text-amber-400 border-amber-400/50 hover:border-amber-400 bg-amber-400/10' 
+                          ? 'text-amber-400 border-amber-400/50 hover:border-amber-400 hover:bg-amber-400/10 bg-amber-400/5' 
                           : 'text-neutral-500 border-neutral-800 hover:border-neutral-700 hover:text-neutral-300 bg-neutral-950'
                       }`}
                     >
-                      <Printer size={16} />
+                      <Printer size={14} className="stroke-[2.5]" />
+                      <span>Export Receipt</span>
                     </button>
 
                     {/* Advance Custom Pay trigger */}
@@ -2920,6 +3723,82 @@ export const ClassRegister: React.FC = () => {
                       <Coins size={14} className="text-emerald-450" />
                       <span className="text-[10px] font-mono font-black uppercase tracking-widest text-neutral-300">ADVANCE</span>
                     </button>
+
+                    {/* Pupil Bulk Dates Check-in Trigger */}
+                    <button
+                      onClick={() => {
+                        setBulkPupil(student);
+                        setSelectedBulkDates([]);
+                        setBulkActionType('paid');
+                        setBulkCustomAmount('');
+                      }}
+                      title="Bulk record check-in and fees over selected dates for this pupil"
+                      className="p-2.5 text-neutral-400 hover:text-amber-450 border-2 border-neutral-800 hover:border-amber-450 bg-neutral-950 transition-colors cursor-pointer flex items-center gap-1.5 px-4"
+                    >
+                      <Layers size={14} className="text-amber-450" />
+                      <span className="text-[10px] font-mono font-black uppercase tracking-widest text-neutral-300">BULK DATES</span>
+                    </button>
+
+                    {/* Daily Attendance Note Trigger */}
+                    <button
+                      onClick={() => handleOpenNoteField(student.id, paidInfo?.notes || '')}
+                      title="Add or update short text note to pupil's daily attendance"
+                      className={`p-2.5 transition-colors cursor-pointer flex items-center gap-1.5 px-4 border-2 ${
+                        paidInfo?.notes 
+                          ? 'text-amber-400 border-amber-400 bg-amber-400/10' 
+                          : 'text-neutral-400 hover:text-amber-450 border-neutral-800 hover:border-amber-450 bg-neutral-950'
+                      }`}
+                    >
+                      <MessageSquare size={14} className={paidInfo?.notes ? 'text-amber-400' : 'text-neutral-400'} />
+                      <span className="text-[10px] font-mono font-black uppercase tracking-widest text-neutral-300">
+                        {paidInfo?.notes ? 'EDIT NOTE' : 'DAILY NOTE'}
+                      </span>
+                    </button>
+
+                    {/* Notify Guardian Button */}
+                    <button
+                      onClick={async () => {
+                        const isCheckedIn = (!!paidInfo && !paidInfo.isAbsent) || isPaid;
+                        if (!isCheckedIn) {
+                          showToast("Please mark the pupil as Present / Paid first before sending a check-in notification.");
+                          return;
+                        }
+                        try {
+                          await handleShareWhatsApp('check_in', student);
+                        } catch (err) {
+                          showToast("Failed to dispatch check-in notification.");
+                        }
+                      }}
+                      title="Send instant Gate Check-In notification to guardian"
+                      className={`p-2.5 transition-all cursor-pointer flex items-center gap-1.5 px-4 border-2 ${
+                        ((!!paidInfo && !paidInfo.isAbsent) || isPaid)
+                          ? 'text-amber-400 border-amber-900/60 hover:border-amber-450 bg-amber-950/20 hover:bg-amber-900/30'
+                          : 'text-neutral-650 border-neutral-800 bg-neutral-950/40 opacity-40 hover:opacity-100 hover:border-amber-400/20'
+                      }`}
+                    >
+                      <BellRing size={14} className={((!!paidInfo && !paidInfo.isAbsent) || isPaid) ? 'text-amber-400 animate-pulse' : 'text-neutral-500'} />
+                      <span className="text-[10px] font-mono font-black uppercase tracking-widest">NOTIFY GUARDIAN</span>
+                    </button>
+
+                    {/* Arrears WhatsApp Notification Button */}
+                    {debtInfo && debtInfo.totalDebt > 0 && (
+                      <button
+                        onClick={() => {
+                          handleShareWhatsApp('arrears_warning', student, undefined, {
+                            unpaidDaysCount: debtInfo.pastUnpaidDays?.length || 0,
+                            totalPaid: debtInfo.totalPaid || 0,
+                            totalArrears: debtInfo.totalDebt || 0,
+                            schoolOwes: debtInfo.paymentType === 'Daily' ? (debtInfo.runningBalance > 0 ? debtInfo.runningBalance : 0) : 0,
+                            attendancePct: 100
+                          });
+                        }}
+                        title={`Send quick accumulated arrears WhatsApp alert to parent. Outstanding Debt: GHC ${debtInfo.totalDebt.toFixed(2)}`}
+                        className="p-2.5 text-emerald-400 hover:text-white border-2 border-emerald-900/60 hover:border-emerald-450 bg-emerald-950/20 hover:bg-emerald-900/30 transition-all cursor-pointer flex items-center gap-1.5 px-4"
+                      >
+                        <MessageSquare size={14} className="text-emerald-450 stroke-[2.5]" />
+                        <span className="text-[10px] font-mono font-black uppercase tracking-widest text-emerald-300">ARREARS MSG</span>
+                      </button>
+                    )}
 
                     {/* Pay trigger */}
                     {manualAmountStudentId === student.id ? (
@@ -2941,7 +3820,12 @@ export const ClassRegister: React.FC = () => {
                                 showToast("Please enter a valid non-negative amount.");
                                 return;
                               }
-                              recordPayment(student.id, true, amt);
+                              if (isPaid) {
+                                if (!window.confirm(`Warning: ${student.name} already has a payment registered today.\nAre you sure you want to log this duplicate manual payment of GHC ${amt.toFixed(2)}?`)) {
+                                  return;
+                                }
+                              }
+                              recordPayment(student.id, true, amt, undefined, isPaid);
                               showToast(`Successfully logged custom GHC ${amt.toFixed(2)} payment for ${student.name}!`);
                               scrollToNextUnpaid(student.id);
                               setManualAmountStudentId(null);
@@ -2983,7 +3867,12 @@ export const ClassRegister: React.FC = () => {
                               showToast("Please enter a valid non-negative amount.");
                               return;
                             }
-                            recordPayment(student.id, true, amt);
+                            if (isPaid) {
+                              if (!window.confirm(`Warning: ${student.name} already has a payment registered today.\nAre you sure you want to log this duplicate manual payment of GHC ${amt.toFixed(2)}?`)) {
+                                return;
+                              }
+                            }
+                            recordPayment(student.id, true, amt, undefined, isPaid);
                             showToast(`Successfully logged custom GHC ${amt.toFixed(2)} payment for ${student.name}!`);
                             scrollToNextUnpaid(student.id);
                             setManualAmountStudentId(null);
@@ -3017,20 +3906,26 @@ export const ClassRegister: React.FC = () => {
                           onClick={() => handleTogglePayment(student.id)}
                           className={`flex items-center gap-2 px-5 py-2.5 text-xs font-black uppercase tracking-widest transition-all w-full sm:w-40 justify-center border-2 cursor-pointer ${
                             isPaid 
-                              ? isPrepaid
+                              ? student.paymentType === 'Term'
                                 ? 'bg-sky-500/10 text-sky-400 border-sky-500 hover:border-sky-400 hover:bg-sky-500/20 shadow-none'
-                                : isScholarship
-                                  ? 'bg-purple-500/10 text-purple-400 border-purple-500 hover:border-purple-400 hover:bg-purple-500/20 shadow-none'
-                                  : isArrearsCleared
-                                    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500 hover:border-emerald-400 hover:bg-emerald-500/20 shadow-none'
-                                    : 'bg-amber-400 text-black border-amber-400 shadow-[2px_2px_0px_0px_rgba(255,255,255,0.1)]'
-                              : 'bg-neutral-950 text-neutral-455 border-neutral-800 hover:border-neutral-600 hover:text-white'
+                                : isPrepaid
+                                  ? 'bg-sky-500/10 text-sky-400 border-sky-500 hover:border-sky-400 hover:bg-sky-500/20 shadow-none'
+                                  : isScholarship
+                                    ? 'bg-purple-500/10 text-purple-400 border-purple-500 hover:border-purple-400 hover:bg-purple-500/20 shadow-none'
+                                    : isArrearsCleared
+                                      ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500 hover:border-emerald-400 hover:bg-emerald-500/20 shadow-none'
+                                      : 'bg-amber-400 text-black border-amber-400 shadow-[2px_2px_0px_0px_rgba(255,255,255,0.1)]'
+                              : student.paymentType === 'Term'
+                                ? 'bg-sky-950/10 text-sky-400 border-sky-900 hover:border-sky-400 hover:text-white bg-sky-950/20'
+                                : 'bg-neutral-950 text-neutral-455 border-neutral-800 hover:border-neutral-600 hover:text-white'
                           }`}
                         >
                           {isPaid ? (
                             <>
                               <Check size={14} className="stroke-[3]" />
-                              {isPrepaid ? (
+                              {student.paymentType === 'Term' ? (
+                                <span>TERM PASS (GHC 0)</span>
+                              ) : isPrepaid ? (
                                 <span>PREPAID (GHC 0)</span>
                               ) : isScholarship ? (
                                 <span>SCHOLARSHIP (GHC 0)</span>
@@ -3042,7 +3937,15 @@ export const ClassRegister: React.FC = () => {
                             </>
                           ) : (
                             <>
-                              <span className="text-amber-400 font-black">•</span> COLLECT GHC {(5.00 - (student.discount || 0)).toFixed(2)}
+                              {student.paymentType === 'Term' ? (
+                                <>
+                                  <span className="text-sky-400 font-black">★</span> TERM PASS check-in
+                                </>
+                              ) : (
+                                <>
+                                  <span className="text-amber-400 font-black">•</span> COLLECT GHC {(5.00 - (student.discount || 0)).toFixed(2)}
+                                </>
+                              )}
                             </>
                           )}
                         </button>
@@ -3050,36 +3953,44 @@ export const ClassRegister: React.FC = () => {
                         {/* Dynamic Fee Select Dropdown */}
                         <div className="relative">
                           <select
+                            value=""
                             onChange={(e) => {
                               const action = e.target.value;
                               if (!action) return;
+
+                              const handleDropdownRecord = (amount?: number, label?: string) => {
+                                const finalAmt = amount !== undefined ? amount : Math.max(0, 5.00 - (student.discount || 0));
+                                if (isPaid) {
+                                  if (window.confirm(`Warning: ${student.name} already has a payment registered today.\nAre you sure you want to log a duplicate payment of GHC ${finalAmt.toFixed(2)}?`)) {
+                                    recordPayment(student.id, true, amount, undefined, true);
+                                    showToast(`Successfully logged duplicate payment of GHC ${finalAmt.toFixed(2)} for ${student.name}!`);
+                                    scrollToNextUnpaid(student.id);
+                                  }
+                                } else {
+                                  recordPayment(student.id, true, amount);
+                                  showToast(label || `Logged GHC ${finalAmt.toFixed(2)} payment for ${student.name}.`);
+                                  scrollToNextUnpaid(student.id);
+                                }
+                              };
+
                               if (action === 'discounted') {
-                                recordPayment(student.id, true);
                                 const discountAmount = student.discount || 0;
                                 const actualAmount = Math.max(0, 5.00 - discountAmount);
-                                showToast(`Logged GHC ${actualAmount.toFixed(2)} payment for ${student.name}.`);
-                                scrollToNextUnpaid(student.id);
+                                handleDropdownRecord(undefined, `Logged GHC ${actualAmount.toFixed(2)} payment for ${student.name}.`);
                               } else if (action === 'ghc5') {
-                                recordPayment(student.id, true, 5.00);
-                                showToast(`Logged full GHC 5.00 payment for ${student.name} (discount ignored).`);
-                                scrollToNextUnpaid(student.id);
+                                handleDropdownRecord(5.00, `Logged full GHC 5.00 payment for ${student.name} (discount ignored).`);
                               } else if (action === 'ghc4') {
-                                recordPayment(student.id, true, 4.00);
-                                showToast(`Logged custom GHC 4.00 payment for ${student.name}.`);
-                                scrollToNextUnpaid(student.id);
+                                handleDropdownRecord(4.00, `Logged custom GHC 4.00 payment for ${student.name}.`);
                               } else if (action === 'ghc3') {
-                                recordPayment(student.id, true, 3.00);
-                                showToast(`Logged custom GHC 3.00 payment for ${student.name}.`);
-                                scrollToNextUnpaid(student.id);
+                                handleDropdownRecord(3.00, `Logged custom GHC 3.00 payment for ${student.name}.`);
                               } else if (action === 'ghc2') {
-                                recordPayment(student.id, true, 2.00);
-                                showToast(`Logged custom GHC 2.00 payment for ${student.name}.`);
-                                scrollToNextUnpaid(student.id);
+                                handleDropdownRecord(2.00, `Logged custom GHC 2.00 payment for ${student.name}.`);
                               } else if (action === 'free') {
-                                recordPayment(student.id, true, 0.00);
-                                showToast(`Logged GHC 0.00 Scholarship for ${student.name}.`);
-                                scrollToNextUnpaid(student.id);
+                                handleDropdownRecord(0.00, `Logged GHC 0.00 Scholarship for ${student.name}.`);
                               } else if (action === 'manual') {
+                                if (isPaid && !window.confirm(`Warning: ${student.name} already has a payment registered today.\nAre you sure you want to save a duplicate custom payment?`)) {
+                                  return;
+                                }
                                 setManualAmountStudentId(student.id);
                                 const currentAmt = isPaid && paidInfo ? (payments.find(p => p.id === paidInfo.paymentId)?.amount ?? 5) : Math.max(0, 5 - (student.discount ?? 0));
                                 const amtStr = currentAmt.toString();
@@ -3184,6 +4095,26 @@ export const ClassRegister: React.FC = () => {
                           </select>
                         </div>
 
+                        {/* Present or ¢0 trigger */}
+                        <button
+                          onClick={() => handleTogglePresentZeroPay(student.id)}
+                          className={`flex items-center gap-2 px-5 py-2.5 text-xs font-black uppercase tracking-widest transition-all w-full sm:w-44 justify-center border-2 cursor-pointer shrink-0 ${
+                            isConfirmedPresent 
+                              ? 'bg-amber-450 border-amber-450 text-neutral-950 shadow-[2px_2px_0px_0px_rgba(255,255,255,0.1)]'
+                              : 'bg-neutral-950 text-neutral-455 border-neutral-800 hover:border-neutral-600 hover:text-white'
+                          }`}
+                        >
+                          {isConfirmedPresent ? (
+                            <>
+                              <Check size={14} className="stroke-[3]" /> PRESENT or ¢0
+                            </>
+                          ) : (
+                            <>
+                              <span className="text-amber-400 font-black">•</span> PRESENT or ¢0
+                            </>
+                          )}
+                        </button>
+
                         {/* Absent trigger */}
                         <button
                           onClick={() => handleToggleAbsent(student.id)}
@@ -3223,6 +4154,84 @@ export const ClassRegister: React.FC = () => {
                   </button>
                 </div>
               </div>
+
+              {/* Inline Attendance Record Note Editor Panel */}
+              {editingNoteStudentId === student.id && (
+                <div className="px-6 pb-6 pt-3 bg-neutral-900 border-t border-neutral-800 animate-fade-in no-print space-y-3">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-neutral-950 p-3">
+                    <div className="flex items-center gap-2 text-xs font-mono">
+                      <MessageSquare size={14} className="text-amber-400" />
+                      <span className="text-amber-400 font-black uppercase tracking-wider text-[10px]">Daily Notes desk:</span>
+                      <span className="text-neutral-450 font-bold">Write custom attendance/payment memo for {student.name} today.</span>
+                    </div>
+                    <span className="text-[9px] font-mono uppercase bg-neutral-900 text-neutral-500 px-2 py-0.5 border border-neutral-800">
+                      📅 DATE: {currentDate}
+                    </span>
+                  </div>
+                  
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <input
+                      type="text"
+                      value={noteInputValue}
+                      onChange={(e) => setNoteInputValue(e.target.value)}
+                      placeholder="e.g. absent due to illness, forgot fees, traveling with parents, to pay balance on Monday..."
+                      maxLength={120}
+                      className="flex-grow bg-neutral-950 border-2 border-neutral-800 focus:border-amber-400 focus:outline-none text-white text-xs px-3.5 py-2.5 font-mono"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          handleSaveDailyNote(student.id);
+                        } else if (e.key === 'Escape') {
+                          setEditingNoteStudentId(null);
+                          setNoteInputValue('');
+                        }
+                      }}
+                    />
+                    <div className="flex gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleSaveDailyNote(student.id)}
+                        className="px-5 py-2.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 text-xs font-mono font-black uppercase tracking-widest cursor-pointer transition-all"
+                      >
+                        Save Note
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingNoteStudentId(null);
+                          setNoteInputValue('');
+                        }}
+                        className="px-4 py-2.5 bg-neutral-950 border border-neutral-800 hover:bg-neutral-850 text-neutral-400 hover:text-white text-xs font-mono font-black uppercase tracking-widest cursor-pointer transition-all"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Quick Tags Templates */}
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    <span className="text-[9.5px] font-mono text-neutral-500 uppercase font-black mr-1">Quick Templates:</span>
+                    {[
+                      'Absent due to illness',
+                      'Forgot fees',
+                      'Traveling / Out of town',
+                      'Part payment of fees',
+                      'Parent promised tomorrow',
+                      'Late arrival (checked-in late)',
+                      'Brought food but no fees'
+                    ].map(tmpl => (
+                      <button
+                        key={tmpl}
+                        type="button"
+                        onClick={() => setNoteInputValue(tmpl)}
+                        className="px-2.5 py-1 bg-neutral-950 hover:bg-neutral-850 border border-neutral-850 hover:border-amber-400/40 text-[10px] text-neutral-400 hover:text-white font-mono cursor-pointer uppercase transition-all"
+                      >
+                        + {tmpl}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </motion.div>
               );
             })}
 
@@ -3364,25 +4373,193 @@ export const ClassRegister: React.FC = () => {
                     </p>
                   </div>
                 )}
+
+                {/* Custom Amount Prompt Modal style Overlay */}
+                {qrActivePromptStudent && (
+                  <div className="absolute inset-0 bg-neutral-950/95 backdrop-blur-sm p-5 flex flex-col justify-between z-30 select-none">
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2 pb-1 border-b border-amber-500/25 text-amber-450">
+                        <DollarSign size={16} />
+                        <span className="text-[10px] font-mono font-black uppercase tracking-widest">ENTER CUSTOM CHECK-IN PAYMENT</span>
+                      </div>
+                      
+                      <div className="space-y-1">
+                        <p className="text-[12px] font-sans font-black text-white uppercase leading-none">
+                          {qrActivePromptStudent.name}
+                        </p>
+                        <p className="text-[8.5px] font-mono text-neutral-500 uppercase font-black font-semibold">
+                          Roll: {qrActivePromptStudent.rollNumber || "N/A"} • Class: {qrActivePromptStudent.class}
+                        </p>
+                      </div>
+
+                      {/* Manual text input */}
+                      <div className="space-y-1.5 pt-1">
+                        <label className="block text-[8px] font-mono text-neutral-500 uppercase font-black">
+                          Custom Amount to Record ({currencySymbol})
+                        </label>
+                        <div className="relative">
+                          <span className="absolute left-2.5 top-2.5 text-[10px] font-mono font-black text-neutral-500">{currencySymbol}</span>
+                          <input
+                            id="qr-custom-amount-input"
+                            type="text"
+                            value={qrCustomAmountInput}
+                            onChange={(e) => setQrCustomAmountInput(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                handleQrCustomAmountSubmit();
+                              }
+                            }}
+                            placeholder={`e.g. 10.00, 20.00`}
+                            className="w-full bg-neutral-900 border border-neutral-800 focus:border-amber-400 text-white font-mono text-xs font-black py-2 pl-10 pr-4 focus:outline-none"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Quick Choice buttons */}
+                      <div className="space-y-1 pt-1">
+                        <span className="block text-[8px] font-mono text-neutral-500 uppercase font-bold">Quick select presets:</span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {[baseDailyFee, baseDailyFee * 2, baseDailyFee * 5, 20.00, 50.00].map((preset) => (
+                            <button
+                              key={preset}
+                              type="button"
+                              onClick={() => setQrCustomAmountInput(preset.toFixed(2))}
+                              className="px-2 py-1 bg-neutral-900 hover:bg-neutral-850 border border-neutral-800 hover:border-neutral-700 text-[9px] font-mono font-black text-neutral-300 hover:text-white transition-all cursor-pointer"
+                            >
+                              {currencySymbol} {preset === 0 ? "0 (Free)" : preset.toFixed(2)}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2 pt-2 border-t border-neutral-900">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setQrActivePromptStudent(null);
+                          addQrFeedback("🚫 Custom payment entry cancelled.", "warning");
+                        }}
+                        className="w-1/3 bg-neutral-900 hover:bg-neutral-855 border border-neutral-800 text-neutral-400 text-[9px] font-mono font-black uppercase py-2 tracking-wider transition-all cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleQrCustomAmountSubmit}
+                        className="w-2/3 bg-amber-400 hover:bg-amber-300 text-black text-[9px] font-mono font-black uppercase py-2 tracking-widest transition-all cursor-pointer shadow-md"
+                      >
+                        Confirm payment
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
-              {/* Toggle configuration panel */}
-              <div className="bg-neutral-950 p-4 border border-neutral-850 flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <span className="text-[10px] font-mono uppercase font-black text-white tracking-widest block">Auto-Log Daily Fee</span>
-                  <span className="text-[9px] font-mono uppercase font-bold text-neutral-500 block">Record GHC 5.00 dynamically on scan detection</span>
+              {/* Toggle configuration panel - updated with 3 scan modes */}
+              <div className="bg-neutral-950 p-4 border border-neutral-850 space-y-3">
+                <div className="flex justify-between items-center border-b border-neutral-900 pb-2">
+                  <div>
+                    <span className="text-[10px] font-mono uppercase font-black text-white tracking-widest block">QR SCAN OPERATIONAL MODE</span>
+                    <span className="text-[9px] font-mono uppercase font-bold text-neutral-500 block">Configure actions upon successful pupil QR scan detection</span>
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setAutoPayScanned(!autoPayScanned)}
-                  className={`px-3 py-1.5 font-mono text-[9px] font-black uppercase tracking-widest border transition-all ${
-                    autoPayScanned 
-                      ? 'bg-emerald-950/40 text-emerald-400 border-emerald-500' 
-                      : 'bg-neutral-950 text-neutral-500 border-neutral-800 hover:text-white'
-                  }`}
-                >
-                  {autoPayScanned ? "Enabled" : "Disabled (View Only)"}
-                </button>
+                
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQrScanMode('auto');
+                      setQrActivePromptStudent(null);
+                    }}
+                    className={`px-2 py-2.5 font-mono text-[9px] font-black uppercase tracking-wider border transition-all text-center flex flex-col items-center justify-center gap-1 cursor-pointer ${
+                      qrScanMode === 'auto'
+                        ? 'bg-emerald-950/40 text-emerald-400 border-emerald-500 shadow-sm' 
+                        : 'bg-neutral-950 text-neutral-550 border-neutral-900 hover:text-neutral-300'
+                    }`}
+                  >
+                    <span>⚡ AUTO GHC 5</span>
+                    <span className="text-[7.5px] font-semibold text-neutral-500">Record Instantly</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQrScanMode('custom_prompt');
+                    }}
+                    className={`px-2 py-2.5 font-mono text-[9px] font-black uppercase tracking-wider border transition-all text-center flex flex-col items-center justify-center gap-1 cursor-pointer ${
+                      qrScanMode === 'custom_prompt'
+                        ? 'bg-amber-950/40 text-amber-400 border-amber-500 shadow-sm' 
+                        : 'bg-neutral-950 text-neutral-550 border-neutral-900 hover:text-neutral-300'
+                    }`}
+                  >
+                    <span>✏️ ENTER CUSTOM</span>
+                    <span className="text-[7.5px] font-semibold text-neutral-500">Prompt Amount</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQrScanMode('view_only');
+                      setQrActivePromptStudent(null);
+                    }}
+                    className={`px-2 py-2.5 font-mono text-[9px] font-black uppercase tracking-wider border transition-all text-center flex flex-col items-center justify-center gap-1 cursor-pointer ${
+                      qrScanMode === 'view_only'
+                        ? 'bg-neutral-850/40 text-white border-neutral-650 shadow-sm' 
+                        : 'bg-neutral-950 text-neutral-550 border-neutral-900 hover:text-neutral-300'
+                    }`}
+                  >
+                    <span>🔍 IDENTIFY ONLY</span>
+                    <span className="text-[7.5px] font-semibold text-neutral-500">No Action Recorded</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* QR Scan Simulation Tool (Perfect for iframe or testing environments) */}
+              <div className="bg-neutral-950 p-4 border border-neutral-850 space-y-3">
+                <div className="flex justify-between items-center border-b border-neutral-900 pb-2">
+                  <div>
+                    <span className="text-[10px] font-mono uppercase font-black text-amber-400 tracking-widest block">⚡ CAMERA SCANNER SIMULATOR</span>
+                    <span className="text-[9px] font-mono uppercase font-bold text-neutral-500 block">Emulate real QR badge check-in instantly</span>
+                  </div>
+                </div>
+                
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <select
+                    value={testScanStudentId}
+                    onChange={(e) => setTestScanStudentId(e.target.value)}
+                    className="flex-grow bg-neutral-900 border-2 border-neutral-800 p-2.5 text-[10px] font-mono font-bold text-white focus:outline-none focus:border-amber-400 uppercase rounded-none cursor-pointer"
+                  >
+                    <option value="">-- Choose Pupil to Simulate Scan --</option>
+                    {students.filter(s => s.active && s.class === selectedClass).map(student => (
+                      <option key={student.id} value={student.id}>
+                        {student.name} (ID: {student.id.substring(0,6).toUpperCase()})
+                      </option>
+                    ))}
+                    <optgroup label="OTHER CLASSES" className="bg-neutral-950 text-neutral-500 font-mono font-black text-[9px]">
+                      {students.filter(s => s.active && s.class !== selectedClass).map(student => (
+                        <option key={student.id} value={student.id}>
+                          {student.name} ({student.class})
+                        </option>
+                      ))}
+                    </optgroup>
+                  </select>
+
+                  <button
+                    type="button"
+                    disabled={!testScanStudentId}
+                    onClick={() => {
+                      if (testScanStudentId) {
+                        handleQrCodeScanned(`SAAKOCHECK:STUDENT:${testScanStudentId}`);
+                      }
+                    }}
+                    className="bg-amber-400 hover:bg-amber-300 disabled:bg-neutral-900 disabled:text-neutral-600 disabled:border-neutral-850 disabled:cursor-not-allowed text-black font-mono text-[9px] font-black uppercase px-4 py-2.5 border-2 border-amber-400 disabled:border-neutral-800 transition-all cursor-pointer shrink-0"
+                    title="Emulate scanning this pupil's ID"
+                  >
+                    TRIGGER SCAN
+                  </button>
+                </div>
               </div>
 
               {/* Feedbacks Panel */}
@@ -3940,6 +5117,19 @@ export const ClassRegister: React.FC = () => {
         const clearedDays = payments.filter(p => p.studentId === historyStudent.id && p.date <= currentDate && !p.id.endsWith('_debt')).length;
         const attendancePct = elapsedDays > 0 ? Math.min(100, Math.round((clearedDays / elapsedDays) * 100)) : 100;
 
+        // Times present over total number of school days for that term
+        const termSchoolDaysList = activeTerm ? activeTerm.schoolDays : [];
+        const holidaysList = activeTerm?.publicHolidays || [];
+        const schoolDaysNoHolidays = termSchoolDaysList.filter(d => !holidaysList.includes(d));
+        const schoolDaysNoHolidaysCount = schoolDaysNoHolidays.length;
+
+        const presentDaysTerm = activeTerm ? activeTerm.schoolDays.filter(d => {
+          if (d > currentDate) return false;
+          if (holidaysList.includes(d)) return false;
+          const record = payments.find(p => p.studentId === historyStudent.id && p.date === d);
+          return !(record?.isAbsent);
+        }).length : 0;
+
         return (
           <>
             {/* INTERACTIVE SCREEN MODAL (HIDDEN ON PRINT) */}
@@ -4200,6 +5390,14 @@ export const ClassRegister: React.FC = () => {
                               <span>Term days elapsed: {elapsedDays} days</span>
                               <span>Cleared & Cleansed Days: {clearedDays} days</span>
                             </div>
+
+                            {/* Precise Term-wide Presence Attendance Counter */}
+                            <div className="pt-2 border-t border-neutral-850 flex justify-between items-center text-[10px] uppercase font-mono font-black">
+                              <span className="text-neutral-400">Term Attendance (Present/Total)</span>
+                              <span className="text-amber-400 font-black font-mono">
+                                {presentDaysTerm} / {schoolDaysNoHolidaysCount} DAYS
+                              </span>
+                            </div>
                           </div>
 
                           {/* Active Balance/Arrears Alert Notification Banner */}
@@ -4285,26 +5483,40 @@ export const ClassRegister: React.FC = () => {
                               <div>
                                 <p className="text-xs font-black text-amber-400 uppercase tracking-wide">STUDENT CLEARANCE RECOGNIZED</p>
                                 <p className="text-[10px] text-neutral-400 font-bold uppercase mt-0.5">
-                                  Clearance for {currentDate} has already been registered in the system ledger. Gate payment is locked to prevent duplicate entry records.
+                                  Clearance for {currentDate} has already been registered in the system ledger. You may delete the existing entry or record an additional payment if required.
                                 </p>
                               </div>
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const paidInfo = paidStudentMap.get(historyStudent.id);
-                                if (paidInfo) {
-                                  setPaymentToDelete({
-                                    id: paidInfo.paymentId,
-                                    label: currentDate,
-                                    studentName: historyStudent.name
-                                  });
-                                }
-                              }}
-                              className="w-full sm:w-auto bg-neutral-900 hover:bg-neutral-850 border border-neutral-800 text-neutral-300 hover:text-white px-3 py-2 text-[10px] font-black font-mono uppercase tracking-wider transition-colors shrink-0 cursor-pointer"
-                            >
-                              DELETE ENTRY
-                            </button>
+                            <div className="flex flex-col gap-2 w-full sm:w-auto shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const paidInfo = paidStudentMap.get(historyStudent.id);
+                                  if (paidInfo) {
+                                    setPaymentToDelete({
+                                      id: paidInfo.paymentId,
+                                      label: currentDate,
+                                      studentName: historyStudent.name
+                                    });
+                                  }
+                                }}
+                                className="w-full bg-neutral-900 hover:bg-neutral-850 border border-neutral-800 text-neutral-300 hover:text-white px-3 py-2 text-[10px] font-black font-mono uppercase tracking-wider transition-colors cursor-pointer text-center"
+                              >
+                                DELETE ENTRY
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (window.confirm(`DUPLICATE ENTRY ALERT:\nA check-in record for ${historyStudent.name} on ${currentDate} already exists.\n\nDo you want to record an additional/duplicate GHC ${finalDailyFee.toFixed(2)} payment entry for today?`)) {
+                                    recordPayment(historyStudent.id, true, undefined, undefined, true);
+                                    showToast(`Successfully logged duplicate GHC ${finalDailyFee.toFixed(2)} payment for ${historyStudent.name}!`);
+                                  }
+                                }}
+                                className="w-full bg-emerald-500 hover:bg-emerald-400 text-black px-3 py-2 text-[10px] font-bold uppercase tracking-widest transition-colors cursor-pointer text-center"
+                              >
+                                RECORD DUPLICATE
+                              </button>
+                            </div>
                           </div>
                         ) : (
                           <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 bg-red-400/5 border-2 border-red-500/10 p-3.5">
@@ -4595,10 +5807,41 @@ export const ClassRegister: React.FC = () => {
                                   </text>
                                   {/* Beautiful Coiled Python */}
                                   <g transform="translate(42, 42) scale(0.16)" stroke="#14532d" strokeWidth="3.5" fill="none" strokeLinecap="round" strokeLinejoin="round">
-                                    <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55 C 88 75, 70 85, 50 85 C 30 85, 20 70, 25 55 C 30 40, 45 40, 50 45 C 55 50, 52 65, 45 65 C 38 65, 38 52, 44 48" strokeWidth="6" />
-                                    <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55" stroke="#f0fdf4" strokeWidth="1.5" />
-                                    <circle cx="44" cy="48" r="4.5" fill="#14532d" stroke="none" />
-                                    <circle cx="43" cy="47" r="1" fill="#f0fdf4" stroke="none" />
+                                    {/* Main deep forest green coiled body */}
+                                    <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55 C 88 75, 70 85, 50 85 C 30 85, 20 70, 25 55 C 30 40, 45 40, 50 45 C 55 50, 52 65, 45 65 C 38 65, 38 52, 44 48" strokeWidth="6.5" stroke="#14532d" />
+                                    
+                                    {/* Elegant light emerald-green dorsal spot patterns */}
+                                    <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55 C 88 75, 70 85, 50 85 C 30 85, 20 70, 25 55 C 30 40, 45 40, 50 45 C 55 50, 52 65, 45 65 C 38 65, 38 52, 44 48" stroke="#86efac" strokeWidth="1.5" strokeDasharray="3 5" />
+
+                                    {/* Accent highlight outline for 3D depth */}
+                                    <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55" stroke="#f0fdf4" strokeWidth="1.2" opacity="0.65" />
+
+                                    {/* Adorable little golden crown for the champion python */}
+                                    <path d="M 40 41.5 L 38.5 38 L 42 39.5 L 44 36 L 46 39.5 L 49.5 38 L 48 41.5 Z" fill="#fbbf24" stroke="#14532d" strokeWidth="0.8" strokeLinejoin="miter" />
+
+                                    {/* Cute chibified head */}
+                                    <circle cx="44" cy="47" r="6" fill="#14532d" stroke="none" />
+                                    
+                                    {/* Generous sweet rosy blush cheeks */}
+                                    <circle cx="38" cy="48.5" r="1.3" fill="#f43f5e" opacity="0.8" stroke="none" />
+                                    <circle cx="50" cy="48.5" r="1.3" fill="#f43f5e" opacity="0.8" stroke="none" />
+
+                                    {/* Happy sparkling big anime eyes */}
+                                    <circle cx="41.5" cy="45.5" r="1.8" fill="white" stroke="none" />
+                                    <circle cx="46.5" cy="45.5" r="1.8" fill="white" stroke="none" />
+                                    <circle cx="41.5" cy="45.5" r="1" fill="#14532d" stroke="none" />
+                                    <circle cx="46.5" cy="45.5" r="1" fill="#14532d" stroke="none" />
+                                    <circle cx="41" cy="44.8" r="0.45" fill="white" stroke="none" />
+                                    <circle cx="46" cy="44.8" r="0.45" fill="white" stroke="none" />
+
+                                    {/* Sweet cheerful smile */}
+                                    <path d="M 41.5 49 Q 44 51.5, 46.5 49" stroke="#f0fdf4" strokeWidth="0.8" strokeLinecap="round" fill="none" />
+
+                                    {/* Delightful small pink tongue */}
+                                    <path d="M 43.5 50.2 Q 43.5 52.5, 44.2 52.5" stroke="#f43f5e" strokeWidth="0.8" strokeLinecap="round" fill="none" />
+
+                                    {/* Floating romantic pink heart */}
+                                    <path d="M 55 36 C 54 34, 52 34, 52 36 C 52 38, 55 40, 55 40 C 55 40, 58 38, 58 36 C 58 34, 56 34, 55 36 Z" fill="#ec4899" opacity="0.95" stroke="none" />
                                   </g>
                                 </svg>
                                 <span className="text-[6.5px] font-mono text-emerald-400 font-black uppercase tracking-widest mt-1 block">OFFICIAL IMPRESS</span>
@@ -4983,10 +6226,41 @@ export const ClassRegister: React.FC = () => {
                               </text>
                               {/* Beautiful Coiled Python */}
                               <g transform="translate(42, 42) scale(0.16)" stroke="#14532d" strokeWidth="3.5" fill="none" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55 C 88 75, 70 85, 50 85 C 30 85, 20 70, 25 55 C 30 40, 45 40, 50 45 C 55 50, 52 65, 45 65 C 38 65, 38 52, 44 48" strokeWidth="6" />
-                                <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55" stroke="#f0fdf4" strokeWidth="1.5" />
-                                <circle cx="44" cy="48" r="4.5" fill="#14532d" stroke="none" />
-                                <circle cx="43" cy="47" r="1" fill="#f0fdf4" stroke="none" />
+                                {/* Main deep forest green coiled body */}
+                                <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55 C 88 75, 70 85, 50 85 C 30 85, 20 70, 25 55 C 30 40, 45 40, 50 45 C 55 50, 52 65, 45 65 C 38 65, 38 52, 44 48" strokeWidth="6.5" stroke="#14532d" />
+                                
+                                {/* Elegant light emerald-green dorsal spot patterns */}
+                                <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55 C 88 75, 70 85, 50 85 C 30 85, 20 70, 25 55 C 30 40, 45 40, 50 45 C 55 50, 52 65, 45 65 C 38 65, 38 52, 44 48" stroke="#86efac" strokeWidth="1.5" strokeDasharray="3 5" />
+
+                                {/* Accent highlight outline for 3D depth */}
+                                <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55" stroke="#f0fdf4" strokeWidth="1.2" opacity="0.65" />
+
+                                {/* Adorable little golden crown for the champion python */}
+                                <path d="M 40 41.5 L 38.5 38 L 42 39.5 L 44 36 L 46 39.5 L 49.5 38 L 48 41.5 Z" fill="#fbbf24" stroke="#14532d" strokeWidth="0.8" strokeLinejoin="miter" />
+
+                                {/* Cute chibified head */}
+                                <circle cx="44" cy="47" r="6" fill="#14532d" stroke="none" />
+                                
+                                {/* Generous sweet rosy blush cheeks */}
+                                <circle cx="38" cy="48.5" r="1.3" fill="#f43f5e" opacity="0.8" stroke="none" />
+                                <circle cx="50" cy="48.5" r="1.3" fill="#f43f5e" opacity="0.8" stroke="none" />
+
+                                {/* Happy sparkling big anime eyes */}
+                                <circle cx="41.5" cy="45.5" r="1.8" fill="white" stroke="none" />
+                                <circle cx="46.5" cy="45.5" r="1.8" fill="white" stroke="none" />
+                                <circle cx="41.5" cy="45.5" r="1" fill="#14532d" stroke="none" />
+                                <circle cx="46.5" cy="45.5" r="1" fill="#14532d" stroke="none" />
+                                <circle cx="41" cy="44.8" r="0.45" fill="white" stroke="none" />
+                                <circle cx="46" cy="44.8" r="0.45" fill="white" stroke="none" />
+
+                                {/* Sweet cheerful smile */}
+                                <path d="M 41.5 49 Q 44 51.5, 46.5 49" stroke="#f0fdf4" strokeWidth="0.8" strokeLinecap="round" fill="none" />
+
+                                {/* Delightful small pink tongue */}
+                                <path d="M 43.5 50.2 Q 43.5 52.5, 44.2 52.5" stroke="#f43f5e" strokeWidth="0.8" strokeLinecap="round" fill="none" />
+
+                                {/* Floating romantic pink heart */}
+                                <path d="M 55 36 C 54 34, 52 34, 52 36 C 52 38, 55 40, 55 40 C 55 40, 58 38, 58 36 C 58 34, 56 34, 55 36 Z" fill="#ec4899" opacity="0.95" stroke="none" />
                               </g>
                             </svg>
                             <span className="text-[6.5px] font-mono text-emerald-800 font-extrabold uppercase tracking-widest mt-1 block">OFFICIAL IMPRESS</span>
@@ -5012,6 +6286,60 @@ export const ClassRegister: React.FC = () => {
           </>
         );
       })()}
+
+      {/* DAILY RECORDS RESET CONFIRMATION MODAL OVERLAY */}
+      {showResetDailyConfirm && (
+        <div className="fixed inset-0 bg-neutral-950/90 backdrop-blur-md flex items-center justify-center p-4 z-55" style={{ zIndex: 100 }}>
+          <div className="bg-neutral-900 border-4 border-red-650 max-w-md w-full p-8 shadow-[8px_8px_0px_0px_#dc2626] space-y-6">
+            <div className="flex items-center gap-3 pb-3 border-b-2 border-neutral-850 text-red-500">
+              <RefreshCw size={22} className="stroke-[2.5]" />
+              <h3 className="text-sm font-black uppercase tracking-widest text-white">Reset Class Registry Daily Logs</h3>
+            </div>
+
+            <div className="space-y-4">
+              <p className="text-xs text-neutral-300 leading-relaxed font-bold">
+                Are you absolutely sure you want to reset all payment and attendance register logs for Class <span className="text-amber-400">{selectedClass}</span> on <span className="text-amber-400 font-mono">{currentDate}</span>?
+              </p>
+              
+              <p className="text-xs text-neutral-400 leading-relaxed font-semibold">
+                This will delete and void all check-ins, absences, and scholarships registered for this class today. Any custom daily amounts recorded today will be completely wiped. This action is <span className="text-red-500 underline decoration-2 font-bold">irreversible</span>.
+              </p>
+
+              <div className="bg-neutral-950 p-4 border border-neutral-800 space-y-2 font-mono text-xs">
+                <div className="flex justify-between">
+                  <span className="text-neutral-500 uppercase font-black">Target Class:</span>
+                  <span className="text-white font-black uppercase">Class {selectedClass}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-neutral-500 uppercase font-black">Ledger Date:</span>
+                  <span className="text-amber-400 font-bold">{currentDate}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-neutral-500 uppercase font-black">Active Pupils affected:</span>
+                  <span className="text-amber-400 font-bold">{classStudents.length} Students</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowResetDailyConfirm(false)}
+                className="w-1/2 text-xs bg-neutral-950 border-2 border-neutral-800 hover:border-neutral-600 text-neutral-400 py-3 font-black uppercase tracking-widest transition-colors cursor-pointer"
+              >
+                No, Go Back
+              </button>
+              <button
+                type="button"
+                onClick={handleResetDailyConfirmed}
+                className="w-1/2 text-xs bg-red-650 hover:bg-red-650/80 border-2 border-red-700 text-white py-3 font-black uppercase tracking-widest transition-colors cursor-pointer"
+              >
+                Yes, Reset Logs
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* TRANSACTION PAYMENT DELETION CONFIRMATION MODAL OVERLAY */}
       {paymentToDelete && (
@@ -5292,6 +6620,448 @@ export const ClassRegister: React.FC = () => {
         </div>
       )}
 
+      {/* STUDENT QR CODE GENERATOR MODAL */}
+      {qrStudent && (
+        <div id="student-qr-generator-modal" className="fixed inset-0 z-50 bg-neutral-950/95 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto no-print">
+          <div className="relative w-full max-w-md bg-neutral-900 border-4 border-amber-450 p-6 md:p-8 space-y-6 shadow-[10px_10px_0px_0px_rgba(251,191,36,0.25)] text-white">
+            
+            {/* Header */}
+            <div className="flex justify-between items-start border-b border-neutral-850 pb-4">
+              <div className="flex items-start gap-3">
+                <div className="p-2.5 bg-amber-400/10 border border-amber-400 text-amber-300 shrink-0">
+                  <QrCode size={22} className="text-amber-400" />
+                </div>
+                <div>
+                  <span className="text-[9px] text-amber-400 font-mono tracking-widest font-black uppercase block">REGISTRY BADGES</span>
+                  <h3 className="text-base font-black uppercase tracking-tight">Student Digital QR Code</h3>
+                  <p className="text-[10px] text-neutral-400 mt-0.5 font-mono">
+                    SAAKO ID Code: {qrStudent.id.substring(0, 12).toUpperCase()}
+                  </p>
+                </div>
+              </div>
+              <button 
+                type="button"
+                onClick={() => setQrStudent(null)} 
+                className="p-1 cursor-pointer text-neutral-400 hover:text-white hover:bg-neutral-800 border border-transparent hover:border-neutral-800 transition-all font-bold"
+                title="Exit/Close Portal"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="flex flex-col items-center justify-center p-4 bg-neutral-950/80 border border-neutral-800 rounded-none text-center space-y-5">
+              
+              {/* QR Image Frame */}
+              <div className="bg-white p-4 border-4 border-amber-400 inline-block relative shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+                {generatedQrUrl ? (
+                  <img 
+                    src={generatedQrUrl} 
+                    alt={`${qrStudent.name} QR Code`} 
+                    className="w-48 h-48 image-rendering-pixelated select-none"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <div className="w-48 h-48 flex items-center justify-center bg-neutral-100 text-neutral-400 text-xs font-mono font-bold animate-pulse">
+                    GENERATING QR...
+                  </div>
+                )}
+                {/* Visual crop marks */}
+                <span className="absolute -top-1.5 -left-1.5 w-3.5 h-3.5 border-t-2 border-l-2 border-neutral-900" />
+                <span className="absolute -top-1.5 -right-1.5 w-3.5 h-3.5 border-t-2 border-r-2 border-neutral-900" />
+                <span className="absolute -bottom-1.5 -left-1.5 w-3.5 h-3.5 border-b-2 border-l-2 border-neutral-900" />
+                <span className="absolute -bottom-1.5 -right-1.5 w-3.5 h-3.5 border-b-2 border-r-2 border-neutral-900" />
+              </div>
+
+              {/* Student Metadata Card inside QR view */}
+              <div className="space-y-1 w-full text-center">
+                <h4 className="text-sm font-black text-white uppercase tracking-wide">{qrStudent.name}</h4>
+                <p className="text-[10px] font-mono tracking-widest text-amber-400 font-bold uppercase">
+                  Class: {qrStudent.class} • Roll Number: {qrStudent.rollNumber}
+                </p>
+                <div className="mt-2.5 mx-auto max-w-[280px] bg-neutral-900 border border-neutral-800/80 p-2.5 text-left rounded-none space-y-1 select-all hover:bg-neutral-850 transition-colors">
+                  <span className="text-[8px] text-amber-400 font-mono tracking-widest block font-bold uppercase leading-none">Internal Payload Address:</span>
+                  <code className="text-[9px] text-neutral-300 font-mono break-all font-bold block bg-black/40 px-1.5 py-1 mt-1 font-mono">
+                    SAAKOCHECK:STUDENT:{qrStudent.id}
+                  </code>
+                </div>
+              </div>
+            </div>
+
+            {/* Instruction Footer */}
+            <p className="text-[10px] text-neutral-400 text-center leading-relaxed font-mono">
+              Scan this QR code with the **School Check-In Scanner** device or tablet camera at the main gate to instantly register daily attendance and check payment statuses.
+            </p>
+
+            {/* Actions */}
+            <div className="grid grid-cols-2 gap-3.5 pt-2">
+              <a
+                href={generatedQrUrl}
+                download={`${qrStudent.name.toUpperCase().replaceAll(' ', '_')}_QR_CODE.png`}
+                className="py-3 bg-amber-450 hover:bg-amber-400 text-black text-center font-mono font-black uppercase text-xs tracking-wider transition-all shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[1px_1px_0px_0px_rgba(0,0,0,1)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none flex items-center justify-center gap-2 rounded-none"
+              >
+                <Download size={13} className="stroke-[3]" />
+                <span>Save Code</span>
+              </a>
+              <button
+                type="button"
+                onClick={() => {
+                  const printWindow = window.open('', '_blank');
+                  if (printWindow) {
+                    printWindow.document.write(`
+                      <html>
+                        <head>
+                          <title>Print QR Badge - ${qrStudent.name}</title>
+                          <style>
+                            @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@700&family=JetBrains+Mono:wght@700&display=swap');
+                            body {
+                              background: white;
+                              color: black;
+                              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                              display: flex;
+                              flex-direction: column;
+                              align-items: center;
+                              justify-content: center;
+                              min-height: 100vh;
+                              margin: 0;
+                              padding: 20px;
+                            }
+                            .badge-card {
+                              border: 6px solid #fbbf24;
+                              padding: 30px;
+                              display: flex;
+                              flex-direction: column;
+                              align-items: center;
+                              text-align: center;
+                              max-width: 320px;
+                              box-shadow: 10px 10px 0px rgba(0,0,0,0.1);
+                            }
+                            .logo-text {
+                              font-family: "Space Grotesk", sans-serif;
+                              font-size: 14px;
+                              text-transform: uppercase;
+                              letter-spacing: 2px;
+                              font-weight: bold;
+                              margin-bottom: 5px;
+                              color: #d97706;
+                            }
+                            .school-title {
+                              font-size: 18px;
+                              font-weight: 900;
+                              text-transform: uppercase;
+                              margin-bottom: 25px;
+                              letter-spacing: -0.5px;
+                            }
+                            .qr-img {
+                              width: 220px;
+                              height: 220px;
+                              border: 4px solid black;
+                              margin-bottom: 25px;
+                            }
+                            .student-name {
+                              font-size: 16px;
+                              font-weight: 900;
+                              text-transform: uppercase;
+                              margin-bottom: 5px;
+                            }
+                            .student-details {
+                              font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+                              font-size: 11px;
+                              font-weight: bold;
+                              text-transform: uppercase;
+                              color: #4b5563;
+                              margin-bottom: 20px;
+                            }
+                            .payload-ref {
+                              font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+                              font-size: 8px;
+                              color: #9ca3af;
+                              border-top: 1px dashed #e5e7eb;
+                              padding-top: 10px;
+                              width: 100%;
+                            }
+                          </style>
+                        </head>
+                        <body>
+                          <div class="badge-card">
+                            <div class="logo-text">★ SAAKO GATEWAY ★</div>
+                            <div class="school-title">HOLY CHILD ACADEMY</div>
+                            <img class="qr-img" src="${generatedQrUrl}" />
+                            <div class="student-name">${qrStudent.name}</div>
+                            <div class="student-details">Class Group: ${qrStudent.class} <br/>Roll Ref: ${qrStudent.rollNumber}</div>
+                            <div class="payload-ref">SAAKOCHECK:STUDENT:${qrStudent.id}</div>
+                          </div>
+                          <script>
+                            window.onload = function() {
+                              window.print();
+                            }
+                          </script>
+                        </body>
+                      </html>
+                    `);
+                    printWindow.document.close();
+                  }
+                }}
+                className="py-3 bg-neutral-950 hover:bg-neutral-850 text-white font-mono font-black uppercase text-xs tracking-wider transition-all border border-neutral-800 cursor-pointer flex items-center justify-center gap-2"
+              >
+                <Printer size={13} />
+                <span>Print Card</span>
+              </button>
+            </div>
+
+            <div className="text-center">
+              <button
+                type="button"
+                onClick={() => setQrStudent(null)}
+                className="text-[11px] font-mono font-black text-neutral-450 hover:text-white uppercase tracking-widest cursor-pointer select-none transition-colors"
+              >
+                Close / Back to Registry
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* PUPIL-SPECIFIC BULK DATES CHECK-IN MODAL */}
+      {bulkPupil && activeTerm && (
+        <div id="pupil-bulk-dates-modal" className="fixed inset-0 z-50 bg-neutral-950/95 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto no-print">
+          <div className="relative w-full max-w-2xl bg-neutral-900 border-4 border-amber-450 p-6 md:p-8 space-y-6 shadow-[10px_10px_0px_0px_rgba(251,191,36,0.25)] text-white">
+            
+            {/* Header */}
+            <div className="flex justify-between items-start border-b border-neutral-850 pb-4">
+              <div className="flex items-start gap-3">
+                <div className="p-2.5 bg-amber-400/10 border border-amber-400 text-amber-300 shrink-0">
+                  <Layers size={22} className="text-amber-400" />
+                </div>
+                <div>
+                  <span className="text-[9px] text-amber-400 font-mono tracking-widest font-black uppercase block">MULTIPASS CHECK-IN</span>
+                  <h3 className="text-base font-black uppercase tracking-tight">Pupil Bulk Checked-in: {bulkPupil.name}</h3>
+                  <p className="text-[10px] text-neutral-400 mt-0.5 font-mono">
+                    CLASS: {bulkPupil.class} | ROLL NUMBER: {bulkPupil.rollNumber}
+                  </p>
+                </div>
+              </div>
+              <button 
+                type="button"
+                onClick={() => setBulkPupil(null)} 
+                className="p-1 cursor-pointer text-neutral-400 hover:text-white hover:bg-neutral-800 border border-transparent hover:border-neutral-800 transition-all font-bold"
+                title="Exit Portal"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="space-y-4">
+              <div className="bg-neutral-950/80 p-4 border border-neutral-800 flex justify-between items-center text-xs font-mono">
+                <div>
+                  <span className="text-neutral-500 block uppercase tracking-wider text-[10px]">CURRENT OUTSTANDING DEBT</span>
+                  <span className="text-red-400 font-black text-sm">
+                    GHC {(studentDebtMap.get(bulkPupil.id)?.totalDebt ?? 0).toFixed(2)} ({studentDebtMap.get(bulkPupil.id)?.pastUnpaidDays.length ?? 0} Unpaid Days)
+                  </span>
+                </div>
+                <div>
+                  <span className="text-neutral-500 block uppercase tracking-wider text-[10px]">DAILY FEE RATIO</span>
+                  <span className="text-white font-black">
+                    GHC {(5.00 - (bulkPupil.discount || 0)).toFixed(2)}/DAY
+                  </span>
+                </div>
+              </div>
+
+              {/* Quick Filters */}
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const unmarked = (activeTerm?.schoolDays ?? [])
+                      .filter(d => d <= currentDate)
+                      .filter(d => !payments.some(p => p.studentId === bulkPupil.id && p.date === d && !p.id.endsWith('_debt')));
+                    setSelectedBulkDates(unmarked);
+                  }}
+                  className="px-3 py-1.5 bg-neutral-950 hover:bg-neutral-850 border border-neutral-800 text-[10px] font-mono hover:text-white text-neutral-400 tracking-wider uppercase cursor-pointer"
+                >
+                  ☑ Select All Unmarked
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    // last 5 school days
+                    const past5 = (activeTerm?.schoolDays ?? [])
+                      .filter(d => d <= currentDate)
+                      .slice(-5);
+                    setSelectedBulkDates(past5);
+                  }}
+                  className="px-3 py-1.5 bg-neutral-950 hover:bg-neutral-850 border border-neutral-800 text-[10px] font-mono hover:text-white text-neutral-400 tracking-wider uppercase cursor-pointer"
+                >
+                  🕒 Past 5 School Days
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedBulkDates([])}
+                  className="px-3 py-1.5 bg-neutral-950 hover:bg-neutral-850 border border-neutral-800 text-[10px] font-mono hover:text-white text-neutral-400 tracking-wider uppercase cursor-pointer"
+                >
+                  ☒ Clear Selection
+                </button>
+              </div>
+
+              {/* Grid representation of dates */}
+              <div className="border border-neutral-800 bg-neutral-950/60 p-3 h-56 overflow-y-auto space-y-2 font-mono text-xs">
+                {(() => {
+                  // Get school days of term up to today, sorted descending (most recent first)
+                  const termDays = [...(activeTerm.schoolDays || [])]
+                    .filter(d => d <= currentDate)
+                    .sort((a, b) => b.localeCompare(a));
+
+                  if (termDays.length === 0) {
+                    return <div className="text-neutral-500 text-center py-8 school-title">No school days recorded in current term yet.</div>;
+                  }
+
+                  return termDays.map(dayStr => {
+                    const record = payments.find(p => p.studentId === bulkPupil.id && p.date === dayStr && !p.id.endsWith('_debt'));
+                    
+                    let statusLabel = 'UNMARKED';
+                    let statusColor = 'text-neutral-500 border-neutral-900 bg-neutral-900/30';
+
+                    if (record) {
+                      if (record.isAbsent) {
+                        statusLabel = 'ABSENT';
+                        statusColor = 'text-red-400 border-red-950 bg-red-950/30';
+                      } else if (record.notes?.toLowerCase().includes('present') || record.notes?.toLowerCase().includes('¢0')) {
+                        statusLabel = 'PRESENT (¢0)';
+                        statusColor = 'text-amber-400 border-amber-950 bg-amber-955';
+                      } else if (record.amount === 0 && (record.notes?.toLowerCase().includes('covered') || record.notes?.toLowerCase().includes('prepaid') || record.notes?.toLowerCase().includes('advance'))) {
+                        statusLabel = 'PREPAID COVERED';
+                        statusColor = 'text-sky-450 border-sky-950 bg-sky-955';
+                      } else {
+                        statusLabel = `PAID: GHC ${record.amount.toFixed(2)}`;
+                        statusColor = 'text-emerald-400 border-emerald-950 bg-emerald-955';
+                      }
+                    }
+
+                    const isChecked = selectedBulkDates.includes(dayStr);
+
+                    return (
+                      <label 
+                        key={dayStr}
+                        className={`flex items-center justify-between p-2.5 border transition-all cursor-pointer ${
+                          isChecked 
+                            ? 'bg-amber-450/10 border-amber-400 text-white font-bold' 
+                            : 'bg-neutral-900/40 border-neutral-850 text-neutral-300 hover:border-neutral-700'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <input
+                            type="checkbox"
+                            className="w-4 h-4 rounded-none border border-neutral-850 checked:bg-amber-400 checked:border-amber-400"
+                            checked={isChecked}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedBulkDates(prev => [...prev, dayStr]);
+                              } else {
+                                setSelectedBulkDates(prev => prev.filter(d => d !== dayStr));
+                              }
+                            }}
+                          />
+                          <span>
+                            {new Date(dayStr).toLocaleDateString('en-US', {
+                              weekday: 'short',
+                              month: 'short',
+                              day: 'numeric',
+                              year: 'numeric'
+                            })}
+                          </span>
+                        </div>
+                        <span className={`text-[10px] font-black tracking-wider uppercase font-mono px-2 py-0.5 border ${statusColor}`}>
+                          {statusLabel}
+                        </span>
+                      </label>
+                    );
+                  });
+                })()}
+              </div>
+
+              {/* Action and Config parameters */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border border-neutral-850 bg-neutral-900/40 p-4">
+                <div className="space-y-1.5">
+                  <span className="text-[10px] text-neutral-400 uppercase tracking-widest font-mono font-black block">SELECT ACTION TO APPLY</span>
+                  <select
+                    value={bulkActionType}
+                    onChange={(e) => setBulkActionType(e.target.value as any)}
+                    className="w-full bg-neutral-950 text-white font-mono text-xs border-2 border-neutral-800 focus:outline-none focus:border-amber-400 p-2.5 uppercase font-black"
+                  >
+                    <option value="paid">✓ Record Payment (Present & Paid)</option>
+                    <option value="present_zero">⚪ Record Present Check (¢0 Cash)</option>
+                    <option value="absent">✗ Record Absent (Debt excused)</option>
+                    <option value="clear">🗑️ Clear / Reset selected dates</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1.5 flex flex-col justify-end">
+                  {bulkActionType === 'paid' ? (
+                    <>
+                      <span className="text-[10px] text-neutral-400 uppercase tracking-widest font-mono font-black block">PAYMENT VALUE (OPTIONAL CUSTOM VALUE)</span>
+                      <div className="flex gap-2">
+                        <input
+                          type="number"
+                          step="any"
+                          min="0"
+                          value={bulkCustomAmount}
+                          onChange={(e) => setBulkCustomAmount(e.target.value)}
+                          placeholder={`Student Default: GHC ${(5.00 - (bulkPupil.discount || 0)).toFixed(2)}`}
+                          className="bg-neutral-950 border-2 border-neutral-800 text-white text-xs font-mono p-2.5 w-full focus:outline-none focus:border-amber-400 font-bold"
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-[10px] font-mono text-neutral-500 italic py-2">
+                      {bulkActionType === 'present_zero' && "* Marked pupil present in class with GHC 0.00 cash today. Past debt remains unsettled."}
+                      {bulkActionType === 'absent' && "* Excused from school activity fees on selected school days. Absent record submitted."}
+                      {bulkActionType === 'clear' && "* Removes existing transactions or metadata for selected dates from the database completely."}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Footer buttons */}
+            <div className="flex justify-between items-center border-t border-neutral-850 pt-5">
+              <span className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest font-bold">
+                {selectedBulkDates.length} Dates SELECTED
+              </span>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setBulkPupil(null)}
+                  className="px-5 py-2.5 bg-neutral-950 hover:bg-neutral-850 text-neutral-400 hover:text-white text-xs font-mono font-black uppercase tracking-widest border border-neutral-850 cursor-pointer transition-colors"
+                >
+                  CANCEL
+                </button>
+                <button
+                  type="button"
+                  disabled={selectedBulkDates.length === 0}
+                  onClick={() => {
+                    const customAmt = bulkCustomAmount ? parseFloat(bulkCustomAmount) : undefined;
+                    if (bulkActionType === 'paid' && customAmt !== undefined && (isNaN(customAmt) || customAmt < 0)) {
+                      showToast("Please enter a valid non-negative custom amount.");
+                      return;
+                    }
+                    recordPupilBulkDates(bulkPupil.id, selectedBulkDates, bulkActionType, customAmt);
+                    playFeedbackSound();
+                    showToast(`Successfully applied bulk entries to ${selectedBulkDates.length} school days for ${bulkPupil.name}!`);
+                    setBulkPupil(null);
+                  }}
+                  className="px-5 py-2.5 bg-amber-400 hover:bg-amber-300 text-black text-xs font-mono font-black uppercase tracking-widest cursor-pointer disabled:opacity-35 disabled:cursor-not-allowed transition-all"
+                >
+                  APPLY BULK ENTRIES
+                </button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      )}
+
       {/* STUDENT DAILY PAYMENT RECEIPT MODAL */}
       {receiptStudent && (() => {
         const paidInfo = paidStudentMap.get(receiptStudent.id);
@@ -5430,10 +7200,12 @@ export const ClassRegister: React.FC = () => {
                         onClick={() => {
                           window.print();
                         }}
-                        className="flex-1 py-3 px-4 bg-amber-400 hover:bg-amber-300 text-black font-black uppercase text-xs tracking-widest transition-all cursor-pointer flex items-center justify-center gap-2 border border-amber-500"
+                        className="flex-1 py-3 px-4 bg-amber-400 hover:bg-amber-300 text-black font-black uppercase text-xs tracking-widest transition-all cursor-pointer flex items-center justify-center gap-2 border border-amber-500 shadow-md"
+                        title="Export this receipt cleanly as a printable PDF invoice via browser print setup"
+                        id="btn-print-daily-pdf"
                       >
                         <Printer size={15} className="stroke-[2.5]" />
-                        <span>Print Hardcopy</span>
+                        <span>Export PDF Invoice</span>
                       </button>
 
                       <button
@@ -5448,6 +7220,8 @@ export const ClassRegister: React.FC = () => {
                           paidInfo.notes
                         )}
                         className="flex-1 py-3 px-4 bg-emerald-500 hover:bg-emerald-400 text-black font-black uppercase text-xs tracking-widest transition-all cursor-pointer flex items-center justify-center gap-2 border border-emerald-600 font-bold"
+                        title="Save receipt record as an offline HTML file"
+                        id="btn-download-daily-docket"
                       >
                         <Download size={15} className="stroke-[2.5]" />
                         <span>Download Docket</span>
@@ -5664,9 +7438,11 @@ export const ClassRegister: React.FC = () => {
                         window.print();
                       }}
                       className="py-3 px-4 bg-amber-400 hover:bg-amber-300 text-black font-black uppercase text-xs tracking-widest transition-all cursor-pointer flex items-center justify-center gap-2 border border-amber-500"
+                      title="Export this receipt cleanly as a printable PDF invoice via browser print setup"
+                      id="btn-export-record-pdf"
                     >
                       <Printer size={15} className="stroke-[2.5]" />
-                      <span>Print Hardcopy</span>
+                      <span>Export PDF Invoice</span>
                     </button>
 
                     <button
@@ -5681,6 +7457,8 @@ export const ClassRegister: React.FC = () => {
                         payment.notes
                       )}
                       className="py-3 px-4 bg-emerald-500 hover:bg-emerald-400 text-black font-black uppercase text-xs tracking-widest transition-all cursor-pointer flex items-center justify-center gap-2 border border-emerald-600 font-bold"
+                      title="Save receipt record as an offline HTML file"
+                      id="btn-download-record-docket"
                     >
                       <Download size={15} className="stroke-[2.5]" />
                       <span>Download Docket</span>
@@ -5872,6 +7650,303 @@ export const ClassRegister: React.FC = () => {
         </div>
       )}
 
+      {/* Hardcopy Daily Register Print Modal */}
+      {showPrintHardcopyModal && (
+        <div className="fixed inset-0 z-50 bg-neutral-950/95 backdrop-blur-md flex flex-col p-4 md:p-6 overflow-y-auto no-print">
+          {/* Inner controller panel */}
+          <div className="w-full max-w-5xl mx-auto bg-neutral-900 border-2 border-neutral-800 p-4 mb-4 flex flex-col sm:flex-row justify-between items-center gap-3">
+            <div className="flex items-center gap-2">
+              <Printer className="text-emerald-400 shrink-0" size={20} />
+              <div className="text-left font-mono">
+                <span className="text-[9px] text-amber-400 font-bold block uppercase tracking-widest">Administrative Hardcopy Module</span>
+                <h4 className="text-sm font-black text-white uppercase tracking-wider">Gate Check-In Checklist Print Hub</h4>
+              </div>
+            </div>
+            
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <button
+                type="button"
+                onClick={() => {
+                  window.dispatchEvent(new CustomEvent('show-print-iframe-warning'));
+                  window.print();
+                }}
+                className="flex-grow sm:flex-initial px-5 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-black text-[10.5px] font-mono font-black uppercase tracking-widest transition-colors cursor-pointer flex items-center justify-center gap-2 font-bold"
+              >
+                <Printer size={14} className="stroke-[2.5]" />
+                <span>Print Gate Sheet</span>
+              </button>
+              
+              <button
+                type="button"
+                onClick={() => setShowPrintHardcopyModal(false)}
+                className="flex-grow sm:flex-initial px-4 py-2.5 bg-neutral-800 hover:bg-neutral-750 text-neutral-400 hover:text-white text-[10.5px] font-mono font-bold uppercase transition-colors cursor-pointer"
+              >
+                Close Preview
+              </button>
+            </div>
+          </div>
+
+          {/* Interactive Screen Preview Container */}
+          <div className="w-full max-w-5xl mx-auto flex-1 bg-neutral-950 border border-neutral-850 p-4 md:p-10 flex min-h-[500px] justify-center items-start overflow-x-auto">
+            {/* The actual printable area */}
+            <div 
+              id="print-hardcopy-area"
+              className="bg-white text-black p-8 md:p-12 w-[100%] max-w-[210mm] min-h-[297mm] shadow-2xl border border-neutral-300 font-sans flex flex-col justify-between"
+            >
+              {/* Dynamic local CSS style block to completely isolate this page during printing */}
+              <style>{`
+                @media print {
+                  body * {
+                    visibility: hidden !important;
+                    background: none !important;
+                    color: black !important;
+                  }
+                  #print-hardcopy-area, #print-hardcopy-area * {
+                    visibility: visible !important;
+                  }
+                  #print-hardcopy-area {
+                    position: absolute !important;
+                    left: 0 !important;
+                    top: 0 !important;
+                    width: 100% !important;
+                    max-width: 100% !important;
+                    margin: 0 !important;
+                    padding: 10mm !important;
+                    background: white !important;
+                    color: black !important;
+                    font-family: inherit !important;
+                    box-shadow: none !important;
+                    border: none !important;
+                  }
+                  .no-print {
+                    display: none !important;
+                    visibility: hidden !important;
+                  }
+                  table {
+                    width: 100% !important;
+                    border-collapse: collapse !important;
+                    margin-top: 10px !important;
+                  }
+                  th, td {
+                    border: 1px solid #000000 !important;
+                    padding: 5px 6px !important;
+                    font-size: 10px !important;
+                    color: #000000 !important;
+                    line-height: 1.2 !important;
+                  }
+                  th {
+                    background-color: #f3f4f6 !important;
+                    font-weight: bold !important;
+                  }
+                }
+              `}</style>
+
+              <div className="space-y-4">
+                {/* Header Title Section */}
+                <div className="border-b-4 border-black pb-3 flex justify-between items-start text-left">
+                  <div className="space-y-1">
+                    <span className="text-[8px] font-bold text-neutral-600 font-mono tracking-widest uppercase block">
+                      OFFICIAL SAKO GATEWAY LOGISTIC UTILITY
+                    </span>
+                    <h2 className="text-xl font-extrabold uppercase tracking-tight text-black">
+                      SAAKO HOLY CHILD ACADEMY
+                    </h2>
+                    <p className="text-[9px] text-neutral-600 uppercase font-mono tracking-wide">
+                      Sawla-Savannah Region • Holiness is our Key • Tel: +233545029200
+                    </p>
+                  </div>
+
+                  <div className="text-right space-y-1">
+                    <span className="inline-block bg-black px-2.5 py-1 text-[9px] font-mono font-bold uppercase text-white tracking-widest">
+                      GATE REGISTER
+                    </span>
+                    <div className="text-[8px] text-neutral-500 font-mono font-bold">
+                      GEN: {new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Subtitle / Description */}
+                <div className="text-center bg-neutral-100 border border-neutral-300 p-2 text-left">
+                  <h3 className="text-center text-xs font-black uppercase text-black font-sans tracking-wider">
+                    DAILY GATE CHECK-IN & REVENUE SHEET (HARDCOPY LEDGER)
+                  </h3>
+                  <p className="text-center text-[9px] text-neutral-500 font-mono uppercase tracking-wider mt-0.5">
+                    Gatekeepers: Record daily presence & collect arrears. Settle checklist sums with accounts desk daily.
+                  </p>
+                </div>
+
+                {/* Ledger Metadata Write-in Slots */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-white p-3 border border-black/80 text-left font-mono text-[9px]">
+                  <div className="space-y-1">
+                    <span className="text-neutral-500 font-extrabold uppercase block font-bold">TARGET CLASS:</span>
+                    <span className="text-xs font-black text-black">CLASS {selectedClass === 'B7' ? 'JHS1' : selectedClass === 'B8' ? 'JHS2' : selectedClass === 'B9' ? 'JHS3' : selectedClass}</span>
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-neutral-500 font-extrabold uppercase block font-bold">ACADEMIC TERM:</span>
+                    <span className="text-xs font-extrabold text-black uppercase">{activeTerm?.name || 'ACTIVE SCHED'}</span>
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-neutral-550 font-extrabold uppercase block font-black">SCHEDULED DATE:</span>
+                    <span className="text-xs font-black text-black">{currentDate}</span>
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-neutral-500 font-extrabold block font-bold">ROSTER TOTAL:</span>
+                    <span className="text-xs font-black text-black">{classStudents.length} PUPILS</span>
+                  </div>
+                </div>
+
+                {/* Checklist fields to fill in manually at the gate */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 border-r border-l border-b border-neutral-200 bg-neutral-50/50 p-2 text-left font-mono text-[9px]">
+                  <div className="flex items-center gap-1">
+                    <span className="font-bold text-neutral-500">GATEKEEPER name:</span>
+                    <span className="flex-1 border-b border-black/60 h-4" />
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="font-bold text-neutral-500">SIGN-OFF TIME:</span>
+                    <span className="flex-1 border-b border-black/60 h-4" />
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="font-bold text-neutral-500">HANDOVER SIGN:</span>
+                    <span className="flex-1 border-b border-black/60 h-4" />
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="font-bold text-neutral-500 font-black text-neutral-700">ACCOUNTS AUDITOR:</span>
+                    <span className="flex-1 border-b border-black/60 h-4" />
+                  </div>
+                </div>
+
+                {/* Student Check-In Checklist Table Header */}
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left font-sans text-xs border-collapse">
+                    <thead>
+                      <tr className="bg-neutral-100 text-black border-t-2 border-b-2 border-black">
+                        <th className="py-2.5 px-1.5 text-center text-[10px] uppercase font-black w-[5%] border border-black">No.</th>
+                        <th className="py-2.5 px-3 uppercase font-black w-[35%] border border-black">Student Profile & Phone</th>
+                        <th className="py-2.5 px-2 text-center uppercase font-black w-[13%] border border-black">Billing Scheme</th>
+                        <th className="py-2.5 px-2 text-center uppercase font-black w-[17%] border border-black text-red-650">Arrears Pending</th>
+                        <th className="py-2.5 px-2 text-center uppercase font-black w-[15%] border border-black">Check-In Status</th>
+                        <th className="py-2.5 px-2 text-center uppercase font-black w-[15%] border border-black">Daily Cash Received</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {classStudents.map((student, idx) => {
+                        const debtInfo = studentDebtMap.get(student.id);
+                        const arrearsVal = debtInfo?.totalDebt || 0;
+                        const pastDays = debtInfo?.pastUnpaidDays?.length || 0;
+                        
+                        return (
+                          <tr key={student.id} className="border-b border-neutral-300">
+                            <td className="py-2 px-1 text-center font-mono text-[9px] border border-black font-extrabold">{idx + 1}</td>
+                            <td className="py-2 px-2.5 text-left border border-black">
+                              <div className="font-black text-[10px] text-black uppercase">{student.name}</div>
+                              <div className="text-[8px] text-neutral-500 font-mono tracking-wider flex items-center gap-1 mt-0.5">
+                                <span>Roll ID: {student.rollNumber || 'N/A'}</span> • <span>Ph: {student.guardianPhone || 'No Contact'}</span>
+                              </div>
+                            </td>
+                            <td className="py-2 px-1.5 text-center font-mono text-[9px] uppercase border border-black font-semibold">
+                              {student.paymentType === 'Term' ? (
+                                <span className="text-black font-bold">Term Scheme</span>
+                              ) : student.paymentType === 'Scholar' ? (
+                                <span className="text-slate-500 font-normal">Scholar</span>
+                              ) : (
+                                <span className="text-black font-black">Daily (GHC 5-fee)</span>
+                              )}
+                            </td>
+                            <td className="py-1 px-1.5 text-center font-mono text-[9.5px] border border-black">
+                              {arrearsVal > 0 ? (
+                                <div className="text-red-750 font-black uppercase text-[9px]">
+                                  GHC {arrearsVal.toFixed(2)}
+                                  <span className="block text-[7.5px] text-neutral-550 lowercase font-bold font-sans">({pastDays}d unpaid)</span>
+                                </div>
+                              ) : (
+                                <span className="text-neutral-400 text-[8.5px] uppercase font-bold font-sans">No Debt</span>
+                              )}
+                            </td>
+                            <td className="py-2 px-1 text-center border border-black select-none">
+                              <div className="flex justify-center items-center gap-2 text-[9px] font-mono leading-none">
+                                <label className="flex items-center gap-1 font-bold cursor-pointer">
+                                  <span className="inline-block w-4 h-4 border border-black/80 bg-white" />
+                                  <span>PRES</span>
+                                </label>
+                                <label className="flex items-center gap-1 font-bold cursor-pointer">
+                                  <span className="inline-block w-4 h-4 border border-black/80 bg-white" />
+                                  <span>ABS</span>
+                                </label>
+                              </div>
+                            </td>
+                            <td className="py-1 px-1.5 text-center font-mono text-[8.5px] border border-black">
+                              {student.paymentType === 'Daily' ? (
+                                <div className="flex items-center gap-1 justify-center">
+                                  <span className="font-bold border border-black/80 w-3 h-3 block inline-block" />
+                                  <span className="font-extrabold text-[8.5px]">GHC 5</span>
+                                  <span className="text-neutral-350 mx-0.5">/</span>
+                                  <span className="border-b border-black w-8 block h-2" />
+                                </div>
+                              ) : student.paymentType === 'Scholar' ? (
+                                <span className="text-neutral-400 uppercase text-[7px] tracking-widest font-black">EXEMPT</span>
+                              ) : (
+                                <div className="flex items-center gap-1 w-full justify-center">
+                                  <span className="font-bold text-neutral-500 text-[6.5px] uppercase">GHC</span>
+                                  <span className="border-b border-black w-12 block h-2" />
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {classStudents.length === 0 && (
+                  <div className="py-12 border-2 border-dashed border-neutral-300 text-center text-neutral-400 uppercase font-mono text-xs">
+                    No active students enrolled in Class {selectedClass}
+                  </div>
+                )}
+              </div>
+
+              {/* Auditor Signoff on paper footer */}
+              <div className="border-t-2 border-black pt-3 mt-4 z-10 font-mono text-[8.5px]">
+                <div className="flex justify-between items-start gap-4">
+                  <div className="space-y-2 text-left w-1/2">
+                    <span className="text-neutral-500 font-extrabold uppercase block leading-none">TOTAL GATE SUMMARY (TO BE TALLIED):</span>
+                    <div className="space-y-1.5 text-[8px] leading-relaxed">
+                      <div>1. CASH COLLECTED FOR TODAY'S REGISTRARS: <span className="font-black text-black text-[9px]">GHC ________________</span></div>
+                      <div>2. CASH COLLECTED FOR PENDING DEBT ARREARS: <span className="font-black text-black text-[9px]">GHC ________________</span></div>
+                      <div className="font-black uppercase text-[8.5px] text-black pt-1 bg-neutral-50 border-t border-neutral-200">
+                        TOTAL REVENUE HANDED BACK: GHC ____________________
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4 text-right w-1/3">
+                    <div className="space-y-1 text-right">
+                      <div className="inline-block border-b border-black w-36 h-5" />
+                      <div className="text-[7px] font-black uppercase text-neutral-700 tracking-wider">
+                        Gate Teacher Sign-off
+                      </div>
+                    </div>
+
+                    <div className="space-y-1 text-right">
+                      <div className="inline-block border-b border-black w-36 h-5" />
+                      <div className="text-[7px] font-black uppercase text-neutral-700 tracking-wider">
+                        Accounts Desk Verification
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="text-center text-[7px] text-neutral-400 uppercase tracking-widest pt-3 font-normal font-sans">
+                  Sako Holy Child Academy Cloud Ledger System • Hardcopy Gate Register Form v2.1
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Sticky Bottom Class Quick-Switch Carousel ("Bottom Scroll Wheel") */}
       <div className="fixed bottom-12 left-0 right-0 z-40 bg-neutral-900/95 backdrop-blur-md border-t-4 border-amber-400 p-2.5 flex items-center justify-between gap-3 shadow-[0_-8px_24px_rgba(0,0,0,0.6)] md:hidden">
         {/* Left Scroll Click Action */}
@@ -5945,6 +8020,230 @@ export const ClassRegister: React.FC = () => {
         </button>
       </div>
       {/* Floating Quick Receipt Notification Card disabled to stop popup after daily check in */}
+
+      {whatsAppShareModal && (
+        <div id="whats-app-share-modal" className="fixed inset-0 z-50 bg-neutral-950/90 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto no-print">
+          <div className="bg-neutral-900 border-4 border-amber-400 p-6 max-w-lg w-full rounded-none space-y-4 shadow-[8px_8px_0px_0px_rgba(0,0,0,0.55)] relative text-white">
+            <button
+              onClick={() => {
+                setWhatsAppShareModal(null);
+                setCustomWAContact('');
+                setSelectedStaffPhone('');
+                playFeedbackSound('click');
+              }}
+              className="absolute top-4 right-4 text-neutral-400 hover:text-white font-mono text-xs p-1 cursor-pointer font-black border border-neutral-800 hover:border-red-500 hover:text-red-500 px-1.5 py-0.5 transition-all"
+            >
+              ✕ CLOSE
+            </button>
+
+            <div className="space-y-1">
+              <span className="text-[9px] font-mono font-black uppercase tracking-widest text-amber-400">WhatsApp Delivery Center</span>
+              <h3 className="text-base font-black uppercase tracking-tight font-mono text-white">
+                Share: {whatsAppShareModal.student.name}'s {whatsAppShareModal.type.replace('_', ' ')}
+              </h3>
+            </div>
+
+            {/* Message Preview */}
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-mono font-black uppercase tracking-wider text-neutral-400 block">Message Preview (Auto-generated)</label>
+              <textarea
+                readOnly
+                value={whatsAppShareModal.messageText}
+                className="w-full h-28 bg-neutral-950 border border-neutral-800 p-3 text-[10.5px] font-mono rounded-none text-neutral-350 resize-none select-all focus:outline-none"
+              />
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(whatsAppShareModal.messageText);
+                  showToast("Message text copied to clipboard!");
+                  playFeedbackSound('success');
+                }}
+                className="w-full bg-neutral-950 hover:bg-neutral-850 text-neutral-400 hover:text-amber-400 border border-neutral-800 py-1.5 text-[9px] font-mono font-black uppercase tracking-wider transition-all rounded-xs cursor-pointer"
+              >
+                📋 Copy Text to Clipboard
+              </button>
+            </div>
+
+            <div className="border-t border-neutral-850 my-2 pt-2 space-y-3">
+              <span className="text-[10px] font-mono font-black uppercase tracking-wider text-amber-400 block">Choose WhatsApp Contact Option:</span>
+
+              {/* Option 1: Open WhatsApp Contact Picker */}
+              <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-emerald-500/40 transition-all rounded-xs space-y-2">
+                <div>
+                  <h4 className="text-xs font-black uppercase font-mono text-emerald-400">1. WhatsApp Contact Picker (Universal Share)</h4>
+                  <p className="text-[9.5px] text-neutral-400 font-bold leading-tight">
+                    Launches WhatsApp so you can search and choose ANY contact or group directly from your WhatsApp chats.
+                  </p>
+                </div>
+                <button
+                  onClick={async () => {
+                    const urlText = encodeURIComponent(whatsAppShareModal.messageText);
+                    const waUrl = `https://api.whatsapp.com/send?text=${urlText}`;
+                    if (typeof window !== 'undefined') {
+                      window.open(waUrl, '_blank', 'noopener,noreferrer');
+                      showToast("WhatsApp Contact Picker opened!");
+                    }
+                    // Trigger background logging
+                    try {
+                      await sendautomatedWhatsApp(
+                        'Universal Share Picker',
+                        whatsAppShareModal.messageText,
+                        whatsAppShareModal.student.id,
+                        whatsAppShareModal.student.name,
+                        whatsAppShareModal.type
+                      );
+                    } catch (e) {}
+                    setWhatsAppShareModal(null);
+                    setCustomWAContact('');
+                    setSelectedStaffPhone('');
+                  }}
+                  className="w-full bg-emerald-950 hover:bg-emerald-900 text-emerald-400 hover:text-emerald-300 border border-emerald-800 py-2 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded-xs flex items-center justify-center gap-1.5"
+                >
+                  <MessageSquare size={12} />
+                  <span>Choose Contact & Send on WhatsApp</span>
+                </button>
+              </div>
+
+              {/* Option 2: Send to Guardian */}
+              {whatsAppShareModal.defaultPhone && (
+                <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
+                  <div>
+                    <h4 className="text-xs font-black uppercase font-mono text-white">2. Registered Parent/Guardian</h4>
+                    <p className="text-[9.5px] text-neutral-400 font-bold leading-tight">
+                      Registered Number: <span className="text-amber-400 font-black">{whatsAppShareModal.defaultPhone}</span>
+                    </p>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      let targetPhone = whatsAppShareModal.defaultPhone.replace(/\D/g, "");
+                      if (targetPhone.startsWith("0") && targetPhone.length === 10) {
+                        targetPhone = "233" + targetPhone.substring(1);
+                      }
+                      const urlText = encodeURIComponent(whatsAppShareModal.messageText);
+                      const waUrl = `https://api.whatsapp.com/send?phone=${targetPhone}&text=${urlText}`;
+                      if (typeof window !== 'undefined') {
+                        window.open(waUrl, '_blank', 'noopener,noreferrer');
+                        showToast(`WhatsApp opened with Guardian (${whatsAppShareModal.defaultPhone})!`);
+                      }
+                      // Trigger background logging
+                      try {
+                        await sendautomatedWhatsApp(
+                          whatsAppShareModal.defaultPhone,
+                          whatsAppShareModal.messageText,
+                          whatsAppShareModal.student.id,
+                          whatsAppShareModal.student.name,
+                          whatsAppShareModal.type
+                        );
+                      } catch (e) {}
+                      setWhatsAppShareModal(null);
+                      setCustomWAContact('');
+                      setSelectedStaffPhone('');
+                    }}
+                    className="w-full bg-neutral-950 hover:bg-neutral-850 text-white hover:text-amber-400 border border-neutral-800 py-2 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded-xs"
+                  >
+                    💬 Send directly to Guardian ({whatsAppShareModal.defaultPhone})
+                  </button>
+                </div>
+              )}
+
+              {/* Option 3: Send to school staff/teacher */}
+              {users && users.length > 0 && (
+                <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
+                  <h4 className="text-xs font-black uppercase font-mono text-white">3. School Staff / Class Teacher</h4>
+                  <div className="flex gap-2">
+                    <select
+                      value={selectedStaffPhone}
+                      onChange={(e) => setSelectedStaffPhone(e.target.value)}
+                      className="bg-neutral-950 border border-neutral-800 rounded-xs text-[10px] font-mono font-bold text-white px-2 py-1.5 flex-1 focus:outline-none focus:border-amber-400"
+                    >
+                      <option value="">-- SELECT STAFF MEMBER --</option>
+                      {users.map(u => (
+                        u.phone ? <option key={u.id} value={u.phone}>{u.name} ({u.role || 'Staff'}) - {u.phone}</option> : null
+                      ))}
+                    </select>
+                    <button
+                      disabled={!selectedStaffPhone}
+                      onClick={async () => {
+                        let targetPhone = selectedStaffPhone.replace(/\D/g, "");
+                        if (targetPhone.startsWith("0") && targetPhone.length === 10) {
+                          targetPhone = "233" + targetPhone.substring(1);
+                        }
+                        const urlText = encodeURIComponent(whatsAppShareModal.messageText);
+                        const waUrl = `https://api.whatsapp.com/send?phone=${targetPhone}&text=${urlText}`;
+                        if (typeof window !== 'undefined') {
+                          window.open(waUrl, '_blank', 'noopener,noreferrer');
+                          showToast(`WhatsApp opened with Staff member!`);
+                        }
+                        // Trigger background logging
+                        try {
+                          await sendautomatedWhatsApp(
+                            selectedStaffPhone,
+                            whatsAppShareModal.messageText,
+                            whatsAppShareModal.student.id,
+                            whatsAppShareModal.student.name,
+                            whatsAppShareModal.type
+                          );
+                        } catch (e) {}
+                        setWhatsAppShareModal(null);
+                        setCustomWAContact('');
+                        setSelectedStaffPhone('');
+                      }}
+                      className="bg-amber-400 hover:bg-amber-500 disabled:opacity-40 disabled:hover:bg-amber-400 text-black px-4 py-1.5 text-[10px] font-mono font-black uppercase rounded-xs cursor-pointer"
+                    >
+                      Send
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Option 4: Custom Number */}
+              <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
+                <h4 className="text-xs font-black uppercase font-mono text-white">4. Type Custom Phone Number</h4>
+                <div className="flex gap-2">
+                  <input
+                    type="tel"
+                    value={customWAContact}
+                    onChange={(e) => setCustomWAContact(e.target.value)}
+                    placeholder="e.g. 0244000000"
+                    className="bg-neutral-950 border border-neutral-800 rounded-xs text-[10px] font-mono font-bold text-white px-2 py-1.5 flex-1 focus:outline-none focus:border-amber-400"
+                  />
+                  <button
+                    disabled={!customWAContact.trim()}
+                    onClick={async () => {
+                      let targetPhone = customWAContact.replace(/\D/g, "");
+                      if (targetPhone.startsWith("0") && targetPhone.length === 10) {
+                        targetPhone = "233" + targetPhone.substring(1);
+                      }
+                      const urlText = encodeURIComponent(whatsAppShareModal.messageText);
+                      const waUrl = `https://api.whatsapp.com/send?phone=${targetPhone}&text=${urlText}`;
+                      if (typeof window !== 'undefined') {
+                        window.open(waUrl, '_blank', 'noopener,noreferrer');
+                        showToast(`WhatsApp opened with custom recipient!`);
+                      }
+                      // Trigger background logging
+                      try {
+                        await sendautomatedWhatsApp(
+                          customWAContact,
+                          whatsAppShareModal.messageText,
+                          whatsAppShareModal.student.id,
+                          whatsAppShareModal.student.name,
+                          whatsAppShareModal.type
+                        );
+                      } catch (e) {}
+                      setWhatsAppShareModal(null);
+                      setCustomWAContact('');
+                      setSelectedStaffPhone('');
+                    }}
+                    className="bg-amber-400 hover:bg-amber-500 disabled:opacity-40 disabled:hover:bg-amber-400 text-black px-4 py-1.5 text-[10px] font-mono font-black uppercase rounded-xs cursor-pointer"
+                  >
+                    Send
+                  </button>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
-};
+});

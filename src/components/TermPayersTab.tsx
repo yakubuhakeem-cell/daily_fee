@@ -29,12 +29,16 @@ import {
   Copy,
   Info,
   MessageSquare,
-  Send
+  Send,
+  Download,
+  FileText,
+  Clock,
+  ArrowUpDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { VoiceSearchButton } from './VoiceSearchButton';
 
-export const TermPayersTab: React.FC = () => {
+export const TermPayersTab: React.FC = React.memo(() => {
   const { 
     students, 
     payments, 
@@ -43,8 +47,13 @@ export const TermPayersTab: React.FC = () => {
     currentDate,
     theme,
     activeTerm,
-    sendautomatedWhatsApp
+    sendautomatedWhatsApp,
+    systemSettings,
+    users
   } = useApp();
+
+  const baseTermFee = systemSettings?.baselineTermFee ?? 350;
+  const currencySymbol = systemSettings?.currencyCode || 'GHC';
 
   // Search, Class and Payment Status Filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -52,7 +61,7 @@ export const TermPayersTab: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'OUTSTANDING' | 'PAID'>('ALL');
   
   // Custom navigation state for directory versus the targeted follow-up view
-  const [viewMode, setViewMode] = useState<'DIRECTORY' | 'PENDING_REGISTRATIONS'>('DIRECTORY');
+  const [viewMode, setViewMode] = useState<'DIRECTORY' | 'PENDING_REGISTRATIONS' | 'PAYMENT_HISTORY'>('DIRECTORY');
 
   // SMS target states for interactive targeted counselor alerts
   const [smsTarget, setSmsTarget] = useState<{ student: Student; consecutiveDays: number; unpaidDates: string[] } | null>(null);
@@ -86,6 +95,26 @@ export const TermPayersTab: React.FC = () => {
   const [formSuccess, setFormSuccess] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
 
+  // Single reminder loading state
+  const [sendingReminderId, setSendingReminderId] = useState<string | null>(null);
+
+  const [whatsAppReminderModal, setWhatsAppReminderModal] = useState<{
+    student: Student;
+    messageText: string;
+    defaultPhone: string;
+  } | null>(null);
+  const [customWAContact, setCustomWAContact] = useState('');
+  const [selectedStaffPhone, setSelectedStaffPhone] = useState('');
+
+  // Legacy Debt Report Modal
+  const [showDebtReportModal, setShowDebtReportModal] = useState<boolean>(false);
+
+  // Student payment history view states
+  const [historySelectedStudentId, setHistorySelectedStudentId] = useState<string | null>(null);
+  const [historySearchQuery, setHistorySearchQuery] = useState('');
+  const [historyClassFilter, setHistoryClassFilter] = useState<string>('ALL');
+  const [historySortOrder, setHistorySortOrder] = useState<'asc' | 'desc'>('desc');
+
   // Active Term Payers list
   const activeTermPayers = useMemo(() => {
     return students.filter(s => s.active !== false && s.paymentType === 'Term');
@@ -102,15 +131,25 @@ export const TermPayersTab: React.FC = () => {
   const pendingPaymentsStudents = useMemo(() => {
     if (validSchoolDays.length < 3) return [];
     
+    // Pre-index payments for O(1) loop lookup
+    const registrationSet = new Set<string>();
+    if (payments) {
+      for (let i = 0; i < payments.length; i++) {
+        const p = payments[i];
+        if (p.verified && !p.isAbsent) {
+          registrationSet.add(`${p.studentId}_${p.date}`);
+        }
+      }
+    }
+    
     return activeTermPayers.map(student => {
       let consecutiveUnpaid: string[] = [];
       let maxConsecutiveUnpaid: string[] = [];
       
       for (const day of validSchoolDays) {
         // A check-in registration exists if there is a verified record for that day that is not marked as absent
-        const hasRegistration = (payments || []).some(
-          p => p.studentId === student.id && p.date === day && p.verified && !p.isAbsent
-        );
+        const key = `${student.id}_${day}`;
+        const hasRegistration = registrationSet.has(key);
         
         if (!hasRegistration) {
           consecutiveUnpaid.push(day);
@@ -139,7 +178,7 @@ export const TermPayersTab: React.FC = () => {
     let outstandingCount = 0;
 
     activeTermPayers.forEach(s => {
-      const studentFee = s.termFee || 350;
+      const studentFee = s.termFee || baseTermFee;
       const legacyDebt = s.legacyDebt || 0;
       totalExpected += studentFee + legacyDebt;
 
@@ -171,7 +210,7 @@ export const TermPayersTab: React.FC = () => {
   // Outstanding students helper for bulk notifications
   const outstandingStudents = useMemo(() => {
     return activeTermPayers.map(s => {
-      const studentFee = s.termFee || 350;
+      const studentFee = s.termFee || baseTermFee;
       const legacyDebt = s.legacyDebt || 0;
       const studentPayments = payments.filter(p => p.studentId === s.id && !p.isAbsent);
       const studentTotalPaid = studentPayments.reduce((sum, p) => sum + p.amount, 0);
@@ -186,6 +225,24 @@ export const TermPayersTab: React.FC = () => {
       };
     }).filter(item => item.isOutstanding);
   }, [activeTermPayers, payments]);
+
+  // Pupils with non-zero legacy debt for targeted debt reporting
+  const legacyDebtStudents = useMemo(() => {
+    return activeTermPayers.map(s => {
+      const studentFee = s.termFee || baseTermFee;
+      const legacyDebt = s.legacyDebt || 0;
+      const studentPayments = payments.filter(p => p.studentId === s.id && !p.isAbsent);
+      const studentTotalPaid = studentPayments.reduce((sum, p) => sum + p.amount, 0);
+      const balanceDue = Math.max(0, studentFee + legacyDebt - studentTotalPaid);
+      return {
+        student: s,
+        studentFee,
+        legacyDebt,
+        totalPaid: studentTotalPaid,
+        balanceDue
+      };
+    }).filter(item => item.legacyDebt > 0);
+  }, [activeTermPayers, payments, baseTermFee]);
 
   // Bulk notifications handler
   const handleTriggerBulkNotifications = async () => {
@@ -260,6 +317,89 @@ export const TermPayersTab: React.FC = () => {
     showToast(`Bulk dispatch completed for ${outstandingStudents.length} accounts!`);
   };
 
+  const handleSendSingleReminder = async (student: Student) => {
+    const studentFee = student.termFee || baseTermFee;
+    const legacyDebt = student.legacyDebt || 0;
+    const studentPayments = payments.filter(p => p.studentId === student.id && !p.isAbsent);
+    const studentTotalPaid = studentPayments.reduce((sum, p) => sum + p.amount, 0);
+    const balanceDue = Math.max(0, studentFee + legacyDebt - studentTotalPaid);
+
+    if (balanceDue <= 0) {
+      showToast(`${student.name}'s term fees are already completely settled!`);
+      return;
+    }
+
+    const message = `*SAAKO HOLY CHILD ACADEMY*\n*FEES OUTSTANDING NOTICE*\n\n` +
+      `*Beneficiary/Pupil:* ${student.name}\n` +
+      `*Roll ID:* ${student.rollNumber || 'SHC-' + student.id.substring(0, 5).toUpperCase()}\n` +
+      `*Class:* ${student.class}\n\n` +
+      `Dear Parent/Guardian,\n` +
+      `We wish to remind you that your child has an outstanding Term fee balance of *GHC ${balanceDue.toFixed(2)}* (Total Term Fee: GHC ${studentFee.toFixed(2)}, Legacy Debt: GHC ${legacyDebt.toFixed(2)}, Paid: GHC ${studentTotalPaid.toFixed(2)}).\n\n` +
+      `Kindly make payments to settle the outstanding arrears. Thank you.\n\n` +
+      `_Authorized Administration System_`;
+
+    setWhatsAppReminderModal({
+      student,
+      messageText: message,
+      defaultPhone: student.guardianPhone || ''
+    });
+  };
+
+  const downloadDebtCsvReport = () => {
+    if (legacyDebtStudents.length === 0) {
+      showToast("No pupils with active legacy debts found to export.");
+      return;
+    }
+
+    const headers = [
+      "Roll ID",
+      "Student Name",
+      "Class",
+      "Guardian Phone",
+      "Term Fee (GHC)",
+      "Legacy Debt (GHC)",
+      "Total Paid (GHC)",
+      "Remaining Arrears (GHC)"
+    ];
+
+    const escapeCsv = (val: string | number) => {
+      const str = String(val === null || val === undefined ? '' : val);
+      return `"${str.replace(/"/g, '""')}"`;
+    };
+
+    const rows = legacyDebtStudents.map(item => {
+      const s = item.student;
+      const rollId = s.rollNumber || 'SHC-' + s.id.substring(0, 5).toUpperCase();
+      return [
+        escapeCsv(rollId),
+        escapeCsv(s.name),
+        escapeCsv(s.class),
+        escapeCsv(s.guardianPhone || 'N/A'),
+        escapeCsv(item.studentFee),
+        escapeCsv(item.legacyDebt),
+        escapeCsv(item.totalPaid),
+        escapeCsv(item.balanceDue)
+      ];
+    });
+
+    const csvContent = [
+      headers.join(","),
+      ...rows.map(row => row.join(","))
+    ].join("\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `Legacy_Debt_Audit_Report_${currentDate}.csv`);
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    showToast(`Successfully exported Legacy Debt CSV Report!`);
+  };
+
   // Filter Term Payers for display
   const displayedTermPayers = useMemo(() => {
     return activeTermPayers.filter(s => {
@@ -272,7 +412,7 @@ export const TermPayersTab: React.FC = () => {
       const matchesClass = classFilter === 'ALL' || s.class === classFilter;
 
       // 3. Status filter
-      const studentFee = s.termFee || 350;
+      const studentFee = s.termFee || baseTermFee;
       const studentPayments = payments.filter(p => p.studentId === s.id && !p.isAbsent);
       const studentTotalPaid = studentPayments.reduce((sum, p) => sum + p.amount, 0);
       const isPaid = studentTotalPaid >= studentFee;
@@ -289,7 +429,7 @@ export const TermPayersTab: React.FC = () => {
   // Calculate detailed finances for the selected student in detail panel
   const selectedStudentFinances = useMemo(() => {
     if (!selectedStudent) return null;
-    const studentFee = selectedStudent.termFee || 350;
+    const studentFee = selectedStudent.termFee || baseTermFee;
     const legacyDebt = selectedStudent.legacyDebt || 0;
     const studentPayments = payments.filter(p => p.studentId === selectedStudent.id);
     const paidPayments = studentPayments.filter(p => !p.isAbsent);
@@ -299,6 +439,17 @@ export const TermPayersTab: React.FC = () => {
     const prepayValue = Math.max(0, totalPaid - totalTarget); // If they paid extra
     const isCompleted = totalPaid >= totalTarget;
     const percentDone = Math.min(100, (totalPaid / totalTarget) * 100);
+
+    const termSchoolDaysList = activeTerm ? activeTerm.schoolDays : [];
+    const holidaysList = activeTerm?.publicHolidays || [];
+    const schoolDaysNoHolidaysCount = termSchoolDaysList.filter(d => !holidaysList.includes(d)).length;
+
+    const presentDaysTerm = activeTerm ? activeTerm.schoolDays.filter(d => {
+      if (d > currentDate) return false;
+      if (holidaysList.includes(d)) return false;
+      const record = payments.find(p => p.studentId === selectedStudent.id && p.date === d);
+      return !(record?.isAbsent);
+    }).length : 0;
 
     return {
       studentFee,
@@ -310,9 +461,11 @@ export const TermPayersTab: React.FC = () => {
       balanceDue,
       prepayValue,
       isCompleted,
-      percentDone
+      percentDone,
+      presentDaysTerm,
+      schoolDaysNoHolidaysCount
     };
-  }, [selectedStudent, payments]);
+  }, [selectedStudent, payments, activeTerm, currentDate]);
 
   // Handle Incremental Collect Payment
   const handleCollectPayment = (e: React.FormEvent) => {
@@ -343,6 +496,54 @@ export const TermPayersTab: React.FC = () => {
     }
   };
 
+  // Memoized states for student payment history view
+  const filteredHistoryStudents = useMemo(() => {
+    return activeTermPayers.filter(s => {
+      const matchesSearch = s.name.toLowerCase().includes(historySearchQuery.toLowerCase()) ||
+        (s.rollNumber && s.rollNumber.toLowerCase().includes(historySearchQuery.toLowerCase())) ||
+        ('SHC-' + s.id.substring(0, 5).toUpperCase()).toLowerCase().includes(historySearchQuery.toLowerCase());
+      const matchesClass = historyClassFilter === 'ALL' || s.class === historyClassFilter;
+      return matchesSearch && matchesClass;
+    });
+  }, [activeTermPayers, historySearchQuery, historyClassFilter]);
+
+  const historySelectedStudent = useMemo(() => {
+    if (!historySelectedStudentId) return null;
+    return activeTermPayers.find(s => s.id === historySelectedStudentId) || null;
+  }, [activeTermPayers, historySelectedStudentId]);
+
+  const historySelectedStudentFinances = useMemo(() => {
+    if (!historySelectedStudent) return null;
+    const studentFee = historySelectedStudent.termFee || baseTermFee;
+    const legacyDebt = historySelectedStudent.legacyDebt || 0;
+    const studentPayments = payments.filter(p => p.studentId === historySelectedStudent.id);
+    const paidPayments = studentPayments.filter(p => !p.isAbsent);
+    
+    // Sort chronologically based on historySortOrder
+    const sortedPayments = [...paidPayments].sort((a, b) => {
+      const timeA = new Date(a.timestamp || a.date).getTime();
+      const timeB = new Date(b.timestamp || b.date).getTime();
+      return historySortOrder === 'asc' ? timeA - timeB : timeB - timeA;
+    });
+
+    const totalPaid = paidPayments.reduce((sum, p) => sum + p.amount, 0);
+    const totalTarget = studentFee + legacyDebt;
+    const balanceDue = Math.max(0, totalTarget - totalPaid);
+    const percentDone = Math.min(100, (totalPaid / totalTarget) * 100);
+    const isCompleted = totalPaid >= totalTarget;
+
+    return {
+      studentFee,
+      legacyDebt,
+      totalTarget,
+      sortedPayments,
+      totalPaid,
+      balanceDue,
+      percentDone,
+      isCompleted
+    };
+  }, [historySelectedStudent, payments, historySortOrder, baseTermFee]);
+
   // Helper list of potential classes for filtering
   const studentClasses: StudentClass[] = [
     'Nursery', 'KG1', 'KG2',
@@ -371,6 +572,16 @@ export const TermPayersTab: React.FC = () => {
 
         {/* Global actions and summary count */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => setShowDebtReportModal(true)}
+            className="bg-amber-500 hover:bg-amber-400 text-neutral-950 font-mono font-black uppercase text-xs tracking-wider px-4 py-3 flex items-center justify-center gap-2 rounded-xs border-b-2 border-amber-700 transition-all shadow-md cursor-pointer hover:-translate-y-0.5"
+            title="Export and print legacy debt audit report"
+          >
+            <FileText size={15} />
+            <span>Export Debt Report</span>
+          </button>
+
           <button
             type="button"
             onClick={() => setShowBulkNotifyModal(true)}
@@ -499,6 +710,16 @@ export const TermPayersTab: React.FC = () => {
             </span>
           )}
         </button>
+        <button
+          onClick={() => setViewMode('PAYMENT_HISTORY')}
+          className={`px-5 py-3 text-xs font-black uppercase tracking-wider font-mono border-t-2 relative transition-all cursor-pointer ${
+            viewMode === 'PAYMENT_HISTORY'
+              ? 'border-t-emerald-400 bg-neutral-900/40 text-emerald-400'
+              : 'border-t-transparent text-neutral-500 hover:text-neutral-300'
+          }`}
+        >
+          🧾 Student Payment History
+        </button>
       </div>
 
       {viewMode === 'DIRECTORY' ? (
@@ -612,7 +833,7 @@ export const TermPayersTab: React.FC = () => {
               </thead>
               <tbody className="divide-y divide-neutral-800 text-xs text-neutral-250 font-medium">
                 {displayedTermPayers.map((student) => {
-                  const termFee = student.termFee || 350;
+                  const termFee = student.termFee || baseTermFee;
                   const legacyDebt = student.legacyDebt || 0;
                   const totalExpected = termFee + legacyDebt;
                   const studentPayments = payments.filter(p => p.studentId === student.id && !p.isAbsent);
@@ -622,12 +843,19 @@ export const TermPayersTab: React.FC = () => {
                   const percentPaid = Math.min(100, (totalPaid / totalExpected) * 100);
                   const isLowProgress = percentPaid < 25;
 
-                  // Soft red hue highlighting for low progress (<25%)
+                  // Soft red hue highlighting for low progress (<25%) or significant legacy debt
                   // Adaptive for daylight / dark mode
-                  const rowClass = isLowProgress
+                  const isSignificantDebt = legacyDebt >= 100;
+                  const hasAnyLegacyDebt = legacyDebt > 0;
+
+                  const rowClass = isLowProgress || isSignificantDebt
                     ? theme === 'daylight'
                       ? 'bg-red-50/70 hover:bg-red-100/80 transition-all border-l-4 border-l-red-500 group font-bold'
                       : 'bg-red-950/15 hover:bg-red-900/10 transition-all border-l-4 border-l-red-500/80 group font-bold'
+                    : hasAnyLegacyDebt
+                    ? theme === 'daylight'
+                      ? 'bg-amber-50/40 hover:bg-amber-100/50 transition-all border-l-4 border-l-red-400 group font-medium'
+                      : 'bg-amber-955/5 hover:bg-amber-900/5 transition-all border-l-4 border-l-red-400/60 group font-medium'
                     : 'hover:bg-neutral-850/60 transition-colors border-l-4 border-l-transparent group';
 
                   return (
@@ -654,7 +882,7 @@ export const TermPayersTab: React.FC = () => {
                           <div>
                             <div className="flex flex-wrap items-center gap-2">
                               <span className={`font-extrabold uppercase tracking-tight transition-colors ${
-                                isLowProgress 
+                                isLowProgress || isSignificantDebt
                                   ? 'text-red-400 group-hover:text-red-300' 
                                   : 'text-white group-hover:text-amber-400'
                               }`}>
@@ -663,6 +891,15 @@ export const TermPayersTab: React.FC = () => {
                               {isLowProgress && (
                                 <span className="text-[8px] font-black tracking-wide text-red-500 bg-red-950/30 border border-red-500/35 px-1.5 py-0.5 uppercase shrink-0 font-sans">
                                   CRITICAL &lt; 25%
+                                </span>
+                              )}
+                              {hasAnyLegacyDebt && (
+                                <span className={`text-[8px] font-black tracking-wide px-1.5 py-0.5 uppercase shrink-0 font-sans ${
+                                  isSignificantDebt 
+                                    ? 'text-white bg-red-650 border border-red-500 animate-pulse' 
+                                    : 'text-red-405 bg-red-955 border border-red-500/30'
+                                }`}>
+                                  Legacy Debt: GHC {legacyDebt.toFixed(2)}
                                 </span>
                               )}
                             </div>
@@ -751,6 +988,17 @@ export const TermPayersTab: React.FC = () => {
 
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end gap-2">
+                          {!isSettled && (
+                            <button
+                              disabled={sendingReminderId === student.id}
+                              onClick={() => handleSendSingleReminder(student)}
+                              className="bg-emerald-950/40 hover:bg-emerald-900/30 text-emerald-400 hover:text-emerald-300 border border-emerald-500/30 hover:border-emerald-500/50 px-3 py-1.5 text-xs font-black uppercase tracking-tight transition-all cursor-pointer rounded-xs inline-flex items-center gap-1.5 hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50"
+                              title="Send quick WhatsApp payment reminder to guardian"
+                            >
+                              <MessageSquare size={13} className={sendingReminderId === student.id ? "animate-bounce" : ""} />
+                              <span>{sendingReminderId === student.id ? "Sending..." : "Remind"}</span>
+                            </button>
+                          )}
                           <button
                             onClick={() => setSelectedStudent(student)}
                             className="bg-neutral-950 text-white hover:text-amber-400 hover:border-amber-400 border border-neutral-800 px-3 py-1.5 text-xs font-black uppercase tracking-tight transition-all cursor-pointer rounded-xs inline-flex items-center gap-1 hover:-translate-y-0.5 active:translate-y-0"
@@ -770,6 +1018,342 @@ export const TermPayersTab: React.FC = () => {
         )}
       </div>
     </>
+  ) : viewMode === 'PAYMENT_HISTORY' ? (
+    /* Student Payment History view */
+    <div className="space-y-6 animate-fadeIn" id="payment-history-view-container">
+      {/* Banner / Title Card */}
+      <div className="bg-neutral-900 border-2 border-emerald-500/25 p-5 relative overflow-hidden flex flex-col md:flex-row md:items-center justify-between gap-4 font-sans">
+        <div className="space-y-1">
+          <span className="text-[10px] font-black uppercase text-emerald-400 bg-emerald-950/45 border border-emerald-400/30 px-2 py-0.5 rounded-sm font-mono inline-block">
+            ★ SYSTEM CHRONOLOGICAL LEDGER
+          </span>
+          <h3 className="text-base font-black text-white uppercase tracking-tight font-mono">
+            Student Payment History & Audits
+          </h3>
+          <p className="text-xs text-neutral-400 max-w-2xl leading-relaxed font-sans font-bold">
+            Select a student from the active list to access their chronological log of all fees paid. Each entry details the transaction date, exact collection time, logged amount, and the registrar staff member who recorded it.
+          </p>
+        </div>
+        <div className="bg-emerald-950/40 p-3.5 border border-emerald-800/40 flex items-center gap-3.5 shrink-0 select-none">
+          <div className="bg-emerald-400 text-neutral-950 font-black p-2 rounded-xs font-mono">
+            <Receipt size={18} />
+          </div>
+          <div>
+            <span className="text-[9px] text-neutral-500 font-black uppercase tracking-widest block font-mono">Ledger Database</span>
+            <div className="text-sm font-black text-white font-mono mt-0.5">
+              {payments ? payments.filter(p => !p.isAbsent).length : 0} Receipts Filed
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start font-sans">
+        {/* Left Side: Student Selection Column (span 4) */}
+        <div className="lg:col-span-4 space-y-4 no-print">
+          <div className="bg-neutral-900 border-2 border-neutral-800 p-4 space-y-3">
+            <h4 className="text-[10px] font-black uppercase tracking-wider text-amber-400 font-mono">
+              ★ Pupil Selector ({filteredHistoryStudents.length} match)
+            </h4>
+
+            {/* Selector Search Input */}
+            <div className="relative">
+              <Search size={13} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-500" />
+              <input
+                type="text"
+                placeholder="Search pupil by name or ID..."
+                value={historySearchQuery}
+                onChange={(e) => setHistorySearchQuery(e.target.value)}
+                className="w-full bg-neutral-950 border-2 border-neutral-850 pl-9 pr-4 py-2 text-xs text-white font-mono outline-none focus:border-amber-400 placeholder:text-neutral-600 transition-colors"
+              />
+            </div>
+
+            {/* Class Filter Selection */}
+            <div className="flex items-center gap-2">
+              <Filter size={11} className="text-neutral-500 shrink-0" />
+              <select
+                value={historyClassFilter}
+                onChange={(e) => setHistoryClassFilter(e.target.value)}
+                className="w-full bg-neutral-950 border-2 border-neutral-855 px-2.5 py-1.5 text-[10.5px] font-bold text-white outline-none focus:border-amber-400 font-sans transition-colors"
+              >
+                <option value="ALL">All Cohort Classes</option>
+                {studentClasses.map(cls => (
+                  <option key={cls} value={cls}>{cls}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Student list box */}
+          <div className="bg-neutral-900 border-2 border-neutral-800 p-3.5 space-y-2 max-h-[30rem] overflow-y-auto">
+            {filteredHistoryStudents.length === 0 ? (
+              <div className="py-12 text-center text-neutral-500 font-mono text-[10px] uppercase font-black">
+                No matched pupils.
+              </div>
+            ) : (
+              filteredHistoryStudents.map(student => {
+                const isSelected = student.id === historySelectedStudentId;
+                const studentFee = student.termFee || baseTermFee;
+                const legacyDebt = student.legacyDebt || 0;
+                const studentPayments = payments.filter(p => p.studentId === student.id && !p.isAbsent);
+                const totalPaid = studentPayments.reduce((sum, p) => sum + p.amount, 0);
+                const totalTarget = studentFee + legacyDebt;
+                const isSettle = totalPaid >= totalTarget;
+                const pct = Math.min(100, (totalPaid / totalTarget) * 100);
+
+                return (
+                  <button
+                    key={student.id}
+                    onClick={() => setHistorySelectedStudentId(student.id)}
+                    className={`w-full text-left p-3 border-2 transition-all cursor-pointer flex items-center justify-between gap-3 ${
+                      isSelected
+                        ? 'border-amber-400 bg-neutral-950/80 shadow-md'
+                        : 'border-neutral-855 bg-neutral-950/20 hover:bg-neutral-950/50 hover:border-neutral-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      {student.photoUrl ? (
+                        <img 
+                          src={student.photoUrl} 
+                          alt={student.name} 
+                          className="w-8 h-8 rounded-full object-cover border border-neutral-700 bg-neutral-950"
+                          referrerPolicy="no-referrer"
+                        />
+                      ) : (
+                        <div className="w-8 h-8 rounded-full bg-neutral-950 text-neutral-500 font-black text-xs uppercase flex items-center justify-center border border-neutral-800 font-mono shrink-0">
+                          {student.name.slice(0,2).toUpperCase()}
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <h4 className={`text-xs font-black uppercase truncate leading-tight ${isSelected ? 'text-amber-400' : 'text-white'}`}>
+                          {student.name}
+                        </h4>
+                        <span className="text-[9px] text-neutral-500 font-mono font-bold block mt-0.5">
+                          {student.class} • {student.rollNumber || 'SHC-' + student.id.substring(0, 5).toUpperCase()}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <span className={`text-[8.5px] font-mono font-black uppercase px-1.5 py-0.5 border ${
+                        isSettle 
+                          ? 'text-emerald-400 bg-emerald-950/20 border-emerald-500/20' 
+                          : 'text-amber-400 bg-amber-950/20 border-amber-500/20'
+                      }`}>
+                        {pct.toFixed(0)}%
+                      </span>
+                    </div>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        {/* Right Side: Detailed Payment Chronicle Table/Feed (span 8) */}
+        <div className="lg:col-span-8">
+          {historySelectedStudent && historySelectedStudentFinances ? (
+            <div className="space-y-6">
+              {/* Pupil Details header card */}
+              <div className="bg-neutral-900 border-2 border-neutral-800 p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div className="flex items-center gap-4">
+                  {historySelectedStudent.photoUrl ? (
+                    <img 
+                      src={historySelectedStudent.photoUrl} 
+                      alt={historySelectedStudent.name} 
+                      className="w-12 h-12 object-cover border-2 border-neutral-700 bg-neutral-950 rounded-xs shrink-0"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <div className="w-12 h-12 bg-neutral-950 text-neutral-500 font-extrabold text-base uppercase flex items-center justify-center border border-neutral-855 font-mono shrink-0 rounded-xs">
+                      {historySelectedStudent.name.slice(0,2).toUpperCase()}
+                    </div>
+                  )}
+                  <div>
+                    <h3 className="text-base font-black text-white uppercase tracking-tight leading-none">
+                      {historySelectedStudent.name}
+                    </h3>
+                    <p className="text-[11px] text-amber-400 font-mono font-black mt-1.5 uppercase">
+                      ROLL ID: {historySelectedStudent.rollNumber || 'SHC-' + historySelectedStudent.id.substring(0, 5).toUpperCase()}
+                    </p>
+                    <p className="text-[10px] text-neutral-505 font-bold mt-1 uppercase font-sans">
+                      Grade {historySelectedStudent.class} • {historySelectedStudent.category} Group • Guardian: {historySelectedStudent.guardianPhone || 'N/A'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="no-print self-stretch sm:self-auto flex items-center justify-end">
+                  <button
+                    onClick={() => setSelectedStudent(historySelectedStudent)}
+                    className="w-full sm:w-auto bg-neutral-950 hover:bg-neutral-850 text-white hover:text-amber-400 border border-neutral-800 hover:border-amber-400 px-4 py-2 text-xs font-black uppercase tracking-wider font-mono transition-all cursor-pointer rounded-xs flex items-center justify-center gap-1.5 hover:-translate-y-0.5 active:translate-y-0"
+                    title="Open administrative modal to record dynamic installments, receipts, or send notifications"
+                  >
+                    <Receipt size={13} />
+                    <span>Manage & Collect Fees</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Financial Stats Bento Sheet */}
+              <div className="bg-neutral-900 border-2 border-neutral-800 p-5 space-y-4">
+                <span className="text-[10px] font-black uppercase tracking-wide text-neutral-500 block">
+                  ★ Fee Clearance Worksheet Balance Sheet
+                </span>
+
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="bg-neutral-950 border border-neutral-850 p-3">
+                    <span className="text-[8.5px] text-neutral-500 uppercase font-mono block">Baseline Term Quota</span>
+                    <strong className="text-white text-sm font-mono font-black mt-1 block">
+                      GHC {historySelectedStudentFinances.studentFee.toFixed(2)}
+                    </strong>
+                  </div>
+                  <div className="bg-neutral-950 border border-neutral-850 p-3">
+                    <span className="text-[8.5px] text-neutral-500 uppercase font-mono block">Legacy Debt</span>
+                    <strong className="text-neutral-400 text-sm font-mono font-black mt-1 block">
+                      GHC {historySelectedStudentFinances.legacyDebt.toFixed(2)}
+                    </strong>
+                  </div>
+                  <div className="bg-neutral-950 border border-neutral-850 p-3">
+                    <span className="text-[8.5px] text-emerald-400 uppercase font-mono block">Cleared Amount</span>
+                    <strong className="text-emerald-400 text-sm font-mono font-black mt-1 block">
+                      GHC {historySelectedStudentFinances.totalPaid.toFixed(2)}
+                    </strong>
+                  </div>
+                  <div className="bg-neutral-950 border border-neutral-850 p-3">
+                    <span className="text-[8.5px] text-red-400 uppercase font-mono block">Outstanding Arrears</span>
+                    <strong className={`${historySelectedStudentFinances.isCompleted ? 'text-emerald-500' : 'text-red-500'} text-sm font-mono font-black mt-1 block`}>
+                      GHC {historySelectedStudentFinances.balanceDue.toFixed(2)}
+                    </strong>
+                  </div>
+                </div>
+
+                {/* Progress bar */}
+                <div className="bg-neutral-950 p-3 border border-neutral-855">
+                  <div className="flex items-center justify-between text-[9px] text-neutral-400 font-black uppercase mb-1.5 font-mono">
+                    <span>Progress Clearance Ratio</span>
+                    <span className={historySelectedStudentFinances.isCompleted ? 'text-emerald-400' : 'text-amber-400'}>
+                      {historySelectedStudentFinances.percentDone.toFixed(1)}% Settled
+                    </span>
+                  </div>
+                  <div className="w-full bg-neutral-900 h-2 rounded-full overflow-hidden border border-neutral-800">
+                    <div 
+                      className={`h-full ${historySelectedStudentFinances.isCompleted ? 'bg-emerald-500' : 'bg-amber-400'}`} 
+                      style={{ width: `${historySelectedStudentFinances.percentDone}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Chronological Payment Logs feed/table */}
+              <div className="bg-neutral-900 border-2 border-neutral-800 p-5 space-y-4" id="print-friendly-area">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-neutral-800 pb-3">
+                  <h4 className="text-[10px] font-black uppercase tracking-wider text-white font-mono flex items-center gap-1.5 font-bold">
+                    🧾 CHRONOLOGICAL RECORD OF FEES PAID ({historySelectedStudentFinances.sortedPayments.length} transactions)
+                  </h4>
+
+                  <div className="no-print flex items-center gap-2">
+                    {/* Sort Order Switcher */}
+                    <button
+                      onClick={() => setHistorySortOrder(order => order === 'asc' ? 'desc' : 'asc')}
+                      className="bg-neutral-950 hover:bg-neutral-850 text-neutral-400 hover:text-white border border-neutral-800 px-2.5 py-1.5 text-[9px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded-xs flex items-center gap-1"
+                      title="Toggle between ascending (oldest first) and descending (newest first) chronological order"
+                    >
+                      <ArrowUpDown size={11} />
+                      <span>Order: {historySortOrder === 'asc' ? 'Oldest First' : 'Newest First'}</span>
+                    </button>
+
+                    {/* Print chronicle Button */}
+                    <button
+                      onClick={() => {
+                        window.print();
+                      }}
+                      className="bg-neutral-950 hover:bg-neutral-850 text-emerald-400 hover:text-emerald-300 border border-neutral-800 px-2.5 py-1.5 text-[9px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded-xs flex items-center gap-1"
+                      title="Trigger browser print window to print or export this chronological receipt ledger as a beautiful PDF"
+                    >
+                      <Printer size={11} />
+                      <span>Print Chronicle</span>
+                    </button>
+                  </div>
+                </div>
+
+                {historySelectedStudentFinances.sortedPayments.length === 0 ? (
+                  <div className="p-12 text-center text-neutral-500 bg-neutral-950 border border-neutral-850 animate-fadeIn">
+                    <AlertCircle size={24} className="mx-auto text-neutral-600 mb-2" />
+                    <p className="text-[11px] font-black uppercase tracking-wide text-neutral-400 font-mono">
+                      No collections recorded in database
+                    </p>
+                    <p className="text-[9.5px] text-neutral-500 mt-1 max-w-sm mx-auto leading-relaxed font-sans font-bold">
+                      This pupil has not paid any term fees installments or gate fees yet. Use the 'Manage & Collect Fees' panel above to record their first payment receipt.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto select-all">
+                    <table className="w-full text-left border-collapse font-mono text-[11px]">
+                      <thead>
+                        <tr className="border-b border-neutral-800 text-neutral-500 text-[9px] uppercase tracking-wider">
+                          <th className="py-3 px-3 font-bold">#</th>
+                          <th className="py-3 px-3 font-bold">Cleared Date</th>
+                          <th className="py-3 px-3 font-bold">Logged Time</th>
+                          <th className="py-3 px-3 text-right font-bold">Cleared Amount</th>
+                          <th className="py-3 px-3 font-bold">Recorded By (Staff)</th>
+                          <th className="py-3 px-3 font-bold">Transaction Reference</th>
+                          <th className="py-3 px-3 font-bold">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-neutral-850/50">
+                        {historySelectedStudentFinances.sortedPayments.map((p, idx) => {
+                          const serial = historySortOrder === 'asc' ? idx + 1 : historySelectedStudentFinances.sortedPayments.length - idx;
+                          return (
+                            <tr key={p.id} className="hover:bg-neutral-950/40 transition-colors">
+                              <td className="py-3 px-3 text-neutral-500 font-bold">
+                                {serial}
+                              </td>
+                              <td className="py-3 px-3 font-bold text-white">
+                                {p.date}
+                              </td>
+                              <td className="py-3 px-3 text-neutral-400">
+                                {new Date(p.timestamp || p.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                              </td>
+                              <td className="py-3 px-3 text-right font-black text-emerald-400">
+                                GHC {p.amount.toFixed(2)}
+                              </td>
+                              <td className="py-3 px-3 text-neutral-300 font-sans font-bold">
+                                {p.collectedBy || 'Administrator'}
+                              </td>
+                              <td className="py-3 px-3 text-[9.5px] text-neutral-550">
+                                REF-{p.id.substring(0, 8).toUpperCase()}
+                              </td>
+                              <td className="py-3 px-3">
+                                <span className="text-[8.5px] bg-emerald-950/40 border border-emerald-500/20 text-emerald-400 px-1.5 py-0.5 font-bold uppercase rounded-xs">
+                                  VERIFIED
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            /* Empty State: Pick a pupil onboarding card */
+            <div className="bg-neutral-900 border-4 border-neutral-850 p-12 text-center text-neutral-400 space-y-5 flex flex-col items-center justify-center min-h-[30rem] animate-fadeIn">
+              <div className="h-16 w-16 rounded-full bg-neutral-950 border border-neutral-800 flex items-center justify-center text-amber-400">
+                <Receipt size={28} className="stroke-[1.5]" />
+              </div>
+              <div className="space-y-2">
+                <h3 className="text-base font-black text-white uppercase tracking-wider font-mono">
+                  ★ No Pupil Selected
+                </h3>
+                <p className="text-xs text-neutral-500 max-w-sm leading-relaxed font-sans font-bold">
+                  Select a student from the active roster on the left side to examine their complete chronological payments log, audit collection records, and print ledger reports.
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   ) : (
     /* Pending Payments / Daily Registrations Alert view */
     <div className="space-y-6 animate-fadeIn" id="pending-registrations-container">
@@ -805,7 +1389,7 @@ export const TermPayersTab: React.FC = () => {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {pendingPaymentsStudents.map(({ student, consecutiveDays, unpaidDates }) => {
-            const termFee = student.termFee || 350;
+            const termFee = student.termFee || baseTermFee;
             const legacyDebt = student.legacyDebt || 0;
             const totalExpected = termFee + legacyDebt;
             const studentPayments = payments.filter(p => p.studentId === student.id && !p.isAbsent);
@@ -1281,6 +1865,12 @@ export const TermPayersTab: React.FC = () => {
                     <span className="text-neutral-500 uppercase font-black uppercase">Guardian SMS Contact:</span>
                     <strong className="text-white font-mono">{selectedStudent.guardianPhone || 'NOT CONFIGURED'}</strong>
                   </div>
+                  <div className="flex justify-between text-xs border-t border-neutral-900 pt-2 mt-1">
+                    <span className="text-neutral-500 uppercase font-black uppercase">Term Attendance:</span>
+                    <strong className="text-amber-400 font-mono">
+                      {selectedStudentFinances.presentDaysTerm} / {selectedStudentFinances.schoolDaysNoHolidaysCount} Days Present
+                    </strong>
+                  </div>
                 </div>
 
                 {/* Quick Payment Collection Form */}
@@ -1460,6 +2050,456 @@ export const TermPayersTab: React.FC = () => {
           </div>
         )}
       </AnimatePresence>
+
+      {/* Debt Report Modal Backdrop */}
+      <AnimatePresence>
+        {showDebtReportModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowDebtReportModal(false)}
+              className="absolute inset-0 bg-neutral-950/80 backdrop-blur-xs"
+              id="debt-report-modal-backdrop"
+            />
+
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 15 }}
+              className="bg-neutral-900 border-4 border-neutral-800 w-full max-w-5xl p-6 md:p-8 rounded shadow-2xl relative z-10 overflow-y-auto max-h-[90vh] flex flex-col gap-6"
+              id="debt-report-panel"
+            >
+              {/* Close Button top-right */}
+              <button
+                onClick={() => setShowDebtReportModal(false)}
+                className="absolute top-4 right-4 bg-neutral-950 text-neutral-400 hover:text-white hover:border-amber-400 p-2 border border-neutral-800 transition-colors cursor-pointer"
+                title="Close modal"
+              >
+                <X size={16} />
+              </button>
+
+              {/* Header */}
+              <div className="flex items-center gap-3 border-b-2 border-neutral-800 pb-4">
+                <FileText size={22} className="text-amber-400" />
+                <div>
+                  <h3 className="text-base font-black uppercase tracking-widest text-white font-mono">
+                    Legacy Debt Audit Report
+                  </h3>
+                  <p className="text-[11px] text-neutral-400 font-bold mt-0.5">
+                    Dynamically compiled list of all active pupils currently carrying a pre-adoption outstanding legacy debt.
+                  </p>
+                </div>
+              </div>
+
+              {/* Printable Area Wrapper */}
+              <div className="flex-1 overflow-y-auto pr-1">
+                <div className="print-report-container p-6 bg-neutral-950 border border-neutral-800 rounded text-left" id="printable-debt-report-content">
+                  {/* Print custom styles inside printable container */}
+                  <style>{`
+                    @media print {
+                      body * {
+                        visibility: hidden !important;
+                      }
+                      #printable-debt-report-content, #printable-debt-report-content * {
+                        visibility: visible !important;
+                      }
+                      #printable-debt-report-content {
+                        position: absolute;
+                        left: 0;
+                        top: 0;
+                        width: 100% !important;
+                        background: #ffffff !important;
+                        color: #000000 !important;
+                        border: none !important;
+                        padding: 0 !important;
+                        margin: 0 !important;
+                      }
+                      .print\\:no-print {
+                        display: none !important;
+                      }
+                      .print\\:text-black {
+                        color: #000000 !important;
+                      }
+                      .print\\:border-black {
+                        border-color: #000000 !important;
+                      }
+                      .print\\:bg-white {
+                        background-color: #ffffff !important;
+                      }
+                    }
+                  `}</style>
+
+                  {/* Document Header for Printing */}
+                  <div className="mb-6 border-b-2 border-dashed border-neutral-800 pb-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 print:border-black">
+                    <div>
+                      <h1 className="text-lg font-black text-white uppercase tracking-wider font-mono print:text-black">
+                        SAAKO HOLY CHILD ACADEMY
+                      </h1>
+                      <p className="text-[10px] text-neutral-400 font-bold uppercase tracking-tight print:text-black mt-0.5">
+                        Academic Administration & Financial Ledger Registry
+                      </p>
+                      <p className="text-[9px] text-amber-400 font-mono font-black uppercase mt-1 print:text-black">
+                        Report type: Active Pupils Legacy Debt Registry
+                      </p>
+                    </div>
+                    <div className="text-left md:text-right font-mono text-[10px] text-neutral-400 print:text-black">
+                      <div>Generated Date: <span className="text-white font-extrabold print:text-black">{currentDate}</span></div>
+                      <div>Term Period: <span className="text-white font-extrabold print:text-black">{activeTerm?.name || 'Active Term'}</span></div>
+                      <div>System Status: <span className="text-emerald-400 font-black uppercase print:text-black">Certified Ledger</span></div>
+                    </div>
+                  </div>
+
+                  {/* Bento Stats Row in Report */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6 print:border-black print:text-black">
+                    <div className="bg-neutral-900/60 p-4 border border-neutral-800 print:bg-white print:border-black">
+                      <span className="text-[8px] text-neutral-500 uppercase font-black tracking-widest block font-sans print:text-black">Debtors Count</span>
+                      <strong className="text-base text-white font-mono font-black mt-1 block print:text-black">
+                        {legacyDebtStudents.length} Active Pupils
+                      </strong>
+                    </div>
+                    <div className="bg-neutral-900/60 p-4 border border-neutral-800 print:bg-white print:border-black">
+                      <span className="text-[8px] text-red-400 uppercase font-black tracking-widest block font-sans print:text-black">Cumulative Arrears Sum</span>
+                      <strong className="text-base text-red-400 font-mono font-black mt-1 block print:text-black">
+                        GHC {legacyDebtStudents.reduce((sum, item) => sum + item.legacyDebt, 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </strong>
+                    </div>
+                    <div className="bg-neutral-900/60 p-4 border border-neutral-800 print:bg-white print:border-black">
+                      <span className="text-[8px] text-emerald-400 uppercase font-black tracking-widest block font-sans print:text-black">Remaining Balance Sum</span>
+                      <strong className="text-base text-emerald-400 font-mono font-black mt-1 block print:text-black">
+                        GHC {legacyDebtStudents.reduce((sum, item) => sum + item.balanceDue, 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </strong>
+                    </div>
+                  </div>
+
+                  {/* Main Debtors Table */}
+                  {legacyDebtStudents.length === 0 ? (
+                    <div className="p-12 text-center text-neutral-500 bg-neutral-900/40 border border-neutral-800 rounded print:text-black print:bg-white print:border-black">
+                      <AlertCircle size={24} className="mx-auto text-neutral-600 mb-2 print:text-black" />
+                      <p className="text-xs font-black uppercase text-neutral-300 font-mono print:text-black">
+                        No active pupil files carry legacy debt
+                      </p>
+                      <p className="text-[10px] text-neutral-500 mt-1 print:text-black">
+                        Congratulations! All pupils are currently free from pre-adoption outstanding legacy balances.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="border border-neutral-800 overflow-x-auto print:border-black print:text-black">
+                      <table className="w-full text-left font-mono text-[11px] border-collapse">
+                        <thead>
+                          <tr className="bg-neutral-900 border-b border-neutral-800 uppercase tracking-widest text-[9px] text-neutral-400 font-black print:bg-white print:border-black print:text-black">
+                            <th className="px-4 py-3 border-r border-neutral-800 print:border-black">Roll ID</th>
+                            <th className="px-4 py-3 border-r border-neutral-800 print:border-black">Pupil Name</th>
+                            <th className="px-4 py-3 border-r border-neutral-800 print:border-black text-center">Class</th>
+                            <th className="px-4 py-3 border-r border-neutral-800 print:border-black">Guardian Phone</th>
+                            <th className="px-4 py-3 border-r border-neutral-800 print:border-black text-right">Term Fee</th>
+                            <th className="px-4 py-3 border-r border-neutral-800 print:border-black text-right">Legacy Debt</th>
+                            <th className="px-4 py-3 border-r border-neutral-800 print:border-black text-right">Paid To Date</th>
+                            <th className="px-4 py-3 text-right">Balance Due</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {legacyDebtStudents.map((item, index) => {
+                            const s = item.student;
+                            const rollId = s.rollNumber || 'SHC-' + s.id.substring(0, 5).toUpperCase();
+                            return (
+                              <tr 
+                                key={s.id}
+                                className={`border-b border-neutral-850 hover:bg-neutral-900/30 transition-colors print:border-black print:bg-white print:text-black ${
+                                  index % 2 === 1 ? 'bg-neutral-950/40 print:bg-neutral-100/20' : ''
+                                }`}
+                              >
+                                <td className="px-4 py-2.5 font-bold border-r border-neutral-855 print:border-black">{rollId}</td>
+                                <td className="px-4 py-2.5 font-sans font-bold text-white print:text-black border-r border-neutral-855 print:border-black">{s.name}</td>
+                                <td className="px-4 py-2.5 text-center font-bold border-r border-neutral-855 print:border-black">{s.class}</td>
+                                <td className="px-4 py-2.5 border-r border-neutral-855 print:border-black">
+                                  {s.guardianPhone ? (
+                                    <span className="text-neutral-300 print:text-black font-semibold">{s.guardianPhone}</span>
+                                  ) : (
+                                    <span className="text-neutral-600 print:text-black font-extrabold italic uppercase tracking-wider text-[9px]">No Contact</span>
+                                  )}
+                                </td>
+                                <td className="px-4 py-2.5 text-right border-r border-neutral-855 print:border-black text-neutral-400 print:text-black">GHC {item.studentFee.toFixed(2)}</td>
+                                <td className="px-4 py-2.5 text-right font-black border-r border-neutral-855 print:border-black text-red-400 print:text-black">GHC {item.legacyDebt.toFixed(2)}</td>
+                                <td className="px-4 py-2.5 text-right border-r border-neutral-855 print:border-black text-emerald-400 print:text-black">GHC {item.totalPaid.toFixed(2)}</td>
+                                <td className={`px-4 py-2.5 text-right font-black ${item.balanceDue > 0 ? 'text-red-500' : 'text-emerald-500'} print:text-black`}>GHC {item.balanceDue.toFixed(2)}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* Signatures block for printing */}
+                  <div className="mt-12 hidden print:flex justify-between items-center text-[10px] font-mono border-t border-neutral-300 pt-8 print:text-black print:border-black">
+                    <div>
+                      <div className="border-b border-black w-48 mb-1.5" />
+                      <p className="font-bold text-neutral-600">Issued By: Yakubu Hakeem</p>
+                      <p className="text-[8.5px] text-neutral-400 mt-0.5">Accountant & Administrator</p>
+                    </div>
+                    <div className="text-right">
+                      <div className="border-b border-black w-48 mb-1.5 ml-auto" />
+                      <p className="font-bold text-neutral-600">Approved Stamp / Date</p>
+                      <p className="text-[8.5px] text-neutral-400 mt-0.5">Saako Holy Child Academy Registry</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Footer Buttons */}
+              <div className="border-t border-neutral-800 pt-5 flex flex-wrap gap-3.5 justify-end">
+                <button
+                  type="button"
+                  onClick={downloadDebtCsvReport}
+                  className="bg-neutral-950 hover:bg-neutral-850 text-white hover:text-amber-400 border border-neutral-800 hover:border-amber-400 px-5 py-3 text-xs font-black uppercase tracking-wider transition-all cursor-pointer rounded-xs flex items-center gap-2"
+                >
+                  <Download size={14} />
+                  <span>Download CSV</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="bg-amber-500 hover:bg-amber-400 text-neutral-950 font-black px-5 py-3 text-xs font-mono uppercase tracking-wider transition-all cursor-pointer rounded-xs flex items-center gap-2 border-b-2 border-amber-700"
+                >
+                  <Printer size={14} />
+                  <span>Print Report / Save PDF</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowDebtReportModal(false)}
+                  className="bg-neutral-950 text-neutral-400 hover:text-white border border-neutral-800 py-3 px-6 font-mono text-xs font-black uppercase tracking-wider transition-all cursor-pointer"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {whatsAppReminderModal && (
+        <div id="whats-app-reminder-modal" className="fixed inset-0 z-50 bg-neutral-950/90 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto no-print">
+          <div className="bg-neutral-900 border-4 border-amber-400 p-6 max-w-lg w-full rounded-none space-y-4 shadow-[8px_8px_0px_0px_rgba(0,0,0,0.55)] relative text-white">
+            <button
+              onClick={() => {
+                setWhatsAppReminderModal(null);
+                setCustomWAContact('');
+                setSelectedStaffPhone('');
+              }}
+              className="absolute top-4 right-4 text-neutral-400 hover:text-white font-mono text-xs p-1 cursor-pointer font-black border border-neutral-800 hover:border-red-500 hover:text-red-500 px-1.5 py-0.5 transition-all"
+            >
+              ✕ CLOSE
+            </button>
+
+            <div className="space-y-1">
+              <span className="text-[9px] font-mono font-black uppercase tracking-widest text-amber-400">WhatsApp Reminder Dispatch</span>
+              <h3 className="text-base font-black uppercase tracking-tight font-mono text-white">
+                Remind: {whatsAppReminderModal.student.name}
+              </h3>
+            </div>
+
+            {/* Message Preview */}
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-mono font-black uppercase tracking-wider text-neutral-400 block">Message Preview (Auto-generated)</label>
+              <textarea
+                readOnly
+                value={whatsAppReminderModal.messageText}
+                className="w-full h-28 bg-neutral-950 border border-neutral-800 p-3 text-[10.5px] font-mono rounded-none text-neutral-350 resize-none select-all focus:outline-none"
+              />
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(whatsAppReminderModal.messageText);
+                  showToast("Message text copied to clipboard!");
+                }}
+                className="w-full bg-neutral-950 hover:bg-neutral-850 text-neutral-400 hover:text-amber-400 border border-neutral-800 py-1.5 text-[9px] font-mono font-black uppercase tracking-wider transition-all rounded-xs cursor-pointer"
+              >
+                📋 Copy Text to Clipboard
+              </button>
+            </div>
+
+            <div className="border-t border-neutral-850 my-2 pt-2 space-y-3">
+              <span className="text-[10px] font-mono font-black uppercase tracking-wider text-amber-400 block">Choose WhatsApp Contact Option:</span>
+
+              {/* Option 1: Open WhatsApp Contact Picker */}
+              <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-emerald-500/40 transition-all rounded-xs space-y-2">
+                <div>
+                  <h4 className="text-xs font-black uppercase font-mono text-emerald-400">1. WhatsApp Contact Picker (Universal Share)</h4>
+                  <p className="text-[9.5px] text-neutral-400 font-bold leading-tight">
+                    Launches WhatsApp so you can search and choose ANY contact or group directly from your WhatsApp chats.
+                  </p>
+                </div>
+                <button
+                  onClick={async () => {
+                    const urlText = encodeURIComponent(whatsAppReminderModal.messageText);
+                    const waUrl = `https://api.whatsapp.com/send?text=${urlText}`;
+                    if (typeof window !== 'undefined') {
+                      window.open(waUrl, '_blank', 'noopener,noreferrer');
+                      showToast("WhatsApp Contact Picker opened!");
+                    }
+                    // Trigger background logging
+                    try {
+                      await sendautomatedWhatsApp(
+                        'Universal Share Picker',
+                        whatsAppReminderModal.messageText,
+                        whatsAppReminderModal.student.id,
+                        whatsAppReminderModal.student.name,
+                        'term-single-outstanding'
+                      );
+                    } catch (e) {}
+                    setWhatsAppReminderModal(null);
+                    setCustomWAContact('');
+                    setSelectedStaffPhone('');
+                  }}
+                  className="w-full bg-emerald-950 hover:bg-emerald-900 text-emerald-400 hover:text-emerald-300 border border-emerald-800 py-2 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded-xs flex items-center justify-center gap-1.5"
+                >
+                  <MessageSquare size={12} />
+                  <span>Choose Contact & Send on WhatsApp</span>
+                </button>
+              </div>
+
+              {/* Option 2: Send to Guardian */}
+              {whatsAppReminderModal.defaultPhone && (
+                <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
+                  <div>
+                    <h4 className="text-xs font-black uppercase font-mono text-white">2. Registered Parent/Guardian</h4>
+                    <p className="text-[9.5px] text-neutral-400 font-bold leading-tight">
+                      Registered Number: <span className="text-amber-400 font-black">{whatsAppReminderModal.defaultPhone}</span>
+                    </p>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      let targetPhone = whatsAppReminderModal.defaultPhone.replace(/\D/g, "");
+                      if (targetPhone.startsWith("0") && targetPhone.length === 10) {
+                        targetPhone = "233" + targetPhone.substring(1);
+                      }
+                      const urlText = encodeURIComponent(whatsAppReminderModal.messageText);
+                      const waUrl = `https://api.whatsapp.com/send?phone=${targetPhone}&text=${urlText}`;
+                      if (typeof window !== 'undefined') {
+                        window.open(waUrl, '_blank', 'noopener,noreferrer');
+                        showToast(`WhatsApp opened with Guardian (${whatsAppReminderModal.defaultPhone})!`);
+                      }
+                      // Trigger background logging
+                      try {
+                        await sendautomatedWhatsApp(
+                          whatsAppReminderModal.defaultPhone,
+                          whatsAppReminderModal.messageText,
+                          whatsAppReminderModal.student.id,
+                          whatsAppReminderModal.student.name,
+                          'term-single-outstanding'
+                        );
+                      } catch (e) {}
+                      setWhatsAppReminderModal(null);
+                      setCustomWAContact('');
+                      setSelectedStaffPhone('');
+                    }}
+                    className="w-full bg-neutral-950 hover:bg-neutral-850 text-white hover:text-amber-400 border border-neutral-800 py-2 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded-xs"
+                  >
+                    💬 Send directly to Guardian ({whatsAppReminderModal.defaultPhone})
+                  </button>
+                </div>
+              )}
+
+              {/* Option 3: Send to school staff/teacher */}
+              {users && users.length > 0 && (
+                <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
+                  <h4 className="text-xs font-black uppercase font-mono text-white">3. School Staff / Class Teacher</h4>
+                  <div className="flex gap-2">
+                    <select
+                      value={selectedStaffPhone}
+                      onChange={(e) => setSelectedStaffPhone(e.target.value)}
+                      className="bg-neutral-950 border border-neutral-800 rounded-xs text-[10px] font-mono font-bold text-white px-2 py-1.5 flex-1 focus:outline-none focus:border-amber-400"
+                    >
+                      <option value="">-- SELECT STAFF MEMBER --</option>
+                      {users.map(u => (
+                        u.phone ? <option key={u.id} value={u.phone}>{u.name} ({u.role || 'Staff'}) - {u.phone}</option> : null
+                      ))}
+                    </select>
+                    <button
+                      disabled={!selectedStaffPhone}
+                      onClick={async () => {
+                        let targetPhone = selectedStaffPhone.replace(/\D/g, "");
+                        if (targetPhone.startsWith("0") && targetPhone.length === 10) {
+                          targetPhone = "233" + targetPhone.substring(1);
+                        }
+                        const urlText = encodeURIComponent(whatsAppReminderModal.messageText);
+                        const waUrl = `https://api.whatsapp.com/send?phone=${targetPhone}&text=${urlText}`;
+                        if (typeof window !== 'undefined') {
+                          window.open(waUrl, '_blank', 'noopener,noreferrer');
+                          showToast(`WhatsApp opened with Staff member!`);
+                        }
+                        // Trigger background logging
+                        try {
+                          await sendautomatedWhatsApp(
+                            selectedStaffPhone,
+                            whatsAppReminderModal.messageText,
+                            whatsAppReminderModal.student.id,
+                            whatsAppReminderModal.student.name,
+                            'term-single-outstanding'
+                          );
+                        } catch (e) {}
+                        setWhatsAppReminderModal(null);
+                        setCustomWAContact('');
+                        setSelectedStaffPhone('');
+                      }}
+                      className="bg-amber-400 hover:bg-amber-500 disabled:opacity-40 disabled:hover:bg-amber-400 text-black px-4 py-1.5 text-[10px] font-mono font-black uppercase rounded-xs cursor-pointer"
+                    >
+                      Send
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Option 4: Custom Number */}
+              <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
+                <h4 className="text-xs font-black uppercase font-mono text-white">4. Type Custom Phone Number</h4>
+                <div className="flex gap-2">
+                  <input
+                    type="tel"
+                    value={customWAContact}
+                    onChange={(e) => setCustomWAContact(e.target.value)}
+                    placeholder="e.g. 0244000000"
+                    className="bg-neutral-950 border border-neutral-800 rounded-xs text-[10px] font-mono font-bold text-white px-2 py-1.5 flex-1 focus:outline-none focus:border-amber-400"
+                  />
+                  <button
+                    disabled={!customWAContact.trim()}
+                    onClick={async () => {
+                      let targetPhone = customWAContact.replace(/\D/g, "");
+                      if (targetPhone.startsWith("0") && targetPhone.length === 10) {
+                        targetPhone = "233" + targetPhone.substring(1);
+                      }
+                      const urlText = encodeURIComponent(whatsAppReminderModal.messageText);
+                      const waUrl = `https://api.whatsapp.com/send?phone=${targetPhone}&text=${urlText}`;
+                      if (typeof window !== 'undefined') {
+                        window.open(waUrl, '_blank', 'noopener,noreferrer');
+                        showToast(`WhatsApp opened with custom recipient!`);
+                      }
+                      // Trigger background logging
+                      try {
+                        await sendautomatedWhatsApp(
+                          customWAContact,
+                          whatsAppReminderModal.messageText,
+                          whatsAppReminderModal.student.id,
+                          whatsAppReminderModal.student.name,
+                          'term-single-outstanding'
+                        );
+                      } catch (e) {}
+                      setWhatsAppReminderModal(null);
+                      setCustomWAContact('');
+                      setSelectedStaffPhone('');
+                    }}
+                    className="bg-amber-400 hover:bg-amber-500 disabled:opacity-40 disabled:hover:bg-amber-400 text-black px-4 py-1.5 text-[10px] font-mono font-black uppercase rounded-xs cursor-pointer"
+                  >
+                    Send
+                  </button>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
-};
+});

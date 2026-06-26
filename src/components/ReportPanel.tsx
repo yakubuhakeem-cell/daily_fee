@@ -15,7 +15,7 @@ import {
 import { SchoolLogo } from './SchoolLogo';
 import { VoiceSearchButton } from './VoiceSearchButton';
 
-export const ReportPanel: React.FC = () => {
+export const ReportPanel: React.FC = React.memo(() => {
   const { 
     payments, 
     students,
@@ -259,7 +259,8 @@ export const ReportPanel: React.FC = () => {
         totalDue = Math.max(0, totalCharged - totalPaid);
       } else {
         totalPaid = studentPayments.filter(p => !p.isAbsent && (includeUnverified || p.verified)).reduce((sum, p) => sum + p.amount, 0);
-        totalDue = (unpaidCount * 5) + (student.legacyDebt || 0);
+        const dailyRate = Math.max(0, 5 - (student.discount || 0));
+        totalDue = (unpaidCount * dailyRate) + (student.legacyDebt || 0);
         totalCharged = totalPaid + totalDue;
       }
 
@@ -655,7 +656,13 @@ export const ReportPanel: React.FC = () => {
     const missingStudents = activeStudents.filter(s => !paidMap.has(s.id));
 
     const collectedGhc = paidPayments.reduce((sum, p) => sum + p.amount, 0);
-    const expectedGhc = activeStudents.length * 5;
+    const expectedGhc = activeStudents.reduce((sum, s) => {
+      if (s.paymentType === 'Term') {
+        return sum; // Term payers do not contribute to daily expected collections
+      }
+      const discount = s.discount || 0;
+      return sum + Math.max(0, 5 - discount);
+    }, 0);
 
     return {
       isSchoolDay: true,
@@ -2374,7 +2381,8 @@ B7 to B9: GHC [SUM]`}
                         .reduce((sum, p) => sum + p.amount, 0);
                       totalDebt = Math.max(0, tFee + legacyD - totalPaidAllTime);
                     } else {
-                      totalDebt = (unpaidDaysCount * 5) + (sProfile.legacyDebt || 0);
+                      const dailyRate = Math.max(0, 5 - (sProfile.discount || 0));
+                      totalDebt = (unpaidDaysCount * dailyRate) + (sProfile.legacyDebt || 0);
                     }
                   }
 
@@ -3305,10 +3313,41 @@ B7 to B9: GHC [SUM]`}
                     </text>
                     {/* Beautiful Coiled Python */}
                     <g transform="translate(42, 42) scale(0.16)" stroke="#14532d" strokeWidth="3.5" fill="none" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55 C 88 75, 70 85, 50 85 C 30 85, 20 70, 25 55 C 30 40, 45 40, 50 45 C 55 50, 52 65, 45 65 C 38 65, 38 52, 44 48" strokeWidth="6" />
-                      <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55" stroke="#f0fdf4" strokeWidth="1.5" />
-                      <circle cx="44" cy="48" r="4.5" fill="#14532d" stroke="none" />
-                      <circle cx="43" cy="47" r="1" fill="#f0fdf4" stroke="none" />
+                      {/* Main deep forest green coiled body */}
+                      <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55 C 88 75, 70 85, 50 85 C 30 85, 20 70, 25 55 C 30 40, 45 40, 50 45 C 55 50, 52 65, 45 65 C 38 65, 38 52, 44 48" strokeWidth="6.5" stroke="#14532d" />
+                      
+                      {/* Elegant light emerald-green dorsal spot patterns */}
+                      <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55 C 88 75, 70 85, 50 85 C 30 85, 20 70, 25 55 C 30 40, 45 40, 50 45 C 55 50, 52 65, 45 65 C 38 65, 38 52, 44 48" stroke="#86efac" strokeWidth="1.5" strokeDasharray="3 5" />
+
+                      {/* Accent highlight outline for 3D depth */}
+                      <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55" stroke="#f0fdf4" strokeWidth="1.2" opacity="0.65" />
+
+                      {/* Adorable little golden crown for the champion python */}
+                      <path d="M 40 41.5 L 38.5 38 L 42 39.5 L 44 36 L 46 39.5 L 49.5 38 L 48 41.5 Z" fill="#fbbf24" stroke="#14532d" strokeWidth="0.8" strokeLinejoin="miter" />
+
+                      {/* Cute chibified head */}
+                      <circle cx="44" cy="47" r="6" fill="#14532d" stroke="none" />
+                      
+                      {/* Generous sweet rosy blush cheeks */}
+                      <circle cx="38" cy="48.5" r="1.3" fill="#f43f5e" opacity="0.8" stroke="none" />
+                      <circle cx="50" cy="48.5" r="1.3" fill="#f43f5e" opacity="0.8" stroke="none" />
+
+                      {/* Happy sparkling big anime eyes */}
+                      <circle cx="41.5" cy="45.5" r="1.8" fill="white" stroke="none" />
+                      <circle cx="46.5" cy="45.5" r="1.8" fill="white" stroke="none" />
+                      <circle cx="41.5" cy="45.5" r="1" fill="#14532d" stroke="none" />
+                      <circle cx="46.5" cy="45.5" r="1" fill="#14532d" stroke="none" />
+                      <circle cx="41" cy="44.8" r="0.45" fill="white" stroke="none" />
+                      <circle cx="46" cy="44.8" r="0.45" fill="white" stroke="none" />
+
+                      {/* Sweet cheerful smile */}
+                      <path d="M 41.5 49 Q 44 51.5, 46.5 49" stroke="#f0fdf4" strokeWidth="0.8" strokeLinecap="round" fill="none" />
+
+                      {/* Delightful small pink tongue */}
+                      <path d="M 43.5 50.2 Q 43.5 52.5, 44.2 52.5" stroke="#f43f5e" strokeWidth="0.8" strokeLinecap="round" fill="none" />
+
+                      {/* Floating romantic pink heart */}
+                      <path d="M 55 36 C 54 34, 52 34, 52 36 C 52 38, 55 40, 55 40 C 55 40, 58 38, 58 36 C 58 34, 56 34, 55 36 Z" fill="#ec4899" opacity="0.95" stroke="none" />
                     </g>
                   </svg>
                   <span className="text-[7px] font-mono text-emerald-800 uppercase tracking-widest mt-1 block font-bold">OFFICIAL IMPRESS</span>
@@ -3715,10 +3754,41 @@ B7 to B9: GHC [SUM]`}
                       </text>
                       {/* Beautiful Coiled Python */}
                       <g transform="translate(42, 42) scale(0.16)" stroke="#14532d" strokeWidth="3.5" fill="none" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55 C 88 75, 70 85, 50 85 C 30 85, 20 70, 25 55 C 30 40, 45 40, 50 45 C 55 50, 52 65, 45 65 C 38 65, 38 52, 44 48" strokeWidth="6" />
-                        <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55" stroke="#f0fdf4" strokeWidth="1.5" />
-                        <circle cx="44" cy="48" r="4.5" fill="#14532d" stroke="none" />
-                        <circle cx="43" cy="47" r="1" fill="#f0fdf4" stroke="none" />
+                        {/* Main deep forest green coiled body */}
+                        <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55 C 88 75, 70 85, 50 85 C 30 85, 20 70, 25 55 C 30 40, 45 40, 50 45 C 55 50, 52 65, 45 65 C 38 65, 38 52, 44 48" strokeWidth="6.5" stroke="#14532d" />
+                        
+                        {/* Elegant light emerald-green dorsal spot patterns */}
+                        <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55 C 88 75, 70 85, 50 85 C 30 85, 20 70, 25 55 C 30 40, 45 40, 50 45 C 55 50, 52 65, 45 65 C 38 65, 38 52, 44 48" stroke="#86efac" strokeWidth="1.5" strokeDasharray="3 5" />
+
+                        {/* Accent highlight outline for 3D depth */}
+                        <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55" stroke="#f0fdf4" strokeWidth="1.2" opacity="0.65" />
+
+                        {/* Adorable little golden crown for the champion python */}
+                        <path d="M 40 41.5 L 38.5 38 L 42 39.5 L 44 36 L 46 39.5 L 49.5 38 L 48 41.5 Z" fill="#fbbf24" stroke="#14532d" strokeWidth="0.8" strokeLinejoin="miter" />
+
+                        {/* Cute chibified head */}
+                        <circle cx="44" cy="47" r="6" fill="#14532d" stroke="none" />
+                        
+                        {/* Generous sweet rosy blush cheeks */}
+                        <circle cx="38" cy="48.5" r="1.3" fill="#f43f5e" opacity="0.8" stroke="none" />
+                        <circle cx="50" cy="48.5" r="1.3" fill="#f43f5e" opacity="0.8" stroke="none" />
+
+                        {/* Happy sparkling big anime eyes */}
+                        <circle cx="41.5" cy="45.5" r="1.8" fill="white" stroke="none" />
+                        <circle cx="46.5" cy="45.5" r="1.8" fill="white" stroke="none" />
+                        <circle cx="41.5" cy="45.5" r="1" fill="#14532d" stroke="none" />
+                        <circle cx="46.5" cy="45.5" r="1" fill="#14532d" stroke="none" />
+                        <circle cx="41" cy="44.8" r="0.45" fill="white" stroke="none" />
+                        <circle cx="46" cy="44.8" r="0.45" fill="white" stroke="none" />
+
+                        {/* Sweet cheerful smile */}
+                        <path d="M 41.5 49 Q 44 51.5, 46.5 49" stroke="#f0fdf4" strokeWidth="0.8" strokeLinecap="round" fill="none" />
+
+                        {/* Delightful small pink tongue */}
+                        <path d="M 43.5 50.2 Q 43.5 52.5, 44.2 52.5" stroke="#f43f5e" strokeWidth="0.8" strokeLinecap="round" fill="none" />
+
+                        {/* Floating romantic pink heart */}
+                        <path d="M 55 36 C 54 34, 52 34, 52 36 C 52 38, 55 40, 55 40 C 55 40, 58 38, 58 36 C 58 34, 56 34, 55 36 Z" fill="#ec4899" opacity="0.95" stroke="none" />
                       </g>
                     </svg>
                     <span className="text-[7px] font-mono text-emerald-800 uppercase tracking-widest mt-1 block font-bold">OFFICIAL IMPRESS</span>
@@ -4172,11 +4242,43 @@ B7 to B9: GHC [SUM]`}
                                   * EXCELLENCE *
                                 </textPath>
                               </text>
+                              {/* Beautiful Coiled Python */}
                               <g transform="translate(42, 42) scale(0.16)" stroke="#14532d" strokeWidth="3.5" fill="none" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55 C 88 75, 70 85, 50 85 C 30 85, 20 70, 25 55 C 30 40, 45 40, 50 45 C 55 50, 52 65, 45 65 C 38 65, 38 52, 44 48" strokeWidth="6" />
-                                <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55" stroke="#f0fdf4" strokeWidth="1.5" />
-                                <circle cx="44" cy="48" r="4.5" fill="#14532d" stroke="none" />
-                                <circle cx="43" cy="47" r="1" fill="#f0fdf4" stroke="none" />
+                                {/* Main deep forest green coiled body */}
+                                <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55 C 88 75, 70 85, 50 85 C 30 85, 20 70, 25 55 C 30 40, 45 40, 50 45 C 55 50, 52 65, 45 65 C 38 65, 38 52, 44 48" strokeWidth="6.5" stroke="#14532d" />
+                                
+                                {/* Elegant light emerald-green dorsal spot patterns */}
+                                <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55 C 88 75, 70 85, 50 85 C 30 85, 20 70, 25 55 C 30 40, 45 40, 50 45 C 55 50, 52 65, 45 65 C 38 65, 38 52, 44 48" stroke="#86efac" strokeWidth="1.5" strokeDasharray="3 5" />
+
+                                {/* Accent highlight outline for 3D depth */}
+                                <path d="M 12 70 C 12 40, 24 15, 50 15 C 76 15, 88 35, 88 55" stroke="#f0fdf4" strokeWidth="1.2" opacity="0.65" />
+
+                                {/* Adorable little golden crown for the champion python */}
+                                <path d="M 40 41.5 L 38.5 38 L 42 39.5 L 44 36 L 46 39.5 L 49.5 38 L 48 41.5 Z" fill="#fbbf24" stroke="#14532d" strokeWidth="0.8" strokeLinejoin="miter" />
+
+                                {/* Cute chibified head */}
+                                <circle cx="44" cy="47" r="6" fill="#14532d" stroke="none" />
+                                
+                                {/* Generous sweet rosy blush cheeks */}
+                                <circle cx="38" cy="48.5" r="1.3" fill="#f43f5e" opacity="0.8" stroke="none" />
+                                <circle cx="50" cy="48.5" r="1.3" fill="#f43f5e" opacity="0.8" stroke="none" />
+
+                                {/* Happy sparkling big anime eyes */}
+                                <circle cx="41.5" cy="45.5" r="1.8" fill="white" stroke="none" />
+                                <circle cx="46.5" cy="45.5" r="1.8" fill="white" stroke="none" />
+                                <circle cx="41.5" cy="45.5" r="1" fill="#14532d" stroke="none" />
+                                <circle cx="46.5" cy="45.5" r="1" fill="#14532d" stroke="none" />
+                                <circle cx="41" cy="44.8" r="0.45" fill="white" stroke="none" />
+                                <circle cx="46" cy="44.8" r="0.45" fill="white" stroke="none" />
+
+                                {/* Sweet cheerful smile */}
+                                <path d="M 41.5 49 Q 44 51.5, 46.5 49" stroke="#f0fdf4" strokeWidth="0.8" strokeLinecap="round" fill="none" />
+
+                                {/* Delightful small pink tongue */}
+                                <path d="M 43.5 50.2 Q 43.5 52.5, 44.2 52.5" stroke="#f43f5e" strokeWidth="0.8" strokeLinecap="round" fill="none" />
+
+                                {/* Floating romantic pink heart */}
+                                <path d="M 55 36 C 54 34, 52 34, 52 36 C 52 38, 55 40, 55 40 C 55 40, 58 38, 58 36 C 58 34, 56 34, 55 36 Z" fill="#ec4899" opacity="0.95" stroke="none" />
                               </g>
                             </svg>
                             <span className="text-[7px] font-mono text-emerald-800 uppercase tracking-widest mt-1 block font-black">OFFICIAL IMPRESS</span>
@@ -4208,4 +4310,4 @@ B7 to B9: GHC [SUM]`}
       )}
     </div>
   );
-};
+});

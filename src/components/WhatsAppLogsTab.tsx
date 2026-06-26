@@ -20,6 +20,11 @@ export function WhatsAppLogsTab() {
   const [statusFilter, setStatusFilter] = useState<'all' | 'delivered' | 'simulated' | 'error'>('all');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [selectedLog, setSelectedLog] = useState<any | null>(null);
+  const [showGuide, setShowGuide] = useState(true);
+
+  // Read current active connection configuration
+  const activeProvider = process.env.WHATSAPP_PROVIDER || 
+    (process.env.WHATSAPP_TWILIO_SID ? 'twilio' : process.env.WHATSAPP_PHONE_NUMBER_ID ? 'meta' : process.env.WHATSAPP_API_URL ? 'ultramsg/custom' : 'simulated');
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -68,22 +73,158 @@ export function WhatsAppLogsTab() {
         </button>
       </div>
 
-      {/* Gateway Alert Config Box */}
-      <div className="bg-neutral-950 border border-neutral-850 p-4 rounded-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-white">
-            <Cpu size={14} className="text-emerald-400" />
-            <span>Connection State: {process.env.WHATSAPP_API_URL ? '🟢 Gateway Hook Active' : '⚡ Live Simulated Local Engine'}</span>
+      {/* Gateway Connection State & Guide Selector */}
+      <div className="bg-neutral-950 border border-neutral-850 p-5 rounded-sm space-y-4">
+        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-b border-neutral-900 pb-3">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-white font-mono">
+              <Cpu size={14} className="text-emerald-400" />
+              <span>
+                CONNECTION: {activeProvider !== "simulated" 
+                  ? `🟢 GATEWAY HOOK ACTIVE (${activeProvider.toUpperCase()})` 
+                  : "⚡ SIMULATION ENGINE (TEST MODE)"}
+              </span>
+            </div>
+            <p className="text-[11px] text-neutral-400 leading-normal max-w-3xl">
+              {activeProvider !== "simulated"
+                ? `The application is connected to your active WhatsApp API gateway provider (${activeProvider}). Real parent-facing notifications (check-in check-out alerts, balance statements, and billing receipts) will actively send outward via cellular waves!`
+                : 'The system is in test "Simulation Mode" so no actual text fees or carrier limits apply. Read and toggle the deployment guide below to hook real cell networks.'}
+            </p>
           </div>
-          <p className="text-[11px] text-neutral-400 max-w-2xl leading-normal">
-            {process.env.WHATSAPP_API_URL 
-              ? `Your system is fully integrated with external outbound gateway endpoint (${process.env.WHATSAPP_API_URL.slice(0, 45)}...). Outgoing school check-in receipts and balance invoices will deliver to parents via WhatsApp.`
-              : 'The background WhatsApp dispatch is currently running in "Simulation Mode" so no actual text fees are charged. To wire real client-facing cellular networks, please append "WHATSAPP_API_URL" and matching authentication credentials inside the environment configuration panel.'}
-          </p>
+          <button
+            type="button"
+            onClick={() => setShowGuide(!showGuide)}
+            className="px-3.5 py-1.5 bg-neutral-900 hover:bg-neutral-850 text-amber-400 border border-neutral-800 font-mono text-[9px] font-black uppercase tracking-widest cursor-pointer transition-colors"
+          >
+            {showGuide ? "Hide Setup Guide" : "how to get real API?"}
+          </button>
         </div>
-        <div className="font-mono text-[9px] text-neutral-500 uppercase text-right">
-          Mode: <strong className="text-white">{storageMode === 'cloud' ? 'Firebase Sync DB' : 'Offline Local Ledger'}</strong>
-        </div>
+
+        {showGuide && (
+          <div className="space-y-4 pt-1">
+            <div className="text-xs font-mono font-black text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+              <HelpCircle size={13} />
+              <span>Outbound WhatsApp Carrier Gateways (Get real alerts to parent phones)</span>
+            </div>
+            
+            <p className="text-[10px] text-neutral-400 leading-normal max-w-4xl font-sans">
+              Setting up a real API enables bulk dispatches to work directly. To integrate real numbers, configure the variables listed in your 
+              <strong className="text-neutral-200"> Secrets Manager</strong> inside the 
+              <strong className="text-amber-400"> Settings Pane (top right)</strong> in the AI Studio editor. Below are the three best options:
+            </p>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              {/* Option A: Quick Scan Webhooks (UltraMsg) */}
+              <div className="bg-neutral-900/40 border border-neutral-850 p-4.5 rounded-xs space-y-3 flex flex-col justify-between">
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-[9px] font-mono font-black uppercase tracking-wider bg-emerald-950/40 text-emerald-400 border border-emerald-900/60 px-2 py-0.5 rounded-xs">
+                      Option A (Highly Recommended)
+                    </span>
+                    <span className="text-[9px] font-mono font-black text-neutral-500">QR-SCAN WEBHOOK</span>
+                  </div>
+                  <h5 className="text-xs font-black text-white uppercase font-sans tracking-tight">
+                    UltraMsg / Wassenger Gateway
+                  </h5>
+                  <p className="text-[10.5px] text-neutral-400 leading-relaxed font-sans">
+                    By far the easiest. Sync your own personal or school WhatsApp number in seconds by scanning a QR code with your phone. Does not require tedious official business registration.
+                  </p>
+                  
+                  <div className="space-y-1 pt-1 font-mono text-[9.5px]">
+                    <div className="text-white font-black uppercase tracking-widest text-[8px] text-neutral-500">Instructions:</div>
+                    <ol className="list-decimal pl-4.5 text-neutral-400 space-y-1 leading-normal list-outside">
+                      <li>Go to <a href="https://ultramsg.com" target="_blank" rel="noopener noreferrer" className="text-amber-400 hover:underline flex inline-flex items-center gap-0.5">ultramsg.com <ExternalLink size={8} /></a> and sign up for an account.</li>
+                      <li>Scan the QR code displayed on the UltraMsg panel using WhatsApp on your phone (Linked Devices).</li>
+                      <li>Copy your unique <strong className="text-neutral-200">API Link</strong> and <strong className="text-neutral-200">Token</strong>.</li>
+                    </ol>
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-neutral-850 space-y-2">
+                  <div className="text-[8px] font-mono text-neutral-500 uppercase tracking-wider font-extrabold">Config Parameters:</div>
+                  <div className="bg-neutral-950 p-2 border border-neutral-850 rounded-xs font-mono text-[9.5px] leading-relaxed select-all">
+                    <div className="text-amber-400">WHATSAPP_PROVIDER="ultramsg"</div>
+                    <div className="text-neutral-400">WHATSAPP_API_URL="https://api.ultramsg.com/instanceXXXX/messages/chat"</div>
+                    <div className="text-neutral-400">WHATSAPP_API_TOKEN="your_token_here"</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Option B: Official Meta Cloud API */}
+              <div className="bg-neutral-900/40 border border-neutral-850 p-4.5 rounded-xs space-y-3 flex flex-col justify-between">
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-[9px] font-mono font-black uppercase tracking-wider bg-sky-950/40 text-sky-400 border border-sky-900/60 px-2 py-0.5 rounded-xs">
+                      Option B (Direct)
+                    </span>
+                    <span className="text-[9px] font-mono font-black text-neutral-500">OFFICIAL FREE TIER</span>
+                  </div>
+                  <h5 className="text-xs font-black text-white uppercase font-sans tracking-tight">
+                    Meta WhatsApp Cloud API
+                  </h5>
+                  <p className="text-[10.5px] text-neutral-400 leading-relaxed font-sans">
+                    Direct integration with Meta (Facebook) developer dashboard. Completely free for up to 1,000 corporate conversations each month. Highly stable, official network infrastructure.
+                  </p>
+                  
+                  <div className="space-y-1 pt-1 font-mono text-[9.5px]">
+                    <div className="text-white font-black uppercase tracking-widest text-[8px] text-neutral-500">Instructions:</div>
+                    <ol className="list-decimal pl-4.5 text-neutral-400 space-y-1 leading-normal list-outside">
+                      <li>Visit the <a href="https://developers.facebook.com" target="_blank" rel="noopener noreferrer" className="text-sky-400 hover:underline flex inline-flex items-center gap-0.5">Meta Developer Portal <ExternalLink size={8} /></a>.</li>
+                      <li>Create an App under "Business" type and link the WhatsApp product.</li>
+                      <li>Find your temporary or permanent user <strong className="text-neutral-200">Access Token</strong> and <strong className="text-neutral-200">Phone Number ID</strong>.</li>
+                    </ol>
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-neutral-850 space-y-2">
+                  <div className="text-[8px] font-mono text-neutral-500 uppercase tracking-wider font-extrabold">Config Parameters:</div>
+                  <div className="bg-neutral-950 p-2 border border-neutral-850 rounded-xs font-mono text-[9.5px] leading-relaxed select-all">
+                    <div className="text-amber-400">WHATSAPP_PROVIDER="meta"</div>
+                    <div className="text-neutral-400">WHATSAPP_PHONE_NUMBER_ID="your_phone_id"</div>
+                    <div className="text-neutral-400">WHATSAPP_API_TOKEN="your_system_access_token"</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Option C: Twilio Gateway */}
+              <div className="bg-neutral-900/40 border border-neutral-850 p-4.5 rounded-xs space-y-3 flex flex-col justify-between">
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-[9px] font-mono font-black uppercase tracking-wider bg-rose-950/40 text-rose-400 border border-rose-900/60 px-2 py-0.5 rounded-xs">
+                      Option C (Enterprise)
+                    </span>
+                    <span className="text-[9px] font-mono font-black text-neutral-500">DEVELOPER FRIENDLY</span>
+                  </div>
+                  <h5 className="text-xs font-black text-white uppercase font-sans tracking-tight">
+                    Twilio WhatsApp Gateway
+                  </h5>
+                  <p className="text-[10.5px] text-neutral-400 leading-relaxed font-sans">
+                    Highly robust enterprise communications provider. Offers a developer-friendly Sandbox environment for immediate compliance tests and worldwide message dispatch channels.
+                  </p>
+                  
+                  <div className="space-y-1 pt-1 font-mono text-[9.5px]">
+                    <div className="text-white font-black uppercase tracking-widest text-[8px] text-neutral-500">Instructions:</div>
+                    <ol className="list-decimal pl-4.5 text-neutral-400 space-y-1 leading-normal list-outside">
+                      <li>Register an account on <a href="https://twilio.com" target="_blank" rel="noopener noreferrer" className="text-rose-400 hover:underline flex inline-flex items-center gap-0.5">twilio.com <ExternalLink size={8} /></a>.</li>
+                      <li>Navigate to WhatsApp Messaging in the Twilio console.</li>
+                      <li>Copy <strong className="text-neutral-200">Account SID</strong>, <strong className="text-neutral-200">Auth Token</strong>, and join the sandbox with your tester line.</li>
+                    </ol>
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-neutral-850 space-y-2">
+                  <div className="text-[8px] font-mono text-neutral-500 uppercase tracking-wider font-extrabold">Config Parameters:</div>
+                  <div className="bg-neutral-950 p-2 border border-neutral-850 rounded-xs font-mono text-[9.5px] leading-relaxed select-all">
+                    <div className="text-amber-400">WHATSAPP_PROVIDER="twilio"</div>
+                    <div className="text-neutral-400">WHATSAPP_TWILIO_SID="your_account_sid"</div>
+                    <div className="text-neutral-400">WHATSAPP_TWILIO_AUTH_TOKEN="your_auth_token"</div>
+                    <div className="text-neutral-400">WHATSAPP_SENDER_PHONE="whatsapp:+14155238886"</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Metrics Banner */}

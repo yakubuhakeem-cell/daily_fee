@@ -6,12 +6,14 @@
 import React, { useState } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { LoginMFA } from './components/LoginMFA';
-import { ClassRegister } from './components/ClassRegister';
-import { Dashboard } from './components/Dashboard';
-import { AdminPanel } from './components/AdminPanel';
-import { ReportPanel } from './components/ReportPanel';
 import { SchoolLogo } from './components/SchoolLogo';
-import { TermPayersTab } from './components/TermPayersTab';
+
+const ClassRegister = React.lazy(() => import('./components/ClassRegister').then(module => ({ default: module.ClassRegister })));
+const Dashboard = React.lazy(() => import('./components/Dashboard').then(module => ({ default: module.Dashboard })));
+const AdminPanel = React.lazy(() => import('./components/AdminPanel').then(module => ({ default: module.AdminPanel })));
+const ReportPanel = React.lazy(() => import('./components/ReportPanel').then(module => ({ default: module.ReportPanel })));
+const TermPayersTab = React.lazy(() => import('./components/TermPayersTab').then(module => ({ default: module.TermPayersTab })));
+const BudgetPlanTab = React.lazy(() => import('./components/BudgetPlanTab').then(module => ({ default: module.BudgetPlanTab })));
 import { db } from './lib/firebase';
 import { StudentClass } from './types';
 import { 
@@ -37,7 +39,8 @@ import {
   Award,
   AlertCircle,
   Check,
-  ChevronDown
+  ChevronDown,
+  Target
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -58,7 +61,8 @@ function NavigationWrapper() {
     setTheme,
     saveStatus,
     addStudent,
-    playFeedbackSound
+    playFeedbackSound,
+    systemSettings
   } = useApp();
 
   // Compute unassigned pupils & missing registration records for the current day
@@ -82,7 +86,8 @@ function NavigationWrapper() {
 
   const totalAdminAlerts = unassignedCount + missingRegCount;
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'register' | 'admin' | 'reports' | 'termPayers'>('register');
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'register' | 'admin' | 'reports' | 'termPayers' | 'budgetPlan'>('register');
   const [showSyncConfirm, setShowSyncConfirm] = useState(false);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
   const [syncErrorMessage, setSyncErrorMessage] = useState('');
@@ -93,12 +98,16 @@ function NavigationWrapper() {
   });
 
   const dismissTutorial = () => {
-    localStorage.setItem('s_sync_tutorial_dismissed', 'true');
+    try {
+      localStorage.setItem('s_sync_tutorial_dismissed', 'true');
+    } catch (e) {}
     setTutorialDismissed(true);
   };
 
   const showTutorialAgain = () => {
-    localStorage.setItem('s_sync_tutorial_dismissed', 'false');
+    try {
+      localStorage.setItem('s_sync_tutorial_dismissed', 'false');
+    } catch (e) {}
     setTutorialDismissed(false);
   };
 
@@ -307,7 +316,7 @@ function NavigationWrapper() {
     const role = currentUser.role;
     if (role === 'Administrator' || role === 'Headmaster') return true;
     if (role === 'Accountant') {
-      return ['dashboard', 'register', 'reports', 'termPayers'].includes(tab);
+      return ['dashboard', 'register', 'reports', 'termPayers', 'budgetPlan'].includes(tab);
     }
     if (role === 'Teacher') {
       return ['register'].includes(tab);
@@ -321,6 +330,7 @@ function NavigationWrapper() {
     { id: 'termPayers', label: 'Term Payers Status', icon: CreditCard },
     { id: 'dashboard', label: 'Cash Flow Trends & Stats', icon: LayoutDashboard },
     { id: 'reports', label: 'Audits & Exports', icon: FolderEdit },
+    { id: 'budgetPlan', label: 'Action Plans & Targets', icon: Target },
     { id: 'admin', label: 'Pupil Enrollment Core', icon: Settings },
   ];
 
@@ -335,6 +345,8 @@ function NavigationWrapper() {
         return <ClassRegister />;
       case 'termPayers':
         return <TermPayersTab />;
+      case 'budgetPlan':
+        return <BudgetPlanTab />;
       case 'admin':
         return <AdminPanel />;
       case 'reports':
@@ -351,11 +363,11 @@ function NavigationWrapper() {
         <div className="px-8 py-4 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <SchoolLogo size={44} />
-            <div className="bg-amber-400 text-black font-black p-1 text-xl px-3 leading-none tracking-tighter">
-              FEETRACK
+            <div className="bg-amber-400 text-black font-black p-1 text-xl px-3 leading-none tracking-tighter uppercase font-mono">
+              {systemSettings?.systemName || 'FEETRACK'}
             </div>
             <span className="hidden sm:inline text-neutral-500 font-bold uppercase text-[10px] tracking-widest pt-0.5">
-              SAAKO HOLY CHILD ACADEMY Daily Portal
+              {systemSettings?.schoolName || 'SAAKO HOLY CHILD ACADEMY'} Daily Portal
             </span>
           </div>
 
@@ -533,6 +545,15 @@ function NavigationWrapper() {
                       ✓ Yes, Merge & Sync
                     </button>
                     <button
+                      onClick={() => {
+                        setStorageMode('cloud');
+                        setShowSyncConfirm(false);
+                      }}
+                      className="bg-neutral-950 hover:bg-neutral-900 text-amber-400 font-mono tracking-wider uppercase text-[10px] font-black px-3.5 py-2 cursor-pointer shadow border border-neutral-900"
+                    >
+                      ☁️ Direct Switch (Skip Merge)
+                    </button>
+                    <button
                       onClick={() => setShowSyncConfirm(false)}
                       className="bg-transparent hover:bg-black/10 text-neutral-900 hover:text-black font-mono tracking-wider uppercase text-[10px] font-black px-3 py-2 cursor-pointer transition-colors"
                     >
@@ -622,6 +643,8 @@ function NavigationWrapper() {
                           ? 'Cash Flow Feed' 
                           : tab.id === 'reports' 
                           ? 'Audits & Exports' 
+                          : tab.id === 'budgetPlan'
+                          ? 'Target Budgets & Plans'
                           : 'Staff & Pupils'}
                       </span>
                       {tab.id === 'admin' && totalAdminAlerts > 0 && (
@@ -650,6 +673,132 @@ function NavigationWrapper() {
           </div>
 
         </aside>
+
+        {/* Dynamic Mobile Navigation Bar with Dynamic Overflow Menu */}
+        {visibleTabs.length > 0 && (
+          <nav className="md:hidden w-full bg-neutral-900 border-b-2 border-neutral-805 p-2.5 flex items-center justify-between gap-1.5 z-30 shrink-0 select-none relative font-mono text-[9px] font-black uppercase">
+            <div className="flex items-center gap-1.5 flex-grow">
+              {visibleTabs.slice(0, 2).map(tab => {
+                const active = activeTab === tab.id;
+                const TabIcon = tab.icon;
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => {
+                      setActiveTab(tab.id as any);
+                      setMobileMoreOpen(false);
+                    }}
+                    className={`flex items-center gap-1.5 py-2 px-3 border-2 transition-all cursor-pointer ${
+                      active
+                        ? 'bg-amber-400 text-black border-amber-400'
+                        : 'bg-neutral-950 text-neutral-400 border-neutral-850 hover:text-white hover:border-neutral-700'
+                    }`}
+                  >
+                    <TabIcon size={12} className="shrink-0" />
+                    <span>
+                      {tab.id === 'register' ? 'Daily Check-In' : 'Term Payers'}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {visibleTabs.length > 2 && (
+              <div className="relative shrink-0 overflow-visible">
+                {/* Find out if the selected tab is one of the overflow tabs */}
+                {(() => {
+                  const overflowTabs = visibleTabs.slice(2);
+                  const activeOverflowTab = overflowTabs.find(tab => tab.id === activeTab);
+                  const isOverflowActive = !!activeOverflowTab;
+                  const labelToUse = isOverflowActive 
+                    ? (activeTab === 'dashboard' ? 'Trends' : activeTab === 'reports' ? 'Audits' : 'Enroll') 
+                    : 'More';
+                    
+                  return (
+                    <>
+                      <button
+                        onClick={() => setMobileMoreOpen(!mobileMoreOpen)}
+                        className={`flex items-center gap-1.5 py-2 px-3 border-2 transition-all cursor-pointer ${
+                          isOverflowActive
+                            ? 'bg-neutral-950 text-amber-400 border-amber-400'
+                            : 'bg-neutral-950 text-neutral-450 border-neutral-850 hover:text-white hover:border-neutral-700'
+                        }`}
+                      >
+                        <span className="flex items-center gap-1">
+                          {isOverflowActive && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>}
+                          <span>{labelToUse}</span>
+                        </span>
+                        <ChevronDown size={11} className={`transition-transform shrink-0 ${mobileMoreOpen ? 'rotate-180' : ''}`} />
+                      </button>
+
+                      {/* Dropdown container */}
+                      <AnimatePresence>
+                        {mobileMoreOpen && (
+                          <>
+                            {/* Tap outside to close modal */}
+                            <div 
+                              className="fixed inset-0 z-40 bg-transparent" 
+                              onClick={() => setMobileMoreOpen(false)}
+                            />
+                            
+                            <motion.div
+                              initial={{ opacity: 0, y: -6, scale: 0.95 }}
+                              animate={{ opacity: 1, y: 0, scale: 1 }}
+                              exit={{ opacity: 0, y: -6, scale: 0.95 }}
+                              className="absolute right-0 top-full mt-1.5 min-w-[155px] bg-neutral-950 border-2 border-neutral-800 shadow-2xl z-50 p-1 flex flex-col gap-1 rounded-none"
+                            >
+                              <div className="px-2 py-1.5 text-[8px] text-neutral-500 font-bold border-b border-neutral-900 tracking-widest select-none bg-neutral-900/40 uppercase">
+                                Additional Options
+                              </div>
+                              {overflowTabs.map(tab => {
+                                const active = activeTab === tab.id;
+                                const TabIcon = tab.icon;
+                                return (
+                                  <button
+                                    key={tab.id}
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveTab(tab.id as any);
+                                      setMobileMoreOpen(false);
+                                    }}
+                                    className={`w-full text-left px-2.5 py-2 flex items-center justify-between font-bold transition-all border-l-2 ${
+                                      active
+                                        ? 'text-amber-400 bg-neutral-900 border-amber-400 pl-2'
+                                        : 'text-neutral-400 hover:text-white hover:bg-neutral-900/40 border-transparent'
+                                    }`}
+                                  >
+                                    <span className="flex items-center gap-1.5">
+                                      <TabIcon size={12} className={active ? 'text-amber-400' : 'text-neutral-500'} />
+                                      <span>
+                                        {tab.id === 'dashboard' 
+                                          ? 'Cash Flow Feed' 
+                                          : tab.id === 'reports' 
+                                          ? 'Audits & Exports' 
+                                          : tab.id === 'budgetPlan'
+                                          ? 'Target Budgets'
+                                          : 'Staff & Pupils'}
+                                      </span>
+                                    </span>
+                                    
+                                    {tab.id === 'admin' && totalAdminAlerts > 0 && (
+                                      <span className="bg-red-500 text-neutral-950 font-mono text-[8px] font-black px-1.5 py-0.5 min-w-[14px] h-3.5 flex items-center justify-center rounded-full shrink-0">
+                                        {totalAdminAlerts}
+                                      </span>
+                                    )}
+                                  </button>
+                                );
+                              })}
+                            </motion.div>
+                          </>
+                        )}
+                      </AnimatePresence>
+                    </>
+                  );
+                })()}
+              </div>
+            )}
+          </nav>
+        )}
 
         {/* Mobile menu panel sliding display */}
         <AnimatePresence>
@@ -709,6 +858,8 @@ function NavigationWrapper() {
                           ? 'CASH FLOW FEED' 
                           : tab.id === 'reports' 
                           ? 'AUDITS & EXPORTS' 
+                          : tab.id === 'budgetPlan'
+                          ? 'TARGET BUDGETS & PLANS'
                           : 'STAFF & PUPIL REGISTRY'}
                       </span>
                       {tab.id === 'admin' && totalAdminAlerts > 0 && (
@@ -729,7 +880,18 @@ function NavigationWrapper() {
 
         {/* Dynamic content sandbox workspace */}
         <main className="flex-1 p-6 md:p-8 max-w-7xl mx-auto w-full overflow-y-auto">
-          {renderTabContent()}
+          <React.Suspense fallback={
+            <div className="flex bg-neutral-900 border-4 border-neutral-800 flex-col items-center justify-center p-8 min-h-[400px] font-mono animate-pulse">
+              <div className="flex flex-col items-center gap-4">
+                <div className="w-12 h-12 border-4 border-amber-400 border-t-transparent rounded-full animate-spin"></div>
+                <div className="text-[11px] font-black text-amber-400 uppercase tracking-widest">
+                  Initialising Ledger Workspace...
+                </div>
+              </div>
+            </div>
+          }>
+            {renderTabContent()}
+          </React.Suspense>
         </main>
       </div>
 

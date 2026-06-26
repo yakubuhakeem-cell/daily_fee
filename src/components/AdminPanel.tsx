@@ -7,14 +7,16 @@ import React, { useState, useMemo, useEffect } from 'react';
 import QRCode from 'qrcode';
 import { useApp } from '../context/AppContext';
 import { StudentClass, Student, UserRole } from '../types';
-import { Plus, UserPlus, Trash2, Edit2, ShieldAlert, Check, X, ToggleLeft, ToggleRight, Database, Server, RefreshCw, Copy, Share2, Users, BellRing, MessageSquareCode, UserCheck, Camera, Upload, Search, QrCode, Printer, Contact, Award, DollarSign, Info, MessageSquare } from 'lucide-react';
+import { Plus, UserPlus, Trash2, Edit2, ShieldAlert, Check, X, ToggleLeft, ToggleRight, Database, Server, RefreshCw, Copy, Share2, Users, BellRing, MessageSquareCode, UserCheck, Camera, Upload, Download, Search, QrCode, Printer, Contact, Award, DollarSign, Info, MessageSquare, Sliders } from 'lucide-react';
 import { getClassCategory } from '../initialData';
 import { AdjustmentsTab } from './AdjustmentsTab';
 import { ExpendituresTab } from './ExpendituresTab';
 import { WhatsAppLogsTab } from './WhatsAppLogsTab';
 import { VoiceSearchButton } from './VoiceSearchButton';
+import { SettingsPanel } from './SettingsPanel';
+import { IdCardsGeneratorTab } from './IdCardsGeneratorTab';
 
-export const AdminPanel: React.FC = () => {
+export const AdminPanel: React.FC = React.memo(() => {
   const { 
     students, 
     users, 
@@ -50,15 +52,31 @@ export const AdminPanel: React.FC = () => {
     restoreBackup,
     deleteBackup,
     clearAllBackups,
-    nextBackupTimeLeft,
     audioMuted,
     setAudioMuted,
     playFeedbackSound,
     whatsappLogs,
-    fetchWhatsappLogs
+    fetchWhatsappLogs,
+    terms,
+    expenses,
+    salaries,
+    budgetTargets,
+    systemSettings
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'students' | 'mfa' | 'gates' | 'database' | 'adjustments' | 'expenditures' | 'whatsapp'>('students');
+  const [localTimeLeft, setLocalTimeLeft] = useState<number>(30 * 60);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setLocalTimeLeft(prev => {
+        if (prev <= 1) return 30 * 60;
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const [activeTab, setActiveTab] = useState<'students' | 'mfa' | 'gates' | 'database' | 'adjustments' | 'expenditures' | 'whatsapp' | 'settings' | 'idcards'>('students');
   const [studentFilter, setStudentFilter] = useState<'all' | 'active' | 'inactive'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [showLedgerSwitchModal, setShowLedgerSwitchModal] = useState(false);
@@ -73,6 +91,15 @@ export const AdminPanel: React.FC = () => {
   const [historyModalStudent, setHistoryModalStudent] = useState<Student | null>(null);
   const [idCardQrDataUrl, setIdCardQrDataUrl] = useState<string>('');
   const [idCardTheme, setIdCardTheme] = useState<'dark' | 'light'>('dark');
+
+  // Bulk print student ID cards state
+  const [showBulkPrintModal, setShowBulkPrintModal] = useState(false);
+  const [bulkPrintSelectedIds, setBulkPrintSelectedIds] = useState<string[]>([]);
+  const [bulkPrintClassFilter, setBulkPrintClassFilter] = useState<string>('all');
+  const [bulkPrintTheme, setBulkPrintTheme] = useState<'dark' | 'light'>('dark');
+  const [bulkQrCodes, setBulkQrCodes] = useState<Record<string, string>>({});
+  const [bulkPrintSearch, setBulkPrintSearch] = useState<string>('');
+  const [bulkPreviewStudentId, setBulkPreviewStudentId] = useState<string | null>(null);
 
   useEffect(() => {
     if (selectedIdCardStudent) {
@@ -102,6 +129,640 @@ export const AdminPanel: React.FC = () => {
       setIdCardQrDataUrl('');
     }
   }, [selectedIdCardStudent]);
+  
+  const downloadDatabaseBackup = () => {
+    try {
+      const now = new Date();
+      const backupFilename = `feetrack-backup-${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}-${now.getDate().toString().padStart(2, '0')}-${now.getHours().toString().padStart(2, '0')}${now.getMinutes().toString().padStart(2, '0')}.json`;
+      
+      const backupData = {
+        app: "FEETRACK",
+        description: "School Administration Financial Ledger Database Backup",
+        backupType: "Manual JSON State Export",
+        exportedAt: now.toISOString(),
+        exportedBy: currentUser?.name || currentUser?.email || "System",
+        ledgerMode: storageMode,
+        activeTerm: activeTerm,
+        currentDate: currentDate,
+        systemSettings: systemSettings,
+        data: {
+          students,
+          payments,
+          users,
+          terms,
+          expenses,
+          salaries,
+          whatsappLogs,
+          budgetTargets,
+          backups
+        }
+      };
+
+      const jsonString = JSON.stringify(backupData, null, 2);
+      const blob = new Blob([jsonString], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = backupFilename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      
+      showToast('Database backup downloaded successfully!');
+    } catch (error) {
+      console.error('Database backup failed:', error);
+      showToast('Error generating database backup file.');
+    }
+  };
+
+  // Compute filtered students for bulk print picker
+  const bulkFilteredStudents = useMemo(() => {
+    return students.filter(st => {
+      if (!st.active) return false; // Only active students
+      if (bulkPrintClassFilter !== 'all' && st.class !== bulkPrintClassFilter) return false;
+      if (bulkPrintSearch) {
+        const query = bulkPrintSearch.toLowerCase();
+        const matchesName = st.name.toLowerCase().includes(query);
+        const matchesId = st.id.toLowerCase().includes(query) || (st.rollNumber && st.rollNumber.toLowerCase().includes(query));
+        if (!matchesName && !matchesId) return false;
+      }
+      return true;
+    });
+  }, [students, bulkPrintClassFilter, bulkPrintSearch]);
+
+  // Set first filtered student as active preview if none or mismatch
+  useEffect(() => {
+    if (bulkFilteredStudents.length > 0 && (!bulkPreviewStudentId || !bulkFilteredStudents.some(s => s.id === bulkPreviewStudentId))) {
+      setBulkPreviewStudentId(bulkFilteredStudents[0].id);
+    } else if (bulkFilteredStudents.length === 0) {
+      setBulkPreviewStudentId(null);
+    }
+  }, [bulkFilteredStudents, bulkPreviewStudentId]);
+
+  const generateBulkQrCodes = async (studentsList: Student[]) => {
+    const codes: Record<string, string> = { ...bulkQrCodes };
+    let updated = false;
+    for (const student of studentsList) {
+      if (codes[student.id]) continue;
+      const qrPayload = JSON.stringify({
+        id: student.id,
+        name: student.name,
+        rollNumber: student.rollNumber || ''
+      });
+      try {
+        const url = await QRCode.toDataURL(qrPayload, {
+          margin: 1,
+          width: 150,
+          color: {
+            dark: '#000000',
+            light: '#ffffff'
+          }
+        });
+        codes[student.id] = url;
+        updated = true;
+      } catch (err) {
+        console.error("Failed to generate bulk QR code", err);
+      }
+    }
+    if (updated) {
+      setBulkQrCodes(codes);
+    }
+  };
+
+  useEffect(() => {
+    if (showBulkPrintModal && bulkFilteredStudents.length > 0) {
+      generateBulkQrCodes(bulkFilteredStudents);
+    }
+  }, [showBulkPrintModal, bulkFilteredStudents]);
+
+  const handleBulkPrint = async () => {
+    const selectedStudents = students.filter(s => bulkPrintSelectedIds.includes(s.id));
+    if (selectedStudents.length === 0) {
+      alert("No students selected for printing.");
+      return;
+    }
+
+    // Double check missing QR codes
+    const missingStudents = selectedStudents.filter(s => !bulkQrCodes[s.id]);
+    if (missingStudents.length > 0) {
+      await generateBulkQrCodes(selectedStudents);
+    }
+
+    let printIframe = document.getElementById('idcard-print-iframe') as HTMLIFrameElement;
+    if (!printIframe) {
+      printIframe = document.createElement('iframe');
+      printIframe.id = 'idcard-print-iframe';
+      printIframe.setAttribute('style', 'position:fixed; right:0; bottom:0; width:0; height:0; border:0; pointer-events:none;');
+      document.body.appendChild(printIframe);
+    }
+
+    const iframeDoc = printIframe.contentWindow?.document || printIframe.contentDocument;
+    if (!iframeDoc) return;
+
+    const isDarkTheme = bulkPrintTheme === 'dark';
+    const cardBgFront = isDarkTheme 
+      ? 'background: linear-gradient(135deg, #171717 0%, #0a0a0a 100%) !important; color: #ffffff !important;'
+      : 'background: linear-gradient(135deg, #ffffff 0%, #f9f9f9 100%) !important; color: #111111 !important; border: 1.5px solid #d4d4d8 !important;';
+
+    const cardBgBack = isDarkTheme 
+      ? 'background: linear-gradient(135deg, #171717 0%, #0a0a0a 100%) !important; color: #ffffff !important;'
+      : 'background: linear-gradient(135deg, #ffffff 0%, #f9f9f9 100%) !important; color: #111111 !important; border: 1.5px solid #d4d4d8 !important;';
+
+    const textMain = isDarkTheme ? 'color: #ffffff !important;' : 'color: #111111 !important;';
+    const textMuted = isDarkTheme ? 'color: #8e8e93 !important;' : 'color: #52525b !important;';
+    const borderCol = isDarkTheme ? 'border-color: #27272a !important;' : 'border-color: #e4e4e7 !important;';
+    const subBg = isDarkTheme ? 'background-color: #0c0a09 !important;' : 'background-color: #f4f4f5 !important;';
+
+    const termName = activeTerm?.name || "Academic Term";
+    const expiryDate = activeTerm?.endDate || "Term End";
+
+    const cardsHtml = selectedStudents.map(student => {
+      const qrUrl = bulkQrCodes[student.id] || '';
+      const rollNumber = student.rollNumber || 'SHC-' + student.id.substring(0, 5).toUpperCase();
+      return `
+      <div class="card-pair-wrapper">
+        <div class="id-card">
+          <div class="accent-top"></div>
+          <div class="header">
+            <div class="header-logo-container">
+              <div class="logo-badge">SH</div>
+              <div class="logo-text">SHCA-SAWLA</div>
+            </div>
+            <div>
+              <span class="active-pass-badge">Active Pass</span>
+            </div>
+          </div>
+
+          <div class="main-content">
+            <div class="avatar-container">
+              <div class="avatar">
+                ${student.photoUrl 
+                  ? `<img src="${student.photoUrl}" alt="${student.name}" />`
+                  : `<div class="avatar-placeholder">${student.name.slice(0, 2).toUpperCase()}</div>`
+                }
+              </div>
+              <span class="avatar-label">STUDENT INFO</span>
+            </div>
+
+            <div class="details">
+              <div>
+                <span class="field-label">Pupil Name</span>
+                <span class="field-val-name">${student.name}</span>
+              </div>
+              <div class="meta-grid">
+                <div>
+                  <span class="field-label">Class</span>
+                  <span class="field-val-meta">${student.class}</span>
+                </div>
+                <div>
+                  <span class="field-label">Gender</span>
+                  <span class="field-val-gender">${student.gender || '—'}</span>
+                </div>
+              </div>
+              <div class="reg-id-box">
+                REG-ID: <span class="reg-id-badge">${rollNumber}</span>
+              </div>
+            </div>
+
+            <div class="qr-code-box">
+              <img class="qr-code-img" src="${qrUrl}" />
+              <span class="qr-label">GATE PASS</span>
+            </div>
+          </div>
+
+          <div class="footer">
+            <div class="footer-left">
+              SYSTEM ACCREDITED <span class="footer-expiry">EXP: ${expiryDate}</span>
+            </div>
+            <div class="term-label">${termName.toUpperCase()}</div>
+          </div>
+        </div>
+
+        <div class="id-card id-card-back">
+          <div class="accent-top" style="background-color: ${isDarkTheme ? '#27272a' : '#d4d4d8'} !important;"></div>
+          <div class="header">
+            <span class="rules-title" style="margin: 0;">SECURITY CARD POLICY &amp; RULES</span>
+          </div>
+
+          <div class="back-body">
+            <ol class="rules-list">
+              <li>This card remains the property of SHCA-Sawla.</li>
+              <li>Always present this card for scanning &amp; gate check-ins.</li>
+              <li>Loss of credential elements must be reported immediately.</li>
+              <li>Unauthorized duplication or counterfeit transfer is prohibited.</li>
+            </ol>
+
+            <div class="contact-meta">
+              <div>
+                <span class="contact-label">Guardian Mobile</span>
+                <span class="contact-val">${student.guardianPhone || 'NOT ENROLLED'}</span>
+              </div>
+              <div style="text-align: right;">
+                <span class="contact-label">Authorized Registrar</span>
+                <span class="contact-val" style="color: ${isDarkTheme ? '#fbbf24' : '#d97706'} !important;">YAKUBU HAKEEM</span>
+              </div>
+            </div>
+
+            <div class="status-banner-back">
+              Validation Active &bull; Valid thru Term Closure (${expiryDate})
+            </div>
+          </div>
+
+          <div class="barcode-area">
+            <div class="barcode-lines">
+              ${Array.from({ length: 32 }).map((_, idx) => `
+                <div class="barcode-bar" style="opacity: ${idx % 3 === 0 || idx % 4 === 1 ? 1 : 0};"></div>
+              `).join('')}
+            </div>
+            <div class="barcode-label">
+              *SHCA-${student.id.substring(0, 8).toUpperCase()}*
+            </div>
+          </div>
+        </div>
+      </div>
+      `;
+    }).join('');
+
+    const docContent = `
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>SHCA Student ID Cards - Bulk Print</title>
+    <meta charset="utf-8">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&family=JetBrains+Mono:wght@400;700;800&display=swap" rel="stylesheet">
+    <style>
+      @page {
+        size: portrait;
+        margin: 15mm 10mm;
+      }
+      html, body {
+        margin: 0;
+        padding: 0;
+        background-color: #ffffff;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+      }
+      body {
+        font-family: 'Inter', sans-serif;
+      }
+      .bulk-container {
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+        align-items: center;
+        justify-content: center;
+      }
+      .card-pair-wrapper {
+        display: flex;
+        flex-direction: row;
+        gap: 12px;
+        page-break-inside: avoid;
+        break-inside: avoid;
+        margin-bottom: 20px;
+        border-bottom: 1px dashed #d4d4d8;
+        padding-bottom: 20px;
+      }
+      .card-pair-wrapper:last-child {
+        border-bottom: none;
+      }
+      .id-card {
+        width: 324px;
+        height: 204px;
+        border-radius: 8px;
+        border: 1.5px solid ${isDarkTheme ? '#3f3f46' : '#d4d4d8'} !important;
+        box-sizing: border-box;
+        overflow: hidden;
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        ${cardBgFront}
+      }
+      .accent-top {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 4.5px;
+        background-color: ${isDarkTheme ? '#fbbf24' : '#d97706'} !important;
+      }
+      .header {
+        padding: 8px 10px 4px 10px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border-bottom: 1px solid ${isDarkTheme ? '#27272a' : '#e4e4e7'} !important;
+        margin-top: 4.5px;
+        box-sizing: border-box;
+      }
+      .header-logo-container {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+      }
+      .logo-badge {
+        width: 16px;
+        height: 16px;
+        background-color: #fbbf24 !important;
+        color: #000000 !important;
+        border-radius: 2px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 900;
+        font-size: 8px;
+        letter-spacing: -0.5px;
+      }
+      .logo-text {
+        font-weight: 900;
+        font-size: 8.5px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        ${textMain}
+      }
+      .active-pass-badge {
+        font-size: 5.5px;
+        font-weight: 900;
+        background-color: #022c22 !important;
+        color: #34d399 !important;
+        border: 1px solid #10b981 !important;
+        padding: 1px 3px;
+        border-radius: 2px;
+        text-transform: uppercase;
+      }
+      .main-content {
+        padding: 5px 10px;
+        display: flex;
+        gap: 8px;
+        flex: 1;
+        align-items: center;
+        box-sizing: border-box;
+      }
+      .avatar-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1.5px;
+      }
+      .avatar {
+        width: 54px;
+        height: 54px;
+        border-radius: 4.5px;
+        background-color: ${isDarkTheme ? '#09090b' : '#f4f4f5'} !important;
+        border: 1px solid ${isDarkTheme ? '#27272a' : '#e4e4e7'} !important;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+      }
+      .avatar-placeholder {
+        font-family: 'JetBrains Mono', monospace;
+        font-weight: 900;
+        font-size: 14px;
+        text-transform: uppercase;
+        ${textMain}
+      }
+      .avatar img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover !important;
+      }
+      .avatar-label {
+        font-size: 4.8px;
+        font-family: 'JetBrains Mono', monospace;
+        font-weight: 900;
+        letter-spacing: 0.5px;
+        ${textMuted}
+      }
+      .details {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 1.5px;
+      }
+      .field-label {
+        font-size: 5.5px;
+        font-family: 'JetBrains Mono', monospace;
+        font-weight: 700;
+        text-transform: uppercase;
+        ${textMuted}
+      }
+      .field-val-name {
+        font-size: 9.5px;
+        font-weight: 900;
+        text-transform: uppercase;
+        max-width: 140px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: block;
+        letter-spacing: -0.1px;
+        ${textMain}
+      }
+      .meta-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 3px;
+      }
+      .field-val-meta {
+        font-size: 7.5px;
+        font-weight: 900;
+        font-family: 'JetBrains Mono', monospace;
+        color: ${isDarkTheme ? '#fbbf24' : '#d97706'} !important;
+      }
+      .field-val-gender {
+        font-size: 7.5px;
+        font-weight: 700;
+        ${textMain}
+      }
+      .reg-id-box {
+        margin-top: 1px;
+        font-size: 5.5px;
+        font-family: 'JetBrains Mono', monospace;
+        ${textMuted}
+      }
+      .reg-id-badge {
+        font-weight: 800;
+        background-color: ${isDarkTheme ? '#09090b' : '#f4f4f5'} !important;
+        border: 1px solid ${isDarkTheme ? '#27272a' : '#e4e4e7'} !important;
+        padding: 0.5px 2.5px;
+        border-radius: 1.5px;
+        margin-left: 2px;
+        ${textMain}
+      }
+      .qr-code-box {
+        width: 42px;
+        height: 42px;
+        background-color: #ffffff !important;
+        padding: 1.5px;
+        border-radius: 2px;
+        border: 1px solid ${isDarkTheme ? '#27272a' : '#d4d4d8'} !important;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5px;
+        box-sizing: border-box;
+      }
+      .qr-code-img {
+        width: 34px;
+        height: 34px;
+      }
+      .qr-label {
+        font-size: 3.5px;
+        font-family: 'JetBrains Mono', monospace;
+        font-weight: 900;
+        color: #000000 !important;
+        letter-spacing: 0.1px;
+        line-height: 1;
+      }
+      .footer {
+        padding: 3px 10px;
+        border-top: 1px solid ${isDarkTheme ? '#27272a' : '#e4e4e7'} !important;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 5.8px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        ${subBg}
+      }
+      .footer-left {
+        font-weight: 705;
+        ${textMuted}
+      }
+      .footer-expiry {
+        font-weight: 900;
+        background-color: ${isDarkTheme ? '#000000' : '#e4e4e7'} !important;
+        border: 1px solid ${isDarkTheme ? '#27272a' : '#d4d4d8'} !important;
+        padding: 0.5px 2px;
+        border-radius: 1.5px;
+        font-size: 5px;
+        margin-left: 2px;
+        ${textMain}
+      }
+      .term-label {
+        font-weight: 900;
+        color: ${isDarkTheme ? '#fbbf24' : '#d97706'} !important;
+      }
+      
+      /* BACK SIDE */
+      .id-card-back {
+        ${cardBgBack}
+      }
+      .back-body {
+        padding: 6px 10px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        flex: 1;
+        box-sizing: border-box;
+      }
+      .rules-title {
+        font-size: 6.5px;
+        font-family: 'JetBrains Mono', monospace;
+        font-weight: 900;
+        letter-spacing: 0.5px;
+        margin-bottom: 2px;
+        ${textMuted}
+      }
+      .rules-list {
+        margin: 0;
+        padding-left: 10px;
+        font-size: 5.5px;
+        font-weight: 700;
+        line-height: 1.25;
+        ${textMuted}
+      }
+      .rules-list li {
+        margin-bottom: 1px;
+      }
+      .contact-meta {
+        display: flex;
+        justify-content: space-between;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 5.5px;
+        border-top: 1px dashed ${isDarkTheme ? '#27272a' : '#d4d4d8'} !important;
+        padding-top: 2.5px;
+        margin-top: 2px;
+      }
+      .contact-label {
+        display: block;
+        font-size: 4.5px;
+        ${textMuted}
+      }
+      .contact-val {
+        font-weight: 800;
+        ${textMain}
+      }
+      .status-banner-back {
+        border-radius: 2px;
+        padding: 1.5px;
+        text-align: center;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 5px;
+        font-weight: 900;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+        background-color: ${isDarkTheme ? '#09090b' : '#f4f4f5'} !important;
+        border: 1px solid ${isDarkTheme ? '#18181b' : '#e4e4e7'} !important;
+        ${textMuted}
+      }
+      .barcode-area {
+        background-color: #ffffff !important;
+        padding: 3px 10px;
+        border-top: 1px solid ${isDarkTheme ? '#27272a' : '#e4e4e7'} !important;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        box-sizing: border-box;
+      }
+      .barcode-lines {
+        width: 100%;
+        height: 14px;
+        display: flex;
+        align-items: stretch;
+        gap: 0.8px;
+        background-color: #ffffff !important;
+      }
+      .barcode-bar {
+        flex: 1;
+        background-color: #000000 !important;
+      }
+      .barcode-label {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 5px;
+        font-weight: 700;
+        letter-spacing: 1px;
+        color: #52525b !important;
+        margin-top: 1px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="bulk-container">
+      ${cardsHtml}
+    </div>
+
+    <script>
+      window.onload = function() {
+        setTimeout(function() {
+          window.focus();
+          window.print();
+        }, 500);
+      };
+    </script>
+  </body>
+</html>
+    `;
+
+    iframeDoc.open();
+    iframeDoc.write(docContent);
+    iframeDoc.close();
+  };
 
   const [showPromotionModal, setShowPromotionModal] = useState(false);
   const [promotionConfirmedText, setPromotionConfirmedText] = useState('');
@@ -219,15 +880,25 @@ export const AdminPanel: React.FC = () => {
   const consecutiveUnpaidAlerts = useMemo(() => {
     if (validSchoolDays.length < 3) return [];
     
+    // Pre-index payments for O(1) loop lookup
+    const verifiedPaymentSet = new Set<string>();
+    if (payments) {
+      for (let i = 0; i < payments.length; i++) {
+        const p = payments[i];
+        if (p.verified) {
+          verifiedPaymentSet.add(`${p.studentId}_${p.date}`);
+        }
+      }
+    }
+    
     return students.filter(s => s.active && s.paymentType !== 'Term').map(student => {
       // Find the consecutive unpaid tracks
       let consecutiveUnpaid: string[] = [];
       let maxConsecutiveUnpaid: string[] = [];
       
       for (const day of validSchoolDays) {
-        const hasPaid = (payments || []).some(
-          p => p.studentId === student.id && p.date === day && p.verified
-        );
+        const key = `${student.id}_${day}`;
+        const hasPaid = verifiedPaymentSet.has(key);
         
         if (!hasPaid) {
           consecutiveUnpaid.push(day);
@@ -646,6 +1317,9 @@ export const AdminPanel: React.FC = () => {
   const [adminRegMfa, setAdminRegMfa] = useState(false);
   const [adminRegPasswordEnabled, setAdminRegPasswordEnabled] = useState(false);
   const [adminRegPassword, setAdminRegPassword] = useState('');
+  const [adminRegStipendSalary, setAdminRegStipendSalary] = useState('');
+  const [adminRegMomoNumber, setAdminRegMomoNumber] = useState('');
+  const [adminRegMomoName, setAdminRegMomoName] = useState('');
   const [editStaffObj, setEditStaffObj] = useState<any | null>(null);
 
   const handleAdminRegisterStaff = (e: React.FormEvent) => {
@@ -660,7 +1334,10 @@ export const AdminPanel: React.FC = () => {
       adminRegMfa,
       adminRegPasswordEnabled,
       adminRegPassword.trim(),
-      adminRegRole === 'Teacher' ? adminRegClasses : undefined
+      adminRegRole === 'Teacher' ? adminRegClasses : undefined,
+      adminRegStipendSalary ? parseFloat(adminRegStipendSalary) : undefined,
+      adminRegMomoNumber.trim() || undefined,
+      adminRegMomoName.trim() || undefined
     );
 
     if (result.success) {
@@ -670,6 +1347,9 @@ export const AdminPanel: React.FC = () => {
       setAdminRegPasswordEnabled(false);
       setAdminRegPassword('');
       setAdminRegClasses(['B1']);
+      setAdminRegStipendSalary('');
+      setAdminRegMomoNumber('');
+      setAdminRegMomoName('');
       showToast('Staff register updated with new entry.');
     } else {
       showToast(result.error || 'Check administrator database permissions & connection.');
@@ -689,7 +1369,10 @@ export const AdminPanel: React.FC = () => {
       !!editStaffObj.mfaEnabled,
       !!editStaffObj.passwordEnabled,
       editStaffObj.password || '',
-      editStaffObj.role === 'Teacher' ? (editStaffObj.assignedClasses || (editStaffObj.assignedClass ? [editStaffObj.assignedClass] : [])) : undefined
+      editStaffObj.role === 'Teacher' ? (editStaffObj.assignedClasses || (editStaffObj.assignedClass ? [editStaffObj.assignedClass] : [])) : undefined,
+      editStaffObj.stipendSalary ? parseFloat(editStaffObj.stipendSalary.toString()) : undefined,
+      editStaffObj.momoNumber?.trim() || undefined,
+      editStaffObj.momoName?.trim() || undefined
     );
 
     if (result.success) {
@@ -1450,11 +2133,34 @@ export const AdminPanel: React.FC = () => {
             className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
               activeTab === 'whatsapp'
                 ? 'bg-amber-400 text-black'
-                : 'text-neutral-550 hover:text-white'
+                : 'text-neutral-500 hover:text-white'
             }`}
           >
             <MessageSquare size={13} />
             WhatsApp Logs
+          </button>
+          <button
+            id="admin-tab-idcards-btn"
+            onClick={() => setActiveTab('idcards')}
+            className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
+              activeTab === 'idcards'
+                ? 'bg-amber-400 text-black'
+                : 'text-neutral-500 hover:text-white'
+            }`}
+          >
+            <Contact size={13} />
+            Generate ID Cards
+          </button>
+          <button
+            onClick={() => setActiveTab('settings')}
+            className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
+              activeTab === 'settings'
+                ? 'bg-amber-400 text-black'
+                : 'text-neutral-500 hover:text-white'
+            }`}
+          >
+            <Sliders size={13} />
+            System Settings
           </button>
         </div>
       </div>
@@ -2426,6 +3132,21 @@ export const AdminPanel: React.FC = () => {
                     <Award size={11} className="stroke-[3]" />
                     <span>Promote Cohorts {currentUser?.role !== 'Administrator' ? ' (Admin only)' : ''}</span>
                   </button>
+                  
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBulkPrintSelectedIds(students.filter(s => s.active).map(s => s.id));
+                      setBulkPrintClassFilter('all');
+                      setBulkPrintSearch('');
+                      setShowBulkPrintModal(true);
+                    }}
+                    className="mt-1 px-3 py-1 text-[9px] font-mono font-black uppercase tracking-widest cursor-pointer transition-all flex items-center gap-1.5 border-2 border-amber-500 bg-amber-500/10 hover:bg-amber-400 hover:text-black hover:border-amber-400 text-amber-400 shadow-[2px_2px_0px_0px_rgba(245,158,11,0.15)]"
+                    title="Generate and print physical student ID cards with scan QR codes in bulk"
+                  >
+                    <QrCode size={11} className="stroke-[3]" />
+                    <span>Print QR Badges</span>
+                  </button>
                 </div>
               </div>
               <div className="flex flex-wrap gap-2 shrink-0">
@@ -2744,6 +3465,51 @@ export const AdminPanel: React.FC = () => {
                         </div>
                       </div>
                     )}
+
+                    <div className="bg-neutral-950/80 p-5 border-2 border-neutral-800 rounded space-y-4">
+                      <div className="flex items-center gap-2 pb-2 border-b border-neutral-850">
+                        <span className="text-xs font-black uppercase tracking-widest text-amber-400 font-mono">💵 Financial & Momo Payout Profile</span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div>
+                          <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                            Monthly Stipend/Salary (GHC)
+                          </label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={editStaffObj.stipendSalary || ''}
+                            onChange={(e) => setEditStaffObj({ ...editStaffObj, stipendSalary: e.target.value })}
+                            placeholder="e.g. 1500.00"
+                            className="w-full bg-neutral-900 border-2 border-neutral-800 py-2.5 px-3.5 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                            Momo Registered No.
+                          </label>
+                          <input
+                            type="text"
+                            value={editStaffObj.momoNumber || ''}
+                            onChange={(e) => setEditStaffObj({ ...editStaffObj, momoNumber: e.target.value })}
+                            placeholder="e.g. 0541234567"
+                            className="w-full bg-neutral-900 border-2 border-neutral-800 py-2.5 px-3.5 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                            Registered Momo Name
+                          </label>
+                          <input
+                            type="text"
+                            value={editStaffObj.momoName || ''}
+                            onChange={(e) => setEditStaffObj({ ...editStaffObj, momoName: e.target.value })}
+                            placeholder="e.g. Mary Appiah"
+                            className="w-full bg-neutral-900 border-2 border-neutral-800 py-2.5 px-3.5 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600"
+                          />
+                        </div>
+                      </div>
+                    </div>
                   </div>
 
                   <div className="flex flex-col gap-3 pt-2 bg-neutral-950/40 p-4 border border-neutral-850 rounded">
@@ -2901,6 +3667,51 @@ export const AdminPanel: React.FC = () => {
                         </div>
                       </div>
                     )}
+
+                    <div className="bg-neutral-950/80 p-5 border-2 border-neutral-800 rounded space-y-4">
+                      <div className="flex items-center gap-2 pb-2 border-b border-neutral-850">
+                        <span className="text-xs font-black uppercase tracking-widest text-amber-400 font-mono">💵 Financial & Momo Payout Profile</span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div>
+                          <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                            Monthly Stipend/Salary (GHC)
+                          </label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={adminRegStipendSalary}
+                            onChange={(e) => setAdminRegStipendSalary(e.target.value)}
+                            placeholder="e.g. 1500.00"
+                            className="w-full bg-neutral-900 border-2 border-neutral-800 py-2.5 px-3.5 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                            Momo Registered No.
+                          </label>
+                          <input
+                            type="text"
+                            value={adminRegMomoNumber}
+                            onChange={(e) => setAdminRegMomoNumber(e.target.value)}
+                            placeholder="e.g. 0541234567"
+                            className="w-full bg-neutral-900 border-2 border-neutral-800 py-2.5 px-3.5 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                            Registered Momo Name
+                          </label>
+                          <input
+                            type="text"
+                            value={adminRegMomoName}
+                            onChange={(e) => setAdminRegMomoName(e.target.value)}
+                            placeholder="e.g. Mary Appiah"
+                            className="w-full bg-neutral-900 border-2 border-neutral-800 py-2.5 px-3.5 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600"
+                          />
+                        </div>
+                      </div>
+                    </div>
                   </div>
 
                   <div className="flex flex-col gap-3 pt-2 bg-neutral-950/40 p-4 border border-neutral-850 rounded">
@@ -3007,6 +3818,21 @@ export const AdminPanel: React.FC = () => {
                       {u.passwordEnabled && u.password && (
                         <div className="mt-1.5 flex flex-col sm:flex-row sm:items-center gap-2 p-3 bg-neutral-900 border border-neutral-800 text-[10px] text-neutral-300 font-mono tracking-wider w-full sm:w-auto">
                           <span>SECURE PASSWORD KEY: <strong className="font-extrabold text-amber-400 select-all font-mono">{u.password}</strong></span>
+                        </div>
+                      )}
+
+                      {((u.stipendSalary !== undefined && u.stipendSalary > 0) || u.momoNumber) && (
+                        <div className="mt-1.5 flex flex-wrap gap-2.5 items-center text-[10px] uppercase font-mono tracking-wider">
+                          {u.stipendSalary !== undefined && u.stipendSalary > 0 && (
+                            <span className="bg-emerald-950/40 text-emerald-400 border border-emerald-900/30 px-2.5 py-0.5 rounded font-bold">
+                              💵 Stipend: GHC {u.stipendSalary.toFixed(2)}
+                            </span>
+                          )}
+                          {u.momoNumber && (
+                            <span className="bg-amber-950/40 text-amber-400 border border-amber-905/30 px-2.5 py-0.5 rounded font-bold">
+                              ☎ MoMo: {u.momoNumber} {u.momoName ? `(${u.momoName})` : ''}
+                            </span>
+                          )}
                         </div>
                       )}
                     </div>
@@ -3518,7 +4344,7 @@ export const AdminPanel: React.FC = () => {
                 <div className="flex flex-row md:flex-col items-end gap-1.5 bg-neutral-900 border border-neutral-850 px-4 py-2.5 font-mono select-none shrink-0 w-full md:w-auto text-right">
                   <div className="text-[10px] uppercase text-neutral-500 font-bold tracking-wider">Next Auto Backup In</div>
                   <div className="text-lg font-black text-white leading-none">
-                    {Math.floor(nextBackupTimeLeft / 60)}m {(nextBackupTimeLeft % 60).toString().padStart(2, '0')}s
+                    {Math.floor(localTimeLeft / 60)}m {(localTimeLeft % 60).toString().padStart(2, '0')}s
                   </div>
                 </div>
               </div>
@@ -3535,17 +4361,27 @@ export const AdminPanel: React.FC = () => {
                     className="w-full bg-neutral-950 border-2 border-neutral-800 px-4 py-2 text-xs font-mono font-bold text-white uppercase placeholder-neutral-600 focus:outline-none focus:border-amber-400"
                   />
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    createBackup(backupLabel.trim() || undefined, false);
-                    setBackupLabel('');
-                    showToast('Captured fresh local database snapshot.');
-                  }}
-                  className="w-full md:w-auto shrink-0 px-5 py-2.5 bg-neutral-850 hover:bg-neutral-800 text-white font-black text-xs uppercase tracking-widest font-mono transition-colors cursor-pointer border-2 border-neutral-750"
-                >
-                  Create Snapshot
-                </button>
+                <div className="flex flex-col sm:flex-row gap-2.5 w-full md:w-auto shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      createBackup(backupLabel.trim() || undefined, false);
+                      setBackupLabel('');
+                      showToast('Captured fresh local database snapshot.');
+                    }}
+                    className="flex-1 sm:flex-initial px-5 py-2.5 bg-neutral-850 hover:bg-neutral-800 text-white font-black text-xs uppercase tracking-widest font-mono transition-colors cursor-pointer border-2 border-neutral-750"
+                  >
+                    Create Snapshot
+                  </button>
+                  <button
+                    type="button"
+                    onClick={downloadDatabaseBackup}
+                    className="flex-1 sm:flex-initial px-5 py-2.5 bg-amber-400 hover:bg-amber-350 text-black font-black text-xs uppercase tracking-widest font-mono transition-colors cursor-pointer border-2 border-amber-500 flex items-center justify-center gap-2"
+                  >
+                    <Download size={13} />
+                    Download Backup JSON
+                  </button>
+                </div>
               </div>
 
               {/* Backups List */}
@@ -3893,6 +4729,12 @@ export const AdminPanel: React.FC = () => {
         </div>
       ) : activeTab === 'adjustments' ? (
         <AdjustmentsTab />
+      ) : activeTab === 'whatsapp' ? (
+        <WhatsAppLogsTab />
+      ) : activeTab === 'settings' ? (
+        <SettingsPanel />
+      ) : activeTab === 'idcards' ? (
+        <IdCardsGeneratorTab />
       ) : (
         <ExpendituresTab />
       )}
@@ -5037,6 +5879,396 @@ export const AdminPanel: React.FC = () => {
         );
       })()}
 
+      {/* Bulk QR Pass / Credentials Badge Generator Modal */}
+      {showBulkPrintModal && (() => {
+        const previewStudent = students.find(s => s.id === bulkPreviewStudentId);
+        const termName = activeTerm?.name || "Active School Term";
+        const expiryDate = activeTerm?.endDate || "Term End Date";
+
+        const isFilteredSelected = bulkFilteredStudents.every(s => bulkPrintSelectedIds.includes(s.id));
+        const handleToggleSelectAllFiltered = () => {
+          if (isFilteredSelected) {
+            // Deselect all filtered
+            setBulkPrintSelectedIds(prev => prev.filter(id => !bulkFilteredStudents.some(s => s.id === id)));
+          } else {
+            // Select all filtered
+            setBulkPrintSelectedIds(prev => {
+              const otherSelected = prev.filter(id => !bulkFilteredStudents.some(s => s.id === id));
+              return [...otherSelected, ...bulkFilteredStudents.map(s => s.id)];
+            });
+          }
+        };
+
+        return (
+          <div className="fixed inset-0 z-50 bg-neutral-950/95 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
+            <div className="relative w-full max-w-5xl bg-neutral-900 border-4 border-amber-500 p-6 md:p-8 space-y-6 shadow-[8px_8px_0px_0px_rgba(245,158,11,0.15)] text-white flex flex-col md:max-h-[90vh]">
+              
+              {/* Header */}
+              <div className="flex justify-between items-start border-b border-neutral-800 pb-4">
+                <div className="flex items-start gap-3">
+                  <div className="p-2.5 bg-amber-400/10 border border-amber-400 text-amber-300 shrink-0">
+                    <QrCode size={20} />
+                  </div>
+                  <div>
+                    <span className="text-[9px] text-amber-400 font-mono tracking-widest font-black uppercase block">Bulk ID Issuer Desk</span>
+                    <h3 className="text-base font-black uppercase tracking-tight">Print QR Gate Check-In Passes</h3>
+                    <p className="text-[11px] text-neutral-400 mt-1">
+                      Batch generate QR student credentials. Selected student badges are formatted into a grid for paper-saving prints.
+                    </p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setShowBulkPrintModal(false)} 
+                  className="p-1 cursor-pointer text-neutral-400 hover:text-white transition-colors"
+                  title="Close Bulk Issuer"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              {/* Main Content Grid */}
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 overflow-hidden flex-1">
+                
+                {/* Column Left: Filters & Selection Directory */}
+                <div className="lg:col-span-5 flex flex-col space-y-4 overflow-hidden h-full">
+                  <div className="space-y-2 shrink-0">
+                    <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest font-mono">
+                      Step 1: Filter Directory Listing
+                    </label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <select
+                          value={bulkPrintClassFilter}
+                          onChange={(e) => setBulkPrintClassFilter(e.target.value)}
+                          className="w-full bg-neutral-950 border-2 border-neutral-800 py-2 px-3 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400"
+                        >
+                          <option value="all">All Classes</option>
+                          {classes.map(cls => (
+                            <option key={cls} value={cls}>{cls}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          placeholder="Search student..."
+                          value={bulkPrintSearch}
+                          onChange={(e) => setBulkPrintSearch(e.target.value)}
+                          className="w-full bg-neutral-950 border-2 border-neutral-800 py-2 px-3 text-xs font-mono font-bold text-white placeholder-neutral-700 focus:outline-none focus:border-amber-400 uppercase"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between py-1 px-2.5 bg-neutral-950/50 border border-neutral-800/60 rounded-xs text-[10px] font-mono font-bold tracking-wide shrink-0">
+                    <span className="text-neutral-400 uppercase">
+                      Found: <strong className="text-amber-400">{bulkFilteredStudents.length}</strong> pupil records
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleToggleSelectAllFiltered}
+                      className="text-amber-400 hover:text-white font-black uppercase tracking-wider text-[9px] cursor-pointer"
+                    >
+                      {isFilteredSelected ? "⬜ Deselect All" : "☑️ Select All"}
+                    </button>
+                  </div>
+
+                  {/* Scrollable list */}
+                  <div className="flex-1 overflow-y-auto border-2 border-neutral-800 bg-neutral-950 divide-y divide-neutral-850/50 rounded-sm pr-1 min-h-[220px]">
+                    {bulkFilteredStudents.length === 0 ? (
+                      <div className="p-8 text-center text-xs font-mono font-black uppercase text-neutral-600">
+                        No students match the criteria.
+                      </div>
+                    ) : (
+                      bulkFilteredStudents.map(st => {
+                        const isSelected = bulkPrintSelectedIds.includes(st.id);
+                        const isPreviewing = bulkPreviewStudentId === st.id;
+                        return (
+                          <div 
+                            key={st.id} 
+                            onClick={() => setBulkPreviewStudentId(st.id)}
+                            className={`p-2.5 flex items-center justify-between gap-3 cursor-pointer transition-colors ${
+                              isPreviewing ? 'bg-neutral-800/40 border-l-4 border-amber-400' : 'hover:bg-neutral-850/20'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2.5 min-w-0" onClick={(e) => e.stopPropagation()}>
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setBulkPrintSelectedIds(prev => [...prev, st.id]);
+                                  } else {
+                                    setBulkPrintSelectedIds(prev => prev.filter(id => id !== st.id));
+                                  }
+                                }}
+                                className="w-3.5 h-3.5 rounded border-2 border-neutral-700 bg-neutral-950 text-amber-500 focus:ring-0 cursor-pointer"
+                              />
+                              <div className="min-w-0" onClick={() => setBulkPreviewStudentId(st.id)}>
+                                <span className={`text-[11px] font-black uppercase block tracking-tight line-clamp-1 cursor-pointer ${isSelected ? 'text-white' : 'text-neutral-450'}`}>
+                                  {st.name}
+                                </span>
+                                <span className="text-[8.5px] font-mono font-bold text-neutral-500 uppercase tracking-widest block mt-0.5">
+                                  ID: {st.rollNumber || st.id.substring(0, 8).toUpperCase()}
+                                </span>
+                              </div>
+                            </div>
+                            <span className="text-[9px] font-mono font-black text-amber-400 bg-amber-400/5 px-2 py-0.5 uppercase shrink-0 border border-amber-400/10">
+                              {st.class}
+                            </span>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+
+                {/* Column Right: Interactive Previewer */}
+                <div className="lg:col-span-7 flex flex-col space-y-4 border-t lg:border-t-0 lg:border-l border-neutral-800/80 lg:pl-6 pt-4 lg:pt-0 overflow-y-auto">
+                  <div className="flex items-center justify-between shrink-0">
+                    <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest font-mono">
+                      Step 2: Real-time Aesthetic Layout Preview
+                    </label>
+                    <div className="flex items-center gap-1 bg-neutral-950 p-1 border-2 border-neutral-800 text-[9px] font-mono">
+                      <button
+                        type="button"
+                        onClick={() => setBulkPrintTheme('dark')}
+                        className={`px-2 py-0.5 uppercase font-black tracking-wider transition-colors cursor-pointer ${
+                          bulkPrintTheme === 'dark' ? 'bg-amber-400 text-black' : 'text-neutral-400 hover:text-white'
+                        }`}
+                      >
+                        Midnight
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setBulkPrintTheme('light')}
+                        className={`px-2 py-0.5 uppercase font-black tracking-wider transition-colors cursor-pointer ${
+                          bulkPrintTheme === 'light' ? 'bg-amber-400 text-black' : 'text-neutral-400 hover:text-white'
+                        }`}
+                      >
+                        Eco-Ink
+                      </button>
+                    </div>
+                  </div>
+
+                  {previewStudent ? (
+                    <div className="flex-1 flex flex-col justify-center items-center gap-6 py-6 px-4 bg-neutral-950 border-2 border-neutral-800 rounded p-6">
+                      
+                      {/* Live Front Preview */}
+                      <div className="flex flex-col xl:flex-row items-center gap-6">
+                        
+                        {/* Front Card */}
+                        <div className={`w-[314px] h-[198px] relative rounded-xl border-2 shadow-xl overflow-hidden flex flex-col justify-between shrink-0 transition-all duration-300 ${
+                          bulkPrintTheme === 'dark'
+                            ? 'bg-gradient-to-br from-neutral-900 via-neutral-900 to-black text-white border-neutral-700'
+                            : 'bg-gradient-to-br from-white via-neutral-50 to-neutral-100 text-neutral-900 border-neutral-300 shadow-sm'
+                        }`}>
+                          <div className="absolute top-0 left-0 right-0 h-1 bg-amber-400" />
+                          
+                          {/* Card Header */}
+                          <div className={`px-3 pt-2.5 flex items-center justify-between border-b pb-1 ${
+                            bulkPrintTheme === 'dark' ? 'border-neutral-800/60' : 'border-neutral-200'
+                          }`}>
+                            <div className="flex items-center gap-1">
+                              <div className="w-4.5 h-4.5 bg-amber-400 text-black rounded-xs flex items-center justify-center font-black text-[9px] tracking-tighter">
+                                SH
+                              </div>
+                              <span className={`text-[9px] font-black uppercase tracking-wider block ${
+                                bulkPrintTheme === 'dark' ? 'text-white' : 'text-neutral-800'
+                              }`}>SHCA-Sawla</span>
+                            </div>
+                            <span className="text-[5.5px] font-black bg-emerald-950/80 text-emerald-400 border border-emerald-905 py-0.5 px-1.5 rounded-sm uppercase tracking-wide">
+                              Active Pass
+                            </span>
+                          </div>
+
+                          {/* Card Body */}
+                          <div className="px-3 py-1 flex gap-2.5 flex-1 items-center">
+                            <div className="flex flex-col items-center gap-0.5">
+                              <div className={`w-13 h-13 rounded flex items-center justify-center overflow-hidden shrink-0 border ${
+                                bulkPrintTheme === 'dark' ? 'bg-neutral-955 border-neutral-750' : 'bg-neutral-200 border-neutral-350'
+                              }`}>
+                                {previewStudent.photoUrl ? (
+                                  <img 
+                                    src={previewStudent.photoUrl} 
+                                    alt={previewStudent.name} 
+                                    className="w-full h-full object-cover"
+                                    referrerPolicy="no-referrer"
+                                  />
+                                ) : (
+                                  <div className={`font-mono font-black text-[15px] uppercase ${
+                                    bulkPrintTheme === 'dark' ? 'text-neutral-500' : 'text-neutral-400'
+                                  }`}>
+                                    {previewStudent.name.slice(0, 2).toUpperCase()}
+                                  </div>
+                                )}
+                              </div>
+                              <span className={`text-[4.5px] font-mono tracking-widest uppercase font-black ${
+                                bulkPrintTheme === 'dark' ? 'text-neutral-500' : 'text-neutral-400'
+                              }`}>STUDENT INFO</span>
+                            </div>
+
+                            <div className="flex-1 space-y-1">
+                              <div>
+                                <span className={`text-[6px] font-mono block uppercase font-bold ${
+                                  bulkPrintTheme === 'dark' ? 'text-neutral-500' : 'text-neutral-450'
+                                }`}>Pupil Name</span>
+                                <span className={`text-[11px] font-black block uppercase tracking-tight line-clamp-1 ${
+                                  bulkPrintTheme === 'dark' ? 'text-white' : 'text-neutral-900'
+                                }`}>
+                                  {previewStudent.name}
+                                </span>
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-1">
+                                <div>
+                                  <span className={`text-[6px] font-mono block uppercase font-bold ${
+                                    bulkPrintTheme === 'dark' ? 'text-neutral-500' : 'text-neutral-450'
+                                  }`}>Class</span>
+                                  <span className="text-[9.5px] font-extrabold text-amber-500 font-mono">
+                                    {previewStudent.class}
+                                  </span>
+                                </div>
+                                <div>
+                                  <span className={`text-[6px] font-mono block uppercase font-bold ${
+                                    bulkPrintTheme === 'dark' ? 'text-neutral-500' : 'text-neutral-450'
+                                  }`}>Gender</span>
+                                  <span className={`text-[8px] font-bold ${
+                                    bulkPrintTheme === 'dark' ? 'text-neutral-300' : 'text-neutral-700'
+                                  }`}>
+                                    {previewStudent.gender || '—'}
+                                  </span>
+                                </div>
+                              </div>
+
+                              <div className="text-[7px] font-mono uppercase tracking-wide flex items-center gap-1 text-neutral-400">
+                                REG-ID:
+                                <strong className={`font-mono px-1 border rounded-sm ${
+                                  bulkPrintTheme === 'dark' ? 'bg-neutral-950 border-neutral-800 text-white' : 'bg-neutral-100 border-neutral-300 text-neutral-800'
+                                }`}>
+                                  {previewStudent.rollNumber || 'SHC-' + previewStudent.id.substring(0, 5).toUpperCase()}
+                                </strong>
+                              </div>
+                            </div>
+
+                            <div className={`p-1 border rounded shrink-0 flex flex-col items-center justify-center gap-0.5 bg-white`}>
+                              {bulkQrCodes[previewStudent.id] ? (
+                                <img 
+                                  src={bulkQrCodes[previewStudent.id]} 
+                                  alt="QR Code Pass" 
+                                  className="w-10 h-10 object-contain"
+                                />
+                              ) : (
+                                <div className="w-10 h-10 bg-neutral-100 flex items-center justify-center">
+                                  <RefreshCw size={12} className="text-neutral-400 animate-spin" />
+                                </div>
+                              )}
+                              <span className="text-[4px] font-mono font-black tracking-widest text-neutral-950">GATE PASS</span>
+                            </div>
+                          </div>
+
+                          {/* Card Footer */}
+                          <div className={`px-3.5 py-1 text-[6.5px] font-mono border-t flex items-center justify-between ${
+                            bulkPrintTheme === 'dark' ? 'bg-neutral-950/60 border-neutral-800/80 text-neutral-450' : 'bg-neutral-100 border-neutral-200 text-neutral-600'
+                          }`}>
+                            <span>SYSTEM ACCREDITED <strong className={`font-black ${bulkPrintTheme === 'dark' ? 'text-white' : 'text-black'}`}>EXP: {expiryDate}</strong></span>
+                            <span className="text-amber-500 font-extrabold font-mono text-[6.5px] uppercase tracking-wider">{termName}</span>
+                          </div>
+                        </div>
+
+                        {/* Back Card */}
+                        <div className={`w-[314px] h-[198px] relative rounded-xl border-2 shadow-xl overflow-hidden flex flex-col justify-between shrink-0 transition-all duration-300 ${
+                          bulkPrintTheme === 'dark'
+                            ? 'bg-gradient-to-br from-neutral-900 via-neutral-900 to-black text-white border-neutral-700'
+                            : 'bg-gradient-to-br from-white via-neutral-50 to-neutral-100 text-neutral-900 border-neutral-300 shadow-sm'
+                        }`}>
+                          <div className="absolute top-0 left-0 right-0 h-1 bg-neutral-800" />
+                          <div className="px-3.5 pt-2 border-b pb-1 border-neutral-800/50">
+                            <span className="text-[7.5px] font-mono font-extrabold text-neutral-400 uppercase tracking-widest">
+                              SECURITY CARD POLICY &amp; RULES
+                            </span>
+                          </div>
+
+                          <div className="px-3.5 py-1.5 flex-1 flex flex-col justify-between">
+                            <ol className="text-[6.5px] list-decimal list-inside space-y-0.5 text-neutral-400 font-bold leading-tight">
+                              <li>This card remains the property of SHCA-Sawla.</li>
+                              <li>Always present this card for scanning &amp; gate check-ins.</li>
+                              <li>Loss of credential elements must be reported immediately.</li>
+                              <li>Unauthorized duplication or counterfeit transfer is prohibited.</li>
+                            </ol>
+
+                            <div className="grid grid-cols-2 gap-2 text-[6.5px] font-mono border-t border-dashed border-neutral-800/40 pt-1.5 mt-1">
+                              <div>
+                                <span className="text-neutral-500 block text-[5px]">Guardian Mobile</span>
+                                <strong className="text-white block uppercase tracking-tight">{previewStudent.guardianPhone || 'NOT ENROLLED'}</strong>
+                              </div>
+                              <div className="text-right">
+                                <span className="text-neutral-500 block text-[5px]">Authorized Registrar</span>
+                                <strong className="text-amber-400 block uppercase tracking-tight">YAKUBU HAKEEM</strong>
+                              </div>
+                            </div>
+
+                            <div className="text-center text-[5px] font-mono font-black py-0.5 bg-neutral-950/40 border border-neutral-850 text-neutral-500 uppercase tracking-widest rounded-sm mt-1">
+                              Validation Active &bull; Valid thru Term Closure ({expiryDate})
+                            </div>
+                          </div>
+
+                          <div className="bg-white px-3 py-1.5 border-t border-neutral-800/30 flex flex-col items-center justify-center shrink-0">
+                            <div className="w-full flex items-stretch gap-[0.5px] h-3 bg-white">
+                              {Array.from({ length: 32 }).map((_, idx) => (
+                                <div key={idx} className={`flex-1 bg-black ${idx % 3 === 0 || idx % 4 === 1 ? 'opacity-100' : 'opacity-0'}`} />
+                              ))}
+                            </div>
+                            <span className="text-[5.5px] font-mono font-bold text-neutral-600 tracking-wider block mt-0.5">
+                              *SHCA-{previewStudent.id.substring(0, 8).toUpperCase()}*
+                            </span>
+                          </div>
+                        </div>
+
+                      </div>
+
+                    </div>
+                  ) : (
+                    <div className="flex-1 bg-neutral-950 border-2 border-neutral-800 rounded p-12 text-center text-xs font-mono font-black uppercase text-neutral-600 flex items-center justify-center">
+                      No active student selected for preview.
+                    </div>
+                  )}
+                </div>
+
+              </div>
+
+              {/* Bottom Actions */}
+              <div className="border-t border-neutral-800 pt-5 flex flex-col sm:flex-row justify-between items-center gap-4 shrink-0">
+                <div className="text-xs font-mono text-neutral-400">
+                  Total Selected: <strong className="text-amber-400 font-extrabold text-sm">{bulkPrintSelectedIds.length}</strong> student passes ready.
+                </div>
+                
+                <div className="flex items-center gap-3 w-full sm:w-auto">
+                  <button
+                    type="button"
+                    onClick={handleBulkPrint}
+                    disabled={bulkPrintSelectedIds.length === 0}
+                    className="flex-1 sm:flex-initial py-3 px-6 bg-amber-400 hover:bg-amber-300 disabled:bg-neutral-800 disabled:text-neutral-600 text-black font-black uppercase text-xs tracking-widest transition-all cursor-pointer flex items-center justify-center gap-2 shadow-[0_4px_14px_rgba(251,191,36,0.25)]"
+                  >
+                    <Printer size={14} className="stroke-[2.5]" />
+                    <span>PRINT {bulkPrintSelectedIds.length} SELECTED BADGES</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowBulkPrintModal(false)}
+                    className="w-full sm:w-auto py-3 px-5 bg-neutral-950 hover:bg-neutral-850 text-neutral-450 hover:text-white font-mono uppercase text-xs tracking-wider transition-colors border border-neutral-850 cursor-pointer"
+                  >
+                    Close Desk
+                  </button>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Academic Cohort Promotion Modal Overlay */}
       {showPromotionModal && (
         <div className="fixed inset-0 z-50 bg-neutral-950/90 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
@@ -5366,4 +6598,4 @@ export const AdminPanel: React.FC = () => {
       )}
     </div>
   );
-};
+});
