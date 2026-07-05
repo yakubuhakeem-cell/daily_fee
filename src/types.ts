@@ -24,6 +24,7 @@ export interface Student {
   paymentType?: 'Daily' | 'Term'; // Billing calculation model: daily (default) vs static term subscription
   termFee?: number; // Fixed fee for entire school term for Term Payer (e.g. 350.00 GHC)
   legacyDebt?: number; // Pre-adoption/outstanding legacy debt to be integrated into their system balance (GHC)
+  idCardDeactivated?: boolean;
 }
 
 export interface PaymentHistoryEntry {
@@ -49,8 +50,14 @@ export interface PaymentRecord {
   verified: boolean;
   notes?: string;
   isAbsent?: boolean; // True if the student was marked absent today
+  lateFeeApplied?: number; // Predefined late registration penalty applied (GHC)
   clearedDates?: string[]; // The array of past school days cleared by this debt payment
   history?: PaymentHistoryEntry[];
+  paymentMethod?: PaymentMethod;
+  momoTransactionId?: string;
+  momoStatus?: 'pending' | 'successful' | 'failed' | 'refunded';
+  momoProvider?: string;
+  momoPhoneNumber?: string;
 }
 
 export type UserRole = 'Administrator' | 'Teacher' | 'Accountant' | 'Headmaster';
@@ -70,6 +77,18 @@ export interface UserAccount {
   stipendSalary?: number; // Teacher monthly stipend/salary
   momoNumber?: string; // Teacher Momo contact number
   momoName?: string; // Teacher Momo registered name
+  photoUrl?: string; // Staff photo URL for ID cards
+  employeeId?: string; // Custom employee ID e.g. EMP-2026-001
+  department?: string; // Custom department e.g. Administration, Academic, Security
+  gender?: 'Male' | 'Female'; // Gender analysis
+  employmentType?: 'Full-Time' | 'Part-Time' | 'Contract' | 'Volunteer'; // Employment status
+  idCardDeactivated?: boolean;
+  appointmentDate?: string; // e.g., '2026-01-15'
+  contractEndDate?: string; // e.g., '2027-01-15'
+  renewalOption?: 'Automatic' | 'Manual Review' | 'Fixed Term' | 'Non-Renewable';
+  renewalPeriod?: string; // e.g., '1 Year', '6 Months', etc.
+  signatureUrl?: string; // Staff/Employee digital signature
+  managementSignatureUrl?: string; // Signatory officer digital signature
 }
 
 export interface Term {
@@ -164,6 +183,9 @@ export interface SystemSettings {
   schoolLogoUrl: string;
   baselineDailyFee: number;
   baselineTermFee: number;
+  baselineTermFeePreSchool?: number;
+  baselineTermFeePrimary?: number;
+  baselineTermFeeJhs?: number;
   currencyCode: string;
   customMotto?: string;
   customLocation?: string;
@@ -171,6 +193,16 @@ export interface SystemSettings {
   autoSendArrearsAlert?: boolean;
   primaryColor?: string;
   adminWhatsAppPhone?: string;
+  termDiscountEnabled?: boolean;
+  termDiscountWeek?: number;
+  termDiscountPercentage?: number;
+  debtThresholdLimit?: number;
+  debtThresholdDays?: number;
+  debtAlertTemplate?: string;
+  debtAlertMethod?: 'whatsapp' | 'sms' | 'both';
+  lateFeeEnabled?: boolean;
+  lateFeeCutoffTime?: string; // e.g. "08:30"
+  lateFeePercentage?: number; // e.g. 10 (representing 10%)
 }
 
 export interface BudgetTarget {
@@ -184,6 +216,57 @@ export interface BudgetTarget {
   description?: string;
   category?: string;
   notifiedThresholds?: number[];
+}
+
+export interface ExamsPayment {
+  id: string;
+  studentId: string;
+  studentName: string;
+  class: StudentClass;
+  category: SchoolCategory;
+  amountPaid: number;
+  datePaid: string; // YYYY-MM-DD
+  collectedBy: string;
+  termId: string; // references activeTerm.id
+  paymentMethod: PaymentMethod;
+  notes?: string;
+  timestamp: string;
+}
+
+export interface ExamsExpense {
+  id: string;
+  providerName: string; // Exam company/publisher, e.g. Oxford Exams Ghana
+  date: string; // YYYY-MM-DD
+  targetClass: StudentClass | 'All-Preschool' | 'All-Primary' | 'All-JHS' | 'Entire-School';
+  billingPerChild: number;
+  studentCount: number;
+  totalAmount: number;
+  amountPaid: number;
+  status: 'Paid' | 'Unpaid' | 'Partially Paid';
+  notes?: string;
+  timestamp: string;
+}
+
+export interface ExamsClassFeeStructure {
+  feeCharged: number; // e.g. GHC 35
+  companyBilling: number; // e.g. GHC 20
+}
+
+export interface ExamsSettings {
+  classFees: Record<StudentClass, ExamsClassFeeStructure>;
+}
+
+export interface AuditLog {
+  id: string;
+  timestamp: string;
+  action: string;
+  category: 'students' | 'payments' | 'expenses' | 'settings' | 'security' | 'other';
+  operatorName: string;
+  operatorRole: string;
+  details: string;
+  studentId?: string;
+  studentName?: string;
+  amount?: number;
 }
 
 

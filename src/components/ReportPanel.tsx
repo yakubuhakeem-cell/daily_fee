@@ -10,7 +10,8 @@ import {
   FileSpreadsheet, Mail, Search, Calendar, ChevronRight, CheckCircle2, 
   HelpCircle, Settings, CheckSquare, PlusSquare, ArrowUpDown, X, Printer,
   UserCheck, CalendarRange, AlertTriangle, TrendingUp, UserMinus, Eye,
-  ZoomIn, ZoomOut, FileText, Check, Info, MessageSquare, Share2
+  ZoomIn, ZoomOut, FileText, Check, Info, MessageSquare, Share2,
+  Lock, Unlock, Users, Receipt, Coins, TrendingDown
 } from 'lucide-react';
 import { SchoolLogo } from './SchoolLogo';
 import { VoiceSearchButton } from './VoiceSearchButton';
@@ -24,7 +25,9 @@ export const ReportPanel: React.FC = React.memo(() => {
     currentUser,
     verifyPayment,
     activeTerm,
-    sendautomatedWhatsApp
+    sendautomatedWhatsApp,
+    examsPayments,
+    examsSettings
   } = useApp();
 
   const [dateFilter, setDateFilter] = useState<string>(''); // empty means All Days
@@ -33,11 +36,24 @@ export const ReportPanel: React.FC = React.memo(() => {
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   // Auditing & Month-To-Date (MTD) view states
-  const [auditViewMode, setAuditViewMode] = useState<'daily' | 'monthly'>('daily');
+  const [auditViewMode, setAuditViewMode] = useState<'daily' | 'monthly' | 'ledger' | 'teller'>('daily');
   const [auditSelectedMonth, setAuditSelectedMonth] = useState<string>(() => {
     return currentDate?.slice(0, 7) || '2026-06';
   });
   const [expandedDailyAuditDate, setExpandedDailyAuditDate] = useState<string>('');
+
+  // Unified Students Debt Billing Profile States
+  const [selectedLedgerStudentId, setSelectedLedgerStudentId] = useState<string | null>(null);
+  const [ledgerSearchQuery, setLedgerSearchQuery] = useState<string>('');
+  const [ledgerClassFilter, setLedgerClassFilter] = useState<string>('ALL');
+  const [ledgerStatusFilter, setLedgerStatusFilter] = useState<string>('ALL'); // ALL, SETTLED, DEBT, HIGH_DEBT
+
+  // End of Day Cashier Auditing & Teller Reconciliation States
+  const [auditDate, setAuditDate] = useState<string>(() => currentDate || new Date().toISOString().slice(0, 10));
+  const [selectedTellerForAudit, setSelectedTellerForAudit] = useState<string | null>(null);
+  const [tellerPhysicalCashInputs, setTellerPhysicalCashInputs] = useState<Record<string, string>>({});
+  const [tellerAuditNotes, setTellerAuditNotes] = useState<Record<string, string>>({});
+  const [tellerSignOffs, setTellerSignOffs] = useState<Record<string, { signedBy: string; timestamp: string }>>({});
 
   // Calendar states
   const [selectedMonthKey, setSelectedMonthKey] = useState<string>('');
@@ -80,6 +96,16 @@ export const ReportPanel: React.FC = React.memo(() => {
   const [termSummaryMemo, setTermSummaryMemo] = useState('Consolidated term billing record and verified registration statement. Please verify and resolve all outstanding balances with the administrative office.');
   const [termSummaryOnlyPending, setTermSummaryOnlyPending] = useState(false);
 
+  // Directors' Smart Debt Report states
+  const [showDirectorsDebtModal, setShowDirectorsDebtModal] = useState(false);
+  const [directorsSearchQuery, setDirectorsSearchQuery] = useState('');
+  const [directorsClassFilter, setDirectorsClassFilter] = useState('ALL');
+  const [directorsOnlyPaymentType, setDirectorsOnlyPaymentType] = useState('ALL'); // ALL, DAILY, TERM
+  const [directorsMinDebt, setDirectorsMinDebt] = useState<number>(0);
+  const [directorsSignatory, setDirectorsSignatory] = useState('Yakubu Hakeem (Headmaster)');
+  const [directorsChairperson, setDirectorsChairperson] = useState('Board of Directors Chairperson');
+  const [directorsNotes, setDirectorsNotes] = useState('Official consolidated student debt list compiled for the Board of Directors review. These balances reflect total outstanding tuition, legacy arrears, and exam fees as of the end of the term. Prioritize these accounts for recovery actions in preparation for the upcoming academic term.');
+
   // Group class categories
   const classes: StudentClass[] = [
     'Nursery', 'KG1', 'KG2',
@@ -97,11 +123,30 @@ export const ReportPanel: React.FC = React.memo(() => {
 
     // Search query
     if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      result = result.filter(p => 
-        p.studentName.toLowerCase().includes(query) ||
-        p.id.toLowerCase().includes(query)
-      );
+      const query = searchQuery.toLowerCase().trim();
+      const normalizedQuery = query.replace(/[-_ ]/g, '');
+      result = result.filter(p => {
+        const matchesNameOrId = 
+          p.studentName.toLowerCase().includes(query) ||
+          p.id.toLowerCase().includes(query);
+
+        const normalizedClass = p.class.toLowerCase().replace(/[-_ ]/g, '');
+        const matchesClass = 
+          normalizedClass === normalizedQuery || 
+          p.class.toLowerCase().includes(query) ||
+          (p.category && p.category.toLowerCase().includes(query));
+
+        let matchesStatus = false;
+        if (query === 'absent' || query === 'missing' || query === 'away') {
+          matchesStatus = !!p.isAbsent;
+        } else if (query === 'paid' || query === 'present' || query === 'checked' || query === 'checkin' || query === 'checked in' || query === 'checked-in' || query === 'verified') {
+          matchesStatus = !p.isAbsent && p.verified;
+        } else if (query === 'unverified' || query === 'pending') {
+          matchesStatus = !p.isAbsent && !p.verified;
+        }
+
+        return matchesNameOrId || matchesClass || matchesStatus;
+      });
     }
 
     // Date
@@ -146,11 +191,30 @@ export const ReportPanel: React.FC = React.memo(() => {
     // Search query
     const activeSearch = printSearchQuery.trim() ? printSearchQuery : searchQuery;
     if (activeSearch.trim()) {
-      const query = activeSearch.toLowerCase();
-      result = result.filter(p => 
-        p.studentName.toLowerCase().includes(query) ||
-        p.id.toLowerCase().includes(query)
-      );
+      const query = activeSearch.toLowerCase().trim();
+      const normalizedQuery = query.replace(/[-_ ]/g, '');
+      result = result.filter(p => {
+        const matchesNameOrId = 
+          p.studentName.toLowerCase().includes(query) ||
+          p.id.toLowerCase().includes(query);
+
+        const normalizedClass = p.class.toLowerCase().replace(/[-_ ]/g, '');
+        const matchesClass = 
+          normalizedClass === normalizedQuery || 
+          p.class.toLowerCase().includes(query) ||
+          (p.category && p.category.toLowerCase().includes(query));
+
+        let matchesStatus = false;
+        if (query === 'absent' || query === 'missing' || query === 'away') {
+          matchesStatus = !!p.isAbsent;
+        } else if (query === 'paid' || query === 'present' || query === 'checked' || query === 'checkin' || query === 'checked in' || query === 'checked-in' || query === 'verified') {
+          matchesStatus = !p.isAbsent && p.verified;
+        } else if (query === 'unverified' || query === 'pending') {
+          matchesStatus = !p.isAbsent && !p.verified;
+        }
+
+        return matchesNameOrId || matchesClass || matchesStatus;
+      });
     }
 
     if (printDateMode === 'custom') {
@@ -309,6 +373,218 @@ export const ReportPanel: React.FC = React.memo(() => {
       totalArrears
     };
   }, [termSummaryReportsByStudent]);
+
+  // Directors' Smart Debt Report data compilation
+  const directorsDebtCompiledData = useMemo(() => {
+    if (!activeTerm || !activeTerm.schoolDays) return [];
+
+    const holidays = activeTerm.publicHolidays || [];
+    const termSchoolDays = activeTerm.schoolDays;
+    const elapsedDays = termSchoolDays.filter(d => d <= currentDate);
+
+    return students.filter(s => s.active !== false).map(student => {
+      // Regular payments inside the active term
+      const studentPayments = payments.filter(p => p.studentId === student.id && termSchoolDays.includes(p.date));
+
+      // Unpaid days up to currentDate
+      const unpaidDays = elapsedDays.filter(dayStr => {
+        if (holidays.includes(dayStr)) return false;
+        const record = payments.find(p => p.studentId === student.id && p.date === dayStr);
+        return !record;
+      });
+      const unpaidCount = unpaidDays.length;
+
+      // Fees calculations
+      const isTermPayer = student.paymentType === 'Term';
+      const termFeeAmount = student.termFee || 350;
+      const legacyDebt = student.legacyDebt || 0;
+
+      let tuitionBilled = 0;
+      let tuitionPaid = 0;
+      let tuitionDue = 0;
+
+      if (isTermPayer) {
+        tuitionBilled = termFeeAmount + legacyDebt;
+        tuitionPaid = studentPayments.filter(p => !p.isAbsent && (includeUnverified || p.verified)).reduce((sum, p) => sum + p.amount, 0);
+        tuitionDue = Math.max(0, tuitionBilled - tuitionPaid);
+      } else {
+        tuitionPaid = studentPayments.filter(p => !p.isAbsent && (includeUnverified || p.verified)).reduce((sum, p) => sum + p.amount, 0);
+        const dailyRate = Math.max(0, 5 - (student.discount || 0));
+        tuitionDue = (unpaidCount * dailyRate) + legacyDebt;
+        tuitionBilled = tuitionPaid + tuitionDue;
+      }
+
+      // Exams fees calculations (from examsPayments and examsSettings)
+      const examsBilled = examsSettings?.classFees?.[student.class]?.feeCharged || 0;
+      const studentExamsPayments = (examsPayments || []).filter(p => p.studentId === student.id);
+      const examsPaid = studentExamsPayments.reduce((sum, p) => sum + p.amountPaid, 0);
+      const examsDue = Math.max(0, examsBilled - examsPaid);
+
+      const totalBilled = tuitionBilled + examsBilled;
+      const totalPaid = tuitionPaid + examsPaid;
+      const totalDue = tuitionDue + examsDue;
+
+      return {
+        student,
+        isTermPayer,
+        tuitionBilled,
+        tuitionPaid,
+        tuitionDue,
+        legacyDebt,
+        examsBilled,
+        examsPaid,
+        examsDue,
+        totalBilled,
+        totalPaid,
+        totalDue,
+        parentPhone: student.parentPhone || student.phone || 'N/A'
+      };
+    });
+  }, [students, payments, examsPayments, examsSettings, activeTerm, currentDate, includeUnverified]);
+
+  const filteredDirectorsDebt = useMemo(() => {
+    let result = [...directorsDebtCompiledData];
+
+    if (directorsSearchQuery.trim()) {
+      const q = directorsSearchQuery.toLowerCase().trim();
+      result = result.filter(item => 
+        item.student.name.toLowerCase().includes(q) ||
+        item.student.id.toLowerCase().includes(q)
+      );
+    }
+
+    if (directorsClassFilter !== 'ALL') {
+      result = result.filter(item => item.student.class === directorsClassFilter);
+    }
+
+    if (directorsOnlyPaymentType !== 'ALL') {
+      const isTerm = directorsOnlyPaymentType === 'TERM';
+      result = result.filter(item => item.isTermPayer === isTerm);
+    }
+
+    if (directorsMinDebt > 0) {
+      result = result.filter(item => item.totalDue >= directorsMinDebt);
+    }
+
+    return result.sort((a, b) => b.totalDue - a.totalDue);
+  }, [directorsDebtCompiledData, directorsSearchQuery, directorsClassFilter, directorsOnlyPaymentType, directorsMinDebt]);
+
+  // Compute stats for directors' report
+  const directorsReportTotals = useMemo(() => {
+    let totalBilled = 0;
+    let totalPaid = 0;
+    let totalDue = 0;
+    let totalTuitionDue = 0;
+    let totalExamsDue = 0;
+    let totalLegacyDebt = 0;
+    let debtorsCount = 0;
+
+    filteredDirectorsDebt.forEach(item => {
+      totalBilled += item.totalBilled;
+      totalPaid += item.totalPaid;
+      totalDue += item.totalDue;
+      totalTuitionDue += item.tuitionDue;
+      totalExamsDue += item.examsDue;
+      totalLegacyDebt += item.legacyDebt;
+      if (item.totalDue > 0) {
+        debtorsCount++;
+      }
+    });
+
+    const recoveryRate = totalBilled > 0 ? (totalPaid / totalBilled) * 100 : 100;
+
+    return {
+      totalBilled,
+      totalPaid,
+      totalDue,
+      totalTuitionDue,
+      totalExamsDue,
+      totalLegacyDebt,
+      debtorsCount,
+      recoveryRate
+    };
+  }, [filteredDirectorsDebt]);
+
+  // Class-wise groupings for the Directors' summary report
+  const directorsClassBreakdown = useMemo(() => {
+    const classMap: Record<string, { class: string; pupilsCount: number; debtorsCount: number; totalBilled: number; totalPaid: number; totalDue: number; tuitionDue: number; examsDue: number }> = {};
+    
+    classes.forEach(cls => {
+      classMap[cls] = {
+        class: cls,
+        pupilsCount: 0,
+        debtorsCount: 0,
+        totalBilled: 0,
+        totalPaid: 0,
+        totalDue: 0,
+        tuitionDue: 0,
+        examsDue: 0
+      };
+    });
+
+    directorsDebtCompiledData.forEach(item => {
+      const cls = item.student.class;
+      if (!classMap[cls]) {
+        classMap[cls] = {
+          class: cls,
+          pupilsCount: 0,
+          debtorsCount: 0,
+          totalBilled: 0,
+          totalPaid: 0,
+          totalDue: 0,
+          tuitionDue: 0,
+          examsDue: 0
+        };
+      }
+      classMap[cls].pupilsCount++;
+      if (item.totalDue > 0) {
+        classMap[cls].debtorsCount++;
+      }
+      classMap[cls].totalBilled += item.totalBilled;
+      classMap[cls].totalPaid += item.totalPaid;
+      classMap[cls].totalDue += item.totalDue;
+      classMap[cls].tuitionDue += item.tuitionDue;
+      classMap[cls].examsDue += item.examsDue;
+    });
+
+    return Object.values(classMap);
+  }, [directorsDebtCompiledData]);
+
+  const triggerDirectorsDebtCSV = () => {
+    if (filteredDirectorsDebt.length === 0) {
+      alert('The filtered directors ledger is empty. Modify filters before downloading.');
+      return;
+    }
+
+    let csvContent = "data:text/csv;charset=utf-8,\uFEFF"; // Include BOM
+    csvContent += "Student ID,Student Name,Class Grade,Payment Type,Parent Contact,Tuition Billed (GHC),Tuition Paid (GHC),Tuition Arrears (GHC),Exams Billed (GHC),Exams Paid (GHC),Exams Arrears (GHC),Total Combined Debt (GHC)\r\n";
+
+    filteredDirectorsDebt.forEach(item => {
+      const row = [
+        `="${item.student.id}"`,
+        `"${item.student.name.replace(/"/g, '""')}"`,
+        item.student.class,
+        item.isTermPayer ? 'Term Payer' : 'Daily Payer',
+        `="${item.parentPhone}"`,
+        item.tuitionBilled.toFixed(2),
+        item.tuitionPaid.toFixed(2),
+        item.tuitionDue.toFixed(2),
+        item.examsBilled.toFixed(2),
+        item.examsPaid.toFixed(2),
+        item.examsDue.toFixed(2),
+        item.totalDue.toFixed(2)
+      ];
+      csvContent += row.join(",") + "\r\n";
+    });
+
+    const encodedUri = encodeURI(csvContent);
+    const downloadAnchor = document.createElement("a");
+    downloadAnchor.setAttribute("href", encodedUri);
+    downloadAnchor.setAttribute("download", `BoardOfDirectors_StudentDebts_${activeTerm?.name.replace(/[^a-zA-Z0-9]/g, "_") || 'Term'}.csv`);
+    document.body.appendChild(downloadAnchor);
+    downloadAnchor.click();
+    document.body.removeChild(downloadAnchor);
+  };
 
   // Aggregate stats of filtered set
   const totalsInfo = useMemo(() => {
@@ -682,6 +958,149 @@ export const ReportPanel: React.FC = React.memo(() => {
       setSortField(field);
       setSortDirection('desc');
     }
+  };
+
+  const handlePrintStudentLedger = (studentId: string) => {
+    const item = consolidatedLedgerData.find(x => x.student.id === studentId);
+    if (!item) return;
+
+    const printWindow = window.open('', '_blank', 'width=850,height=850');
+    if (!printWindow) {
+      alert("Popup blocker prevented printing. Please enable popups.");
+      return;
+    }
+
+    const s = item.student;
+    const txRows = item.paymentsList.map(tx => `
+      <tr style="border-bottom: 1px solid #e5e7eb;">
+        <td style="padding: 10px; font-family: monospace;">${tx.date}</td>
+        <td style="padding: 10px; font-family: monospace;">${tx.id}</td>
+        <td style="padding: 10px;">${tx.collectedBy || 'Staff'}</td>
+        <td style="padding: 10px; font-weight: bold; font-family: monospace;">GHC ${tx.amount.toFixed(2)}</td>
+        <td style="padding: 10px; text-transform: uppercase; font-size: 10px; font-weight: bold; color: ${tx.verified ? '#047857' : '#b45309'};">
+          ${tx.verified ? 'Verified' : 'Pending'}
+        </td>
+      </tr>
+    `).join('');
+
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>LEDGER TRANSCRIPT: ${s.name}</title>
+          <style>
+            body { font-family: 'Inter', system-ui, sans-serif; color: #1f2937; margin: 40px; padding: 0; line-height: 1.5; }
+            .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px double #1f2937; padding-bottom: 20px; margin-bottom: 30px; }
+            .school-title { font-weight: 900; font-size: 20px; text-transform: uppercase; letter-spacing: -0.02em; }
+            .school-subtitle { font-size: 11px; color: #4b5563; font-weight: bold; margin-top: 4px; }
+            .meta-grid { display: grid; grid-template-cols: 1fr 1fr; gap: 20px; margin-bottom: 30px; }
+            .meta-box { background: #f9fafb; border: 1px solid #e5e7eb; padding: 15px; }
+            .meta-title { font-size: 9px; text-transform: uppercase; color: #6b7280; font-weight: 800; letter-spacing: 0.05em; margin-bottom: 6px; }
+            .meta-value { font-size: 13px; font-weight: bold; }
+            .invoice-summary { display: grid; grid-template-cols: repeat(3, 1fr); gap: 15px; margin-bottom: 30px; }
+            .summary-card { background: #f3f4f6; border-left: 4px solid #1f2937; padding: 15px; text-align: right; }
+            .summary-card-debt { background: #fee2e2; border-left-color: #ef4444; }
+            .summary-title { font-size: 9px; text-transform: uppercase; color: #6b7280; font-weight: 800; text-align: left; }
+            .summary-value { font-size: 18px; font-weight: 900; font-family: monospace; }
+            table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; margin-bottom: 40px; }
+            th { background: #1f2937; color: white; padding: 10px; font-weight: 800; text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em; }
+            .footer-notes { text-align: center; font-size: 10px; color: #6b7280; font-style: italic; border-top: 1px solid #e5e7eb; padding-top: 20px; margin-top: 50px; }
+            .sig-row { display: flex; justify-content: space-between; margin-top: 60px; font-size: 11px; }
+            .sig-line { border-top: 1px solid #1f2937; width: 200px; text-align: center; padding-top: 5px; font-weight: bold; }
+            @media print {
+              body { margin: 20px; }
+              button { display: none; }
+            }
+          </style>
+        </head>
+        <body>
+          <div style="text-align: right; margin-bottom: 20px;">
+            <button onclick="window.print()" style="background: #1f2937; color: white; border: none; padding: 10px 20px; font-weight: bold; cursor: pointer; text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em;">Print Statement</button>
+          </div>
+          <div class="header">
+            <div>
+              <div class="school-title">Saako Holy Child Academy</div>
+              <div class="school-subtitle">Official Student Billing & Consolidated Ledger Transcript</div>
+            </div>
+            <div style="text-align: right;">
+              <div style="font-weight: 800; font-size: 12px;">LEDGER STATEMENT</div>
+              <div style="font-size: 10px; color: #4b5563; font-family: monospace; margin-top: 4px;">DATE: ${currentDate}</div>
+            </div>
+          </div>
+
+          <div class="meta-grid">
+            <div class="meta-box">
+              <div class="meta-title">Pupil Academic Profile</div>
+              <div class="meta-value" style="font-size: 15px; color: #111827; margin-bottom: 4px;">${s.name}</div>
+              <div style="font-size: 11px; color: #4b5563;">
+                ID: <span style="font-family: monospace; font-weight: bold;">${s.id}</span> | Class: <strong>${s.class} (${s.category})</strong><br/>
+                Roll Number: <strong>${s.rollNumber || 'N/A'}</strong> | Gender: <strong>${s.gender || 'N/A'}</strong>
+              </div>
+            </div>
+            <div class="meta-box">
+              <div class="meta-title">Billing Configuration</div>
+              <div class="meta-value">${item.isTermPayer ? 'Term-based Scheme' : 'Daily Gate Scheme'}</div>
+              <div style="font-size: 11px; color: #4b5563; margin-top: 4px;">
+                Termly Flat Rate: <strong>GHC ${item.termFeeAmount.toFixed(2)}</strong><br/>
+                Legacy Arrears Carried: <strong>GHC ${item.legacyDebt.toFixed(2)}</strong>
+              </div>
+            </div>
+          </div>
+
+          <div class="invoice-summary">
+            <div class="summary-card">
+              <div class="summary-title">Cumulative Billed</div>
+              <div class="summary-value">GHC ${item.totalCharged.toFixed(2)}</div>
+            </div>
+            <div class="summary-card">
+              <div class="summary-title">Total Payments Cleared</div>
+              <div class="summary-value" style="color: #15803d;">GHC ${item.totalPaid.toFixed(2)}</div>
+            </div>
+            <div class="summary-card summary-card-debt">
+              <div class="summary-title" style="color: #b91c1c;">Outstanding Debt Due</div>
+              <div class="summary-value" style="color: #b91c1c;">GHC ${item.totalDue.toFixed(2)}</div>
+            </div>
+          </div>
+
+          <div style="font-weight: bold; font-size: 13px; text-transform: uppercase; letter-spacing: 0.02em; margin-bottom: 12px; border-bottom: 1px solid #1f2937; padding-bottom: 5px;">Itemized Payment Ledger History</div>
+          ${item.paymentsList.length === 0 ? `
+            <div style="padding: 30px; text-align: center; color: #6b7280; font-weight: bold; font-size: 13px; border: 2px dashed #e5e7eb;">
+              No payment ledger entries matching this academic term.
+            </div>
+          ` : `
+            <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; margin-bottom: 40px;">
+              <thead>
+                <tr>
+                  <th style="background: #1f2937; color: white; padding: 10px; font-weight: 800; text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em;">Date</th>
+                  <th style="background: #1f2937; color: white; padding: 10px; font-weight: 800; text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em;">Receipt ID</th>
+                  <th style="background: #1f2937; color: white; padding: 10px; font-weight: 800; text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em;">Collected By</th>
+                  <th style="background: #1f2937; color: white; padding: 10px; font-weight: 800; text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em;">Amount Paid</th>
+                  <th style="background: #1f2937; color: white; padding: 10px; font-weight: 800; text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em;">Verification</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${txRows}
+              </tbody>
+            </table>
+          `}
+
+          <div class="sig-row">
+            <div>
+              <div class="sig-line">Administrative Registrar</div>
+              <div style="font-size: 9px; color: #6b7280; text-align: center; margin-top: 3px;">Billing Clearance Desk</div>
+            </div>
+            <div>
+              <div class="sig-line">Official School Stamp</div>
+              <div style="font-size: 9px; color: #6b7280; text-align: center; margin-top: 3px;">Saako Holy Child Academy</div>
+            </div>
+          </div>
+
+          <div class="footer-notes">
+            "This document is an official certified billing transcript generated directly from Saako Holy Child Academy financial core. Please resolve any outstanding balances with the bursar to ensure check-in compliance."
+          </div>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
   };
 
   const handlePrintReport = () => {
@@ -1073,6 +1492,147 @@ export const ReportPanel: React.FC = React.memo(() => {
     }, 1200);
   };
 
+  // 1. Consolidated Ledger Calculations (Unified Student Debt Billing Profile)
+  const consolidatedLedgerData = useMemo(() => {
+    if (!activeTerm || !activeTerm.schoolDays) return [];
+
+    const holidays = activeTerm.publicHolidays || [];
+    const termSchoolDays = activeTerm.schoolDays;
+
+    return students.filter(s => s.active !== false).map(student => {
+      // Find payments for this student inside the active term
+      const studentPayments = payments.filter(p => p.studentId === student.id && termSchoolDays.includes(p.date));
+      
+      const presentPayments = studentPayments.filter(p => !p.isAbsent && p.verified);
+      const unverifiedPayments = studentPayments.filter(p => !p.isAbsent && !p.verified);
+      const absentPayments = studentPayments.filter(p => p.isAbsent);
+
+      const presentCount = presentPayments.length + unverifiedPayments.length;
+      const absentCount = absentPayments.length;
+      
+      // School days elapsed up to currentDate
+      const elapsedDays = termSchoolDays.filter(d => d <= currentDate);
+
+      // Unpaid days up to currentDate
+      const unpaidDays = elapsedDays.filter(dayStr => {
+        if (holidays.includes(dayStr)) return false;
+        const record = payments.find(p => p.studentId === student.id && p.date === dayStr);
+        return !record;
+      });
+      const unpaidCount = unpaidDays.length;
+
+      // Fees calculations
+      const isTermPayer = student.paymentType === 'Term';
+      const termFeeAmount = student.termFee || 350;
+      const legacyDebt = student.legacyDebt || 0;
+
+      let totalCharged = 0;
+      let totalPaid = 0;
+      let totalDue = 0;
+
+      if (isTermPayer) {
+        totalCharged = termFeeAmount + legacyDebt;
+        totalPaid = studentPayments.filter(p => !p.isAbsent).reduce((sum, p) => sum + p.amount, 0);
+        totalDue = Math.max(0, totalCharged - totalPaid);
+      } else {
+        totalPaid = studentPayments.filter(p => !p.isAbsent).reduce((sum, p) => sum + p.amount, 0);
+        const dailyRate = Math.max(0, 5 - (student.discount || 0));
+        totalDue = (unpaidCount * dailyRate) + legacyDebt;
+        totalCharged = totalPaid + totalDue;
+      }
+
+      // Status classification
+      let status: 'SETTLED' | 'ACTIVE_BALANCE' | 'HIGH_DEBT' = 'SETTLED';
+      if (totalDue > 0) {
+        const threshold = 50;
+        status = totalDue >= threshold ? 'HIGH_DEBT' : 'ACTIVE_BALANCE';
+      }
+
+      return {
+        student,
+        presentCount,
+        absentCount,
+        unpaidCount,
+        isTermPayer,
+        termFeeAmount,
+        legacyDebt,
+        totalCharged,
+        totalPaid,
+        totalDue,
+        status,
+        paymentsList: studentPayments.sort((a, b) => b.date.localeCompare(a.date))
+      };
+    }).sort((a, b) => a.student.name.localeCompare(b.student.name));
+  }, [students, payments, activeTerm, currentDate]);
+
+  const filteredConsolidatedLedger = useMemo(() => {
+    let result = [...consolidatedLedgerData];
+
+    if (ledgerClassFilter !== 'ALL') {
+      result = result.filter(item => item.student.class === ledgerClassFilter);
+    }
+
+    if (ledgerStatusFilter !== 'ALL') {
+      result = result.filter(item => item.status === ledgerStatusFilter);
+    }
+
+    if (ledgerSearchQuery.trim()) {
+      const q = ledgerSearchQuery.toLowerCase().trim();
+      result = result.filter(item => 
+        item.student.name.toLowerCase().includes(q) ||
+        item.student.id.toLowerCase().includes(q) ||
+        (item.student.rollNumber && item.student.rollNumber.toLowerCase().includes(q))
+      );
+    }
+
+    return result;
+  }, [consolidatedLedgerData, ledgerClassFilter, ledgerStatusFilter, ledgerSearchQuery]);
+
+  // 2. Cashier Auditing / Teller Reconciliation Calculations
+  const cashierAuditingData = useMemo(() => {
+    const dailyPayments = payments.filter(p => p.date === auditDate && !p.isAbsent);
+    const groups: Record<string, {
+      cashierName: string;
+      totalPaymentsCount: number;
+      verifiedCount: number;
+      unverifiedCount: number;
+      systemTotalCollected: number;
+      verifiedAmount: number;
+      unverifiedAmount: number;
+      transactionsList: PaymentRecord[];
+    }> = {};
+
+    dailyPayments.forEach(p => {
+      const cashier = p.collectedBy || 'Unknown Cashier';
+      if (!groups[cashier]) {
+        groups[cashier] = {
+          cashierName: cashier,
+          totalPaymentsCount: 0,
+          verifiedCount: 0,
+          unverifiedCount: 0,
+          systemTotalCollected: 0,
+          verifiedAmount: 0,
+          unverifiedAmount: 0,
+          transactionsList: []
+        };
+      }
+      
+      groups[cashier].totalPaymentsCount += 1;
+      groups[cashier].systemTotalCollected += p.amount;
+      groups[cashier].transactionsList.push(p);
+
+      if (p.verified) {
+        groups[cashier].verifiedCount += 1;
+        groups[cashier].verifiedAmount += p.amount;
+      } else {
+        groups[cashier].unverifiedCount += 1;
+        groups[cashier].unverifiedAmount += p.amount;
+      }
+    });
+
+    return Object.values(groups).sort((a, b) => b.systemTotalCollected - a.systemTotalCollected);
+  }, [payments, auditDate]);
+
   return (
     <div className="space-y-6 font-sans">
       {/* Top action header card */}
@@ -1149,6 +1709,19 @@ export const ReportPanel: React.FC = React.memo(() => {
             <FileText size={14} /> Term Summary PDF
           </button>
 
+          {/* Directors' Smart Debt PDF button */}
+          <button
+            onClick={() => {
+              setDirectorsSearchQuery(searchQuery);
+              setShowDirectorsDebtModal(true);
+            }}
+            className="flex-1 sm:flex-initial text-[10px] font-black bg-neutral-950 hover:bg-neutral-850 hover:text-white text-amber-400 py-3.5 px-4 transition-all border-2 border-neutral-800 hover:border-amber-400 uppercase tracking-widest cursor-pointer flex items-center justify-center gap-1.5"
+            title="Generate a comprehensive school-wide student debt ledger for the Board of Directors"
+            id="btn-directors-debt-summary"
+          >
+            <FileText size={14} className="text-amber-400" /> Directors' Board Debt Summary
+          </button>
+
           {/* Download CSV audit core */}
           <button
             onClick={triggerExcelExport}
@@ -1185,14 +1758,14 @@ export const ReportPanel: React.FC = React.memo(() => {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {/* Query search */}
           <div>
-            <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">Student Name or ID</label>
+            <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">Name, ID, Class, or Status</label>
             <div className="relative">
               <Search className="absolute left-3.5 top-3 text-neutral-500" size={14} />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Type 'Kojo' or ID..."
+                placeholder="Search by name, ID, class, or status (paid, absent)..."
                 className="w-full bg-neutral-950 border-2 border-neutral-800 py-2.5 pl-9 pr-3 text-xs outline-none text-white focus:border-amber-400 font-mono"
               />
             </div>
@@ -1679,6 +2252,30 @@ export const ReportPanel: React.FC = React.memo(() => {
             <TrendingUp size={12} />
             Monthly Summary MTD View
           </button>
+          <button
+            type="button"
+            onClick={() => setAuditViewMode('ledger')}
+            className={`flex-1 md:flex-initial px-4 py-2 text-[10px] uppercase font-mono font-black tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+              auditViewMode === 'ledger'
+                ? 'bg-amber-400 text-black'
+                : 'text-neutral-400 hover:text-white'
+            }`}
+          >
+            <Users size={12} />
+            Consolidated Ledger
+          </button>
+          <button
+            type="button"
+            onClick={() => setAuditViewMode('teller')}
+            className={`flex-1 md:flex-initial px-4 py-2 text-[10px] uppercase font-mono font-black tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+              auditViewMode === 'teller'
+                ? 'bg-amber-400 text-black'
+                : 'text-neutral-400 hover:text-white'
+            }`}
+          >
+            <Coins size={12} />
+            Teller Reconciliation
+          </button>
         </div>
       </div>
 
@@ -1757,7 +2354,7 @@ export const ReportPanel: React.FC = React.memo(() => {
             </table>
           </div>
         </div>
-      ) : (
+      ) : auditViewMode === 'monthly' ? (
         /* Monthly Aggregated MTD Audit View */
         <div className="bg-neutral-900 border-4 border-neutral-800 p-6 space-y-6">
           {/* Month selector and main numbers overview */}
@@ -1939,6 +2536,482 @@ export const ReportPanel: React.FC = React.memo(() => {
             </div>
           </div>
         </div>
+      ) : auditViewMode === 'ledger' ? (
+        /* ==================== 1. CONSOLIDATED LEDGER VIEW ==================== */
+        <div className="space-y-6">
+          {/* Quick Metrics Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+            <div className="bg-neutral-900 border-4 border-neutral-800 p-4 space-y-2 font-mono">
+              <span className="text-neutral-500 uppercase text-[9px] block tracking-widest font-black">Total Active Pupils</span>
+              <span className="text-xl font-black text-white">{students.filter(s => s.active).length} Pupils</span>
+              <span className="text-[10px] text-neutral-450 block font-sans">Enrolled in database</span>
+            </div>
+            <div className="bg-neutral-900 border-4 border-neutral-800 p-4 space-y-2 font-mono">
+              <span className="text-neutral-500 uppercase text-[9px] block tracking-widest font-black">Total Billed Charge</span>
+              <span className="text-xl font-black text-amber-400">GHC {consolidatedLedgerData.reduce((sum, item) => sum + item.totalCharged, 0).toFixed(2)}</span>
+              <span className="text-[10px] text-neutral-450 block font-sans">Term + Legacy + Daily</span>
+            </div>
+            <div className="bg-neutral-900 border-4 border-neutral-800 p-4 space-y-2 font-mono">
+              <span className="text-neutral-500 uppercase text-[9px] block tracking-widest font-black">Total Payments Cleared</span>
+              <span className="text-xl font-black text-emerald-400 font-mono">GHC {consolidatedLedgerData.reduce((sum, item) => sum + item.totalPaid, 0).toFixed(2)}</span>
+              <span className="text-[10px] text-neutral-450 block font-sans">Verified receipts matching</span>
+            </div>
+            <div className="bg-neutral-900 border-4 border-neutral-800 p-4 space-y-2 font-mono">
+              <span className="text-xl font-black text-red-400 font-mono">GHC {consolidatedLedgerData.reduce((sum, item) => sum + item.totalDue, 0).toFixed(2)}</span>
+              <span className="text-neutral-500 uppercase text-[9px] block tracking-widest font-black">Consolidated Debt Due</span>
+              <span className="text-[10px] text-neutral-450 block font-sans">Outstanding system arrears</span>
+            </div>
+            <div className="bg-neutral-900 border-4 border-neutral-800 p-4 space-y-2 font-mono">
+              <span className="text-neutral-500 uppercase text-[9px] block tracking-widest font-black">High-Debt Accounts</span>
+              <span className="text-xl font-black text-amber-500">{consolidatedLedgerData.filter(item => item.status === 'HIGH_DEBT').length} Pupils</span>
+              <span className="text-[10px] text-neutral-450 block font-sans">Balance ≥ GHC 50.00</span>
+            </div>
+          </div>
+
+          {/* Filters Area */}
+          <div className="bg-neutral-900 border-4 border-neutral-800 p-6 space-y-4">
+            <h4 className="text-xs font-black text-neutral-450 uppercase font-mono tracking-widest">Consolidated Ledger Filters</h4>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">Search Name or ID</label>
+                <div className="relative">
+                  <Search className="absolute left-3.5 top-3 text-neutral-500" size={14} />
+                  <input
+                    type="text"
+                    value={ledgerSearchQuery}
+                    onChange={(e) => setLedgerSearchQuery(e.target.value)}
+                    placeholder="Search pupil name or ID..."
+                    className="w-full bg-neutral-950 border-2 border-neutral-800 py-2.5 pl-9 pr-3 text-xs outline-none text-white focus:border-amber-400 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">Class Grade Filter</label>
+                <select
+                  value={ledgerClassFilter}
+                  onChange={(e) => setLedgerClassFilter(e.target.value)}
+                  className="w-full bg-neutral-950 border-2 border-neutral-800 py-2.5 px-3 text-xs outline-none text-white focus:border-amber-400"
+                >
+                  <option value="ALL">All Grades</option>
+                  {classes.map(cls => (
+                    <option key={cls} value={cls}>{cls}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">Debt Status Filter</label>
+                <select
+                  value={ledgerStatusFilter}
+                  onChange={(e) => setLedgerStatusFilter(e.target.value)}
+                  className="w-full bg-neutral-950 border-2 border-neutral-800 py-2.5 px-3 text-xs outline-none text-white focus:border-amber-400"
+                >
+                  <option value="ALL">All Accounts</option>
+                  <option value="SETTLED">Fully Settled (GHC 0.00)</option>
+                  <option value="ACTIVE_BALANCE">Outstanding Arrears (&lt; GHC 50.00)</option>
+                  <option value="HIGH_DEBT">High Debt Flagged (≥ GHC 50.00)</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Main Ledger Table */}
+          <div className="bg-neutral-900 border-4 border-neutral-800 overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="bg-neutral-950 border-b-2 border-neutral-800 text-[10px] font-black text-neutral-400 uppercase tracking-widest font-mono">
+                    <th className="p-4">Student Info</th>
+                    <th className="p-4">Class / Category</th>
+                    <th className="p-4">Billing Scheme</th>
+                    <th className="p-4 text-right">Legacy Debt</th>
+                    <th className="p-4 text-right">Total Charged</th>
+                    <th className="p-4 text-right">Total Paid</th>
+                    <th className="p-4 text-right">Balance Due</th>
+                    <th className="p-4 text-center">Audit Status</th>
+                    <th className="p-4 text-center">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-neutral-850 text-neutral-300">
+                  {filteredConsolidatedLedger.length === 0 ? (
+                    <tr>
+                      <td colSpan={9} className="text-center py-12 text-neutral-500 font-black uppercase tracking-widest text-xs font-mono">
+                        No billing profiles match your query filters.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredConsolidatedLedger.map((item) => {
+                      const s = item.student;
+                      return (
+                        <tr key={s.id} className="hover:bg-neutral-950/40 transition-colors">
+                          <td className="p-4 font-bold text-white">
+                            <div className="font-sans text-sm">{s.name}</div>
+                            <div className="text-[10px] font-mono text-neutral-400">{s.id} {s.rollNumber ? `• Roll: ${s.rollNumber}` : ''}</div>
+                          </td>
+                          <td className="p-4 font-mono">
+                            <span className="text-amber-400 font-bold">{s.class}</span>
+                            <span className="text-neutral-500 text-[10px] block font-sans">{s.category}</span>
+                          </td>
+                          <td className="p-4 font-bold">
+                            {item.isTermPayer ? (
+                              <span className="inline-block text-[9px] uppercase px-2 py-0.5 bg-green-950 text-green-400 border border-green-900">
+                                Term: GHC {item.termFeeAmount}
+                              </span>
+                            ) : (
+                              <span className="inline-block text-[9px] uppercase px-2 py-0.5 bg-blue-950 text-blue-400 border border-blue-900">
+                                Daily: GHC 5 Gate
+                              </span>
+                            )}
+                          </td>
+                          <td className="p-4 text-right font-mono text-neutral-400">
+                            GHC {item.legacyDebt.toFixed(2)}
+                          </td>
+                          <td className="p-4 text-right font-mono text-neutral-200">
+                            GHC {item.totalCharged.toFixed(2)}
+                          </td>
+                          <td className="p-4 text-right font-mono text-emerald-400">
+                            GHC {item.totalPaid.toFixed(2)}
+                          </td>
+                          <td className={`p-4 text-right font-mono font-black ${item.totalDue > 0 ? 'text-red-400' : 'text-neutral-400'}`}>
+                            GHC {item.totalDue.toFixed(2)}
+                          </td>
+                          <td className="p-4 text-center">
+                            {item.status === 'SETTLED' ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-neutral-950 text-emerald-400 text-[9px] uppercase tracking-widest font-black border border-neutral-850">
+                                <CheckCircle2 size={10} /> Settle
+                              </span>
+                            ) : item.status === 'HIGH_DEBT' ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-red-950/40 text-red-400 text-[9px] uppercase tracking-widest font-black border border-red-900/40 animate-pulse">
+                                <AlertTriangle size={10} /> High Debt
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-950/40 text-amber-400 text-[9px] uppercase tracking-widest font-black border border-amber-900/40">
+                                <Info size={10} /> Arrears
+                              </span>
+                            )}
+                          </td>
+                          <td className="p-4 text-center">
+                            <div className="flex justify-center items-center gap-2">
+                              <button
+                                onClick={() => setSelectedLedgerStudentId(s.id)}
+                                className="px-3 py-1.5 text-[9px] font-black bg-neutral-950 hover:bg-neutral-850 hover:text-white border border-neutral-800 uppercase tracking-widest cursor-pointer"
+                                title="View granular ledger details, invoices and print transcript"
+                              >
+                                View Ledger
+                              </button>
+                              
+                              {s.guardianPhone && item.totalDue > 0 && (
+                                <button
+                                  onClick={async () => {
+                                    const message = `Reminder: Your ward ${s.name} has an outstanding school fee balance of GHC ${item.totalDue.toFixed(2)} (Total Billed: GHC ${item.totalCharged.toFixed(2)}, Paid: GHC ${item.totalPaid.toFixed(2)}). Please settle this balance promptly. Thank you.`;
+                                    const resp = await sendautomatedWhatsApp(s.guardianPhone || '', message, s.id, s.name, 'debt-reminder');
+                                    if (resp.success) {
+                                      alert(`WhatsApp debt warning sent to guardian phone: ${s.guardianPhone}`);
+                                    } else {
+                                      alert(`Error dispatching warning: ${resp.error}`);
+                                    }
+                                  }}
+                                  className="px-2.5 py-1.5 text-[9px] font-black bg-emerald-600 hover:bg-emerald-500 text-white uppercase tracking-widest cursor-pointer flex items-center gap-1"
+                                  title="Send instant WhatsApp balance statement to guardian"
+                                >
+                                  <MessageSquare size={10} /> Alert
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      ) : (
+        /* ==================== 2. END OF DAY CASHIER AUDITING / TELLER RECONCILIATION ==================== */
+        <div className="space-y-6">
+          {/* Calendar selector and stats row */}
+          <div className="bg-neutral-900 border-4 border-neutral-800 p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+            <div className="space-y-1.5">
+              <span className="text-[10px] text-amber-500 font-mono tracking-widest font-black uppercase block">AUDITING COMMAND CONSOLE</span>
+              <h3 className="text-lg font-black text-white uppercase tracking-wider flex items-center gap-2">
+                <Coins size={20} className="text-amber-400 animate-bounce" /> Cashier Auditing & Teller Reconciliation
+              </h3>
+              <p className="text-xs text-neutral-450 font-sans font-bold leading-normal">
+                Select a business day to audit physical cash received, calculate variances, and lock teller sign-offs.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 bg-neutral-950 p-2 border border-neutral-850 w-full md:w-auto">
+              <Calendar size={14} className="text-neutral-500 ml-1" />
+              <input
+                type="date"
+                value={auditDate}
+                onChange={(e) => {
+                  setAuditDate(e.target.value);
+                  setSelectedTellerForAudit(null);
+                }}
+                className="bg-transparent border-0 text-xs font-mono font-black text-white outline-none focus:ring-0 cursor-pointer"
+              />
+            </div>
+          </div>
+
+          {/* Aggregated Daily Teller Stats */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="bg-neutral-900 border-4 border-neutral-800 p-4 space-y-1.5 font-mono">
+              <span className="text-neutral-500 uppercase text-[8.5px] block font-black">Audit Business Date</span>
+              <span className="text-xl font-black text-amber-400">{auditDate}</span>
+              <span className="text-[10px] text-neutral-450 font-sans block">Currently inspected day</span>
+            </div>
+            <div className="bg-neutral-900 border-4 border-neutral-800 p-4 space-y-1.5 font-mono">
+              <span className="text-neutral-500 uppercase text-[8.5px] block font-black">Daily System Collections</span>
+              <span className="text-xl font-black text-white">
+                GHC {cashierAuditingData.reduce((sum, item) => sum + item.systemTotalCollected, 0).toFixed(2)}
+              </span>
+              <span className="text-[10px] text-neutral-450 font-sans block">
+                {cashierAuditingData.reduce((sum, item) => sum + item.totalPaymentsCount, 0)} total receipts filed
+              </span>
+            </div>
+            <div className="bg-neutral-900 border-4 border-neutral-800 p-4 space-y-1.5 font-mono">
+              <span className="text-neutral-500 uppercase text-[8.5px] block font-black">Physical Cash Audited</span>
+              <span className="text-xl font-black text-emerald-400">
+                GHC {cashierAuditingData.reduce((sum, item) => {
+                  const inputVal = parseFloat(tellerPhysicalCashInputs[item.cashierName] || '');
+                  return sum + (isNaN(inputVal) ? item.systemTotalCollected : inputVal);
+                }, 0).toFixed(2)}
+              </span>
+              <span className="text-[10px] text-neutral-450 font-sans block">Reported in drawers</span>
+            </div>
+            <div className="bg-neutral-900 border-4 border-neutral-800 p-4 space-y-1.5 font-mono">
+              <span className="text-neutral-500 uppercase text-[8.5px] block font-black">Teller Variance Sum</span>
+              {(() => {
+                const totalVariance = cashierAuditingData.reduce((sum, item) => {
+                  const inputVal = parseFloat(tellerPhysicalCashInputs[item.cashierName] || '');
+                  const physicalVal = isNaN(inputVal) ? item.systemTotalCollected : inputVal;
+                  return sum + (physicalVal - item.systemTotalCollected);
+                }, 0);
+                return (
+                  <span className={`text-xl font-black block ${totalVariance === 0 ? 'text-neutral-300' : totalVariance > 0 ? 'text-amber-400' : 'text-red-400'}`}>
+                    GHC {totalVariance.toFixed(2)} {totalVariance === 0 ? '(Balanced)' : totalVariance > 0 ? '(Overage)' : '(Shortage)'}
+                  </span>
+                );
+              })()}
+              <span className="text-[10px] text-neutral-450 font-sans block">Total physical cash vs system ledger</span>
+            </div>
+          </div>
+
+          {/* Cashier List and Reconciliation Panel */}
+          <div className="bg-neutral-900 border-4 border-neutral-800 p-6 space-y-4">
+            <h4 className="text-xs font-black text-neutral-450 uppercase font-mono tracking-widest">Active Tellers & Drawer Verifications</h4>
+            
+            {cashierAuditingData.length === 0 ? (
+              <div className="p-12 text-center text-neutral-500 font-black uppercase tracking-widest font-mono border-2 border-dashed border-neutral-800 bg-neutral-950/40 text-xs">
+                No fee collections logged by any cashier/teacher on this date ({auditDate}).
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {cashierAuditingData.map((cashier) => {
+                  const name = cashier.cashierName;
+                  const physicalCash = parseFloat(tellerPhysicalCashInputs[name] || '');
+                  const isInputFilled = !isNaN(physicalCash);
+                  const activePhysical = isInputFilled ? physicalCash : cashier.systemTotalCollected;
+                  const variance = activePhysical - cashier.systemTotalCollected;
+                  const isSigned = !!tellerSignOffs[name];
+
+                  return (
+                    <div key={name} className="bg-neutral-950 border border-neutral-800 p-5 space-y-4">
+                      {/* Cashier Metadata row */}
+                      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-neutral-900 pb-3">
+                        <div className="space-y-1">
+                          <span className="text-[10px] text-amber-500 font-mono tracking-widest font-black uppercase block">Teller Profile</span>
+                          <h5 className="text-base font-black text-white">{name}</h5>
+                        </div>
+
+                        <div className="flex flex-wrap gap-2 text-[10px]">
+                          <div className="bg-neutral-900 px-3 py-1.5 border border-neutral-850">
+                            <span className="text-neutral-500 uppercase block text-[8px]">Receipts Issued</span>
+                            <span className="text-white font-extrabold">{cashier.totalPaymentsCount} check-ins</span>
+                          </div>
+                          <div className="bg-neutral-900 px-3 py-1.5 border border-neutral-850">
+                            <span className="text-neutral-500 uppercase block text-[8px]">System GHC Amount</span>
+                            <span className="text-amber-400 font-extrabold font-mono">GHC {cashier.systemTotalCollected.toFixed(2)}</span>
+                          </div>
+                          <div className="bg-neutral-900 px-3 py-1.5 border border-neutral-850">
+                            <span className="text-neutral-500 uppercase block text-[8px]">Unverified Entries</span>
+                            <span className="text-amber-500 font-extrabold">{cashier.unverifiedCount} rows</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Audit input parameters */}
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        {/* Physical Drawer Cash Counter */}
+                        <div className="space-y-1.5">
+                          <label className="block text-[10px] font-black text-neutral-450 uppercase font-mono tracking-widest">Physical Cash Audited (GHC)</label>
+                          <input
+                            type="number"
+                            disabled={isSigned}
+                            value={tellerPhysicalCashInputs[name] || ''}
+                            onChange={(e) => {
+                              setTellerPhysicalCashInputs({
+                                ...tellerPhysicalCashInputs,
+                                [name]: e.target.value
+                              });
+                            }}
+                            placeholder={`Expected: GHC ${cashier.systemTotalCollected.toFixed(2)}`}
+                            className="w-full bg-neutral-900 border-2 border-neutral-800 py-2.5 px-3 text-xs outline-none text-white focus:border-amber-400 font-mono"
+                          />
+                        </div>
+
+                        {/* Audit Log Comments */}
+                        <div className="space-y-1.5">
+                          <label className="block text-[10px] font-black text-neutral-450 uppercase font-mono tracking-widest">Teller Audit Notes</label>
+                          <textarea
+                            disabled={isSigned}
+                            rows={1}
+                            value={tellerAuditNotes[name] || ''}
+                            onChange={(e) => {
+                              setTellerAuditNotes({
+                                ...tellerAuditNotes,
+                                [name]: e.target.value
+                              });
+                            }}
+                            placeholder="Add drawer remarks, shortages/overages justifications..."
+                            className="w-full bg-neutral-900 border-2 border-neutral-800 py-2.5 px-3 text-xs outline-none text-white focus:border-amber-400 font-sans"
+                          />
+                        </div>
+
+                        {/* Variance and Actions */}
+                        <div className="flex flex-col justify-end space-y-1">
+                          <span className="text-[10px] font-black text-neutral-450 uppercase font-mono tracking-widest block">Variance Reconciliation</span>
+                          <div className="flex items-center gap-3">
+                            <div className={`flex-1 py-2 px-3 border-2 font-mono text-xs font-black uppercase text-center ${
+                              variance === 0 
+                                ? 'bg-emerald-950/20 text-emerald-400 border-emerald-900/40' 
+                                : variance > 0 
+                                ? 'bg-amber-950/20 text-amber-400 border-amber-900/40' 
+                                : 'bg-red-950/20 text-red-400 border-red-900/40'
+                            }`}>
+                              {variance === 0 ? 'Balanced' : variance > 0 ? `Overage: +GHC ${variance.toFixed(2)}` : `Shortage: GHC ${variance.toFixed(2)}`}
+                            </div>
+
+                            {/* Sign-off locking triggers */}
+                            {isSigned ? (
+                              <button
+                                onClick={() => {
+                                  const updated = { ...tellerSignOffs };
+                                  delete updated[name];
+                                  setTellerSignOffs(updated);
+                                }}
+                                className="px-3 py-2.5 text-[9px] font-black bg-red-950/40 hover:bg-red-900/40 text-red-400 border border-red-900/40 uppercase tracking-widest cursor-pointer flex items-center gap-1 shrink-0"
+                              >
+                                <Unlock size={12} /> Unlock
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  setTellerSignOffs({
+                                    ...tellerSignOffs,
+                                    [name]: {
+                                      signedBy: currentUser?.name || 'Administrator',
+                                      timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+                                    }
+                                  });
+                                }}
+                                className="px-3 py-2.5 text-[9px] font-black bg-white hover:bg-amber-400 text-black uppercase tracking-widest cursor-pointer flex items-center gap-1 shrink-0"
+                              >
+                                <Lock size={12} /> Sign & Lock
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Cashier Sign-off Banner if locked */}
+                      {isSigned && (
+                        <div className="p-3 bg-neutral-900 border border-neutral-850 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 text-[10px] font-mono">
+                          <span className="text-emerald-400 font-extrabold flex items-center gap-1.5 uppercase tracking-wider">
+                            <CheckCircle2 size={12} /> Reconciliation Audited and Locked
+                          </span>
+                          <span className="text-neutral-400">
+                            Signed off by <strong className="text-white">{tellerSignOffs[name].signedBy}</strong> at {tellerSignOffs[name].timestamp}
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Transaction details drawer selection */}
+                      <div className="flex justify-between items-center bg-neutral-900/40 border border-neutral-850/40 p-3">
+                        <span className="text-[10px] text-neutral-400 font-semibold font-mono">Inspect teller payments list for granular verification:</span>
+                        <button
+                          onClick={() => {
+                            if (selectedTellerForAudit === name) {
+                              setSelectedTellerForAudit(null);
+                            } else {
+                              setSelectedTellerForAudit(name);
+                            }
+                          }}
+                          className="px-3 py-1.5 text-[9px] font-black bg-neutral-950 hover:bg-neutral-850 text-neutral-300 border border-neutral-800 uppercase tracking-widest cursor-pointer"
+                        >
+                          {selectedTellerForAudit === name ? 'Collapse List' : 'Expand Transactions'}
+                        </button>
+                      </div>
+
+                      {/* Selected Teller's Daily Transaction List */}
+                      {selectedTellerForAudit === name && (
+                        <div className="border border-neutral-850 overflow-hidden bg-neutral-950">
+                          <div className="bg-neutral-900 p-3 border-b border-neutral-850 flex justify-between items-center">
+                            <span className="text-[10px] font-black text-white uppercase tracking-wider font-mono">Granular Payments Sheet ({name})</span>
+                            <span className="text-[9.5px] text-amber-500 font-mono font-bold">Unverified items can be approved directly below</span>
+                          </div>
+                          
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left text-xs">
+                              <thead>
+                                <tr className="bg-neutral-950 border-b border-neutral-850 text-[9px] font-black text-neutral-500 uppercase tracking-widest font-mono">
+                                  <th className="p-3">Student Name</th>
+                                  <th className="p-3 font-mono">Grade</th>
+                                  <th className="p-3 font-mono">Timestamp</th>
+                                  <th className="p-3 text-right">Fee (GHC)</th>
+                                  <th className="p-3 text-center">Audit Check</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-neutral-850 text-neutral-300">
+                                {cashier.transactionsList.map((tx) => (
+                                  <tr key={tx.id} className="hover:bg-neutral-900/40 transition-colors">
+                                    <td className="p-3 font-bold text-white">{tx.studentName}</td>
+                                    <td className="p-3 font-mono text-amber-400 font-bold">{tx.class}</td>
+                                    <td className="p-3 font-mono text-[10px] text-neutral-400">{new Date(tx.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</td>
+                                    <td className="p-3 text-right font-mono font-black">GHC {tx.amount.toFixed(2)}</td>
+                                    <td className="p-3 text-center">
+                                      {tx.verified ? (
+                                        <span className="inline-block px-2 py-0.5 bg-neutral-900 text-emerald-400 border border-neutral-800 font-black text-[9px] uppercase tracking-widest">
+                                          Approved
+                                        </span>
+                                      ) : (
+                                        <button
+                                          onClick={() => verifyPayment(tx.id)}
+                                          className="px-2 py-1 text-[8.5px] font-black bg-white hover:bg-amber-400 text-black uppercase tracking-widest cursor-pointer transition-colors"
+                                        >
+                                          Approve Check
+                                        </button>
+                                      )}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
       )}
 
       {/* Automated Email summary slider drawer */}
@@ -2048,6 +3121,153 @@ B7 to B9: GHC [SUM]`}
         </div>
       )}
 
+      {/* Individual Student Consolidated Ledger Detail Drawer */}
+      {selectedLedgerStudentId && (() => {
+        const item = consolidatedLedgerData.find(x => x.student.id === selectedLedgerStudentId);
+        if (!item) return null;
+        const s = item.student;
+
+        return (
+          <div className="fixed inset-0 z-50 overflow-hidden flex justify-end">
+            {/* Backdrop screen */}
+            <div 
+              onClick={() => setSelectedLedgerStudentId(null)}
+              className="absolute inset-0 bg-neutral-950/80 backdrop-blur-xs transition-opacity" 
+            />
+
+            {/* Drawer container body */}
+            <div className="relative w-full max-w-2xl bg-neutral-900 h-full shadow-2xl flex flex-col z-10 border-l-4 border-neutral-800">
+              <div className="p-6 bg-neutral-950 text-white flex justify-between items-center border-b-2 border-neutral-850">
+                <div className="space-y-0.5">
+                  <span className="text-[10px] text-neutral-500 font-mono tracking-widest font-black uppercase">Student Billing Statement of Account</span>
+                  <h3 className="text-base font-black flex items-center gap-1.5 uppercase italic tracking-wider text-white">
+                    <Receipt size={18} className="text-amber-400" /> {s.name}
+                  </h3>
+                </div>
+                <button 
+                  onClick={() => setSelectedLedgerStudentId(null)}
+                  className="p-1 text-zinc-400 hover:text-white rounded-lg transition-colors cursor-pointer"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="p-6 overflow-y-auto flex-1 space-y-6">
+                {/* Academic Profile metadata grid */}
+                <div className="bg-neutral-950 border border-neutral-850 p-4 space-y-3 font-sans">
+                  <span className="text-[10px] font-black text-neutral-400 font-mono uppercase tracking-widest block">Ward Academic Profile</span>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+                    <div>
+                      <span className="text-neutral-500 font-mono block text-[9px]">PUPIL UNIQUE ID:</span>
+                      <strong className="text-white font-mono">{s.id}</strong>
+                    </div>
+                    <div>
+                      <span className="text-neutral-500 font-mono block text-[9px]">GRADE / CLASS:</span>
+                      <strong className="text-amber-400 font-mono">{s.class}</strong>
+                    </div>
+                    <div>
+                      <span className="text-neutral-500 font-mono block text-[9px]">SECTION CATEGORY:</span>
+                      <strong className="text-neutral-200">{s.category}</strong>
+                    </div>
+                    <div>
+                      <span className="text-neutral-500 font-mono block text-[9px]">BILLING SCHEME:</span>
+                      <strong className="text-neutral-200">{item.isTermPayer ? 'Term-based Scheme' : 'Daily Gate Scheme'}</strong>
+                    </div>
+                    <div>
+                      <span className="text-neutral-500 font-mono block text-[9px]">ROLL NUMBER:</span>
+                      <strong className="text-neutral-200">{s.rollNumber || 'Not Configured'}</strong>
+                    </div>
+                    <div>
+                      <span className="text-neutral-500 font-mono block text-[9px]">GUARDIAN PHONE:</span>
+                      <strong className="text-neutral-200">{s.guardianPhone || 'Not Configured'}</strong>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Ledger Financial Highlights */}
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="bg-neutral-950 border border-neutral-850 p-3 text-right">
+                    <span className="text-neutral-500 text-[9px] font-mono block text-left uppercase font-black">Total Billed</span>
+                    <span className="text-base font-black text-white font-mono">GHC {item.totalCharged.toFixed(2)}</span>
+                  </div>
+                  <div className="bg-neutral-950 border border-neutral-850 p-3 text-right">
+                    <span className="text-neutral-500 text-[9px] font-mono block text-left uppercase font-black">Cleared Paid</span>
+                    <span className="text-base font-black text-emerald-400 font-mono">GHC {item.totalPaid.toFixed(2)}</span>
+                  </div>
+                  <div className="bg-neutral-950 border border-neutral-850 p-3 text-right">
+                    <span className="text-neutral-500 text-[9px] font-mono block text-left uppercase font-black">Outstanding</span>
+                    <span className="text-base font-black text-red-400 font-mono">GHC {item.totalDue.toFixed(2)}</span>
+                  </div>
+                </div>
+
+                {/* Itemized Payments Ledger */}
+                <div className="space-y-2">
+                  <span className="text-[10px] font-black text-neutral-400 font-mono uppercase tracking-widest block">Itemized Payment Log Summary</span>
+                  
+                  {item.paymentsList.length === 0 ? (
+                    <div className="p-8 text-center text-neutral-500 font-bold font-mono border-2 border-dashed border-neutral-800 bg-neutral-950 text-xs">
+                      No payment ledger entries recorded matching this academic term.
+                    </div>
+                  ) : (
+                    <div className="border border-neutral-850 bg-neutral-950 overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs">
+                          <thead>
+                            <tr className="bg-neutral-900 border-b border-neutral-850 text-[9px] font-black text-neutral-500 uppercase tracking-widest font-mono">
+                              <th className="p-3">Payment Date</th>
+                              <th className="p-3 font-mono">Receipt ID</th>
+                              <th className="p-3">Received By</th>
+                              <th className="p-3 text-right">GHC Paid</th>
+                              <th className="p-3 text-center">Status</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-neutral-850 text-neutral-300">
+                            {item.paymentsList.map((tx) => (
+                              <tr key={tx.id} className="hover:bg-neutral-900/30 transition-colors">
+                                <td className="p-3 font-mono text-[11px]">{tx.date}</td>
+                                <td className="p-3 font-mono text-[10px] text-neutral-450">{tx.id}</td>
+                                <td className="p-3">{tx.collectedBy || 'Admin Desk'}</td>
+                                <td className="p-3 text-right font-mono font-bold text-emerald-400">GHC {tx.amount.toFixed(2)}</td>
+                                <td className="p-3 text-center">
+                                  {tx.verified ? (
+                                    <span className="inline-block px-2 py-0.5 bg-neutral-900 text-emerald-400 text-[8.5px] uppercase font-black tracking-widest border border-neutral-800">
+                                      Cleared
+                                    </span>
+                                  ) : (
+                                    <span className="inline-block px-2 py-0.5 bg-neutral-900 text-amber-500 text-[8.5px] uppercase font-black tracking-widest border border-neutral-800">
+                                      Pending
+                                    </span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="p-5 border-t border-neutral-850 bg-neutral-950 flex justify-between items-center">
+                <button
+                  onClick={() => handlePrintStudentLedger(s.id)}
+                  className="px-5 py-3 text-xs font-black bg-white hover:bg-amber-400 text-black uppercase tracking-widest cursor-pointer transition-colors"
+                >
+                  Print Official Statement
+                </button>
+                <button
+                  onClick={() => setSelectedLedgerStudentId(null)}
+                  className="px-5 py-3 text-xs font-black bg-neutral-900 hover:bg-neutral-800 text-white uppercase tracking-widest border border-neutral-800 cursor-pointer transition-colors"
+                >
+                  Close Statement
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* BULK PRINT INVOICES MODAL OUTLET */}
       {showPrintModal && (
         <div className="fixed inset-0 z-50 overflow-hidden bg-neutral-950 flex flex-col md:flex-row">
@@ -2127,7 +3347,7 @@ B7 to B9: GHC [SUM]`}
                       type="text"
                       value={printSearchQuery}
                       onChange={(e) => setPrintSearchQuery(e.target.value)}
-                      placeholder="Search by name or ID..."
+                      placeholder="Search by name, ID, class, or status (paid, absent)..."
                       className="w-full bg-neutral-950 border-2 border-neutral-800 py-2 pl-9 pr-16 text-xs outline-none text-white focus:border-amber-400 font-mono"
                     />
                     <div className="absolute right-2 top-1.5 flex items-center gap-1.5">
@@ -4304,6 +5524,433 @@ B7 to B9: GHC [SUM]`}
                   );
                 })
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DIRECTORS' SMART DEBT SUMMARY MODAL */}
+      {showDirectorsDebtModal && (
+        <div className="fixed inset-0 z-50 overflow-hidden bg-neutral-950 flex flex-col md:flex-row">
+          <style dangerouslySetInnerHTML={{ __html: `
+            @media print {
+              @page {
+                size: portrait;
+                margin: 12mm 15mm;
+              }
+              body * {
+                visibility: hidden !important;
+                background: none !important;
+                color: #000 !important;
+                box-shadow: none !important;
+              }
+              #print-directors-debt-area, #print-directors-debt-area * {
+                visibility: visible !important;
+              }
+              #print-directors-debt-area {
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 100% !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                background: white !important;
+              }
+              .print-directors-page {
+                page-break-after: auto !important;
+                break-after: auto !important;
+                margin-bottom: 25px !important;
+                padding: 0 !important;
+                border: none !important;
+                box-shadow: none !important;
+                background: white !important;
+                color: black !important;
+              }
+              .print-avoid-break {
+                page-break-inside: avoid !important;
+                break-inside: avoid !important;
+              }
+              .no-print {
+                display: none !important;
+              }
+            }
+          `}} />
+
+          {/* LEFT COLUMN: Controls Dashboard Panel */}
+          <div className="w-full md:w-96 bg-neutral-900 border-r-4 border-neutral-800 flex flex-col h-full overflow-y-auto no-print p-6 space-y-5 shrink-0">
+            <div className="border-b border-neutral-800 pb-3">
+              <span className="text-[9px] text-amber-400 font-mono tracking-widest font-black uppercase block">BOARDROOM PREPARATION TOOL</span>
+              <h3 className="text-sm font-black text-white uppercase tracking-widest flex items-center gap-2 mt-1">
+                <FileText size={18} className="text-amber-400" /> BOARD DEBT STUDY
+              </h3>
+            </div>
+
+            {/* Config & Filters */}
+            <div className="space-y-4 flex-1">
+              {/* Search filter */}
+              <div className="space-y-1">
+                <span className="text-[9px] font-mono uppercase font-black text-neutral-400 tracking-wider">Search Student</span>
+                <div className="relative">
+                  <Search className="absolute left-3 top-2.5 text-neutral-500" size={13} />
+                  <input
+                    type="text"
+                    value={directorsSearchQuery}
+                    onChange={(e) => setDirectorsSearchQuery(e.target.value)}
+                    placeholder="Search name or ID..."
+                    className="w-full bg-neutral-950 border-2 border-neutral-800 py-1.5 pl-9 pr-8 text-xs outline-none text-white focus:border-amber-400 font-mono"
+                  />
+                  {directorsSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setDirectorsSearchQuery('')}
+                      className="absolute right-3 top-2 text-neutral-500 hover:text-white"
+                    >
+                      <X size={13} />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Class Filter */}
+              <div className="space-y-1">
+                <span className="text-[9px] font-mono uppercase font-black text-neutral-400 tracking-wider">Filter Class Grade</span>
+                <select
+                  value={directorsClassFilter}
+                  onChange={(e) => setDirectorsClassFilter(e.target.value)}
+                  className="w-full bg-neutral-950 border-2 border-neutral-800 px-3 py-1.5 text-xs text-white focus:outline-none focus:border-amber-400 cursor-pointer font-mono"
+                >
+                  <option value="ALL">ALL CLASSES / GRADES</option>
+                  {classes.map(cls => (
+                    <option key={cls} value={cls}>{cls}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Payment Type Filter */}
+              <div className="space-y-1">
+                <span className="text-[9px] font-mono uppercase font-black text-neutral-400 tracking-wider">Payment Structure Filter</span>
+                <select
+                  value={directorsOnlyPaymentType}
+                  onChange={(e) => setDirectorsOnlyPaymentType(e.target.value)}
+                  className="w-full bg-neutral-950 border-2 border-neutral-800 px-3 py-1.5 text-xs text-white focus:outline-none focus:border-amber-400 cursor-pointer font-mono"
+                >
+                  <option value="ALL">ALL PUPILS (Daily & Term)</option>
+                  <option value="DAILY">DAILY PAYERS ONLY</option>
+                  <option value="TERM">TERM PAYERS ONLY</option>
+                </select>
+              </div>
+
+              {/* Minimum Debt Size */}
+              <div className="space-y-1">
+                <span className="text-[9px] font-mono uppercase font-black text-neutral-400 tracking-wider">Minimum Arrears Size (GHC)</span>
+                <input
+                  type="number"
+                  min="0"
+                  value={directorsMinDebt || ''}
+                  onChange={(e) => setDirectorsMinDebt(Number(e.target.value))}
+                  placeholder="e.g. 50 (only show debts >= GHC 50)"
+                  className="w-full bg-neutral-950 border-2 border-neutral-800 px-3 py-1.5 text-xs font-mono text-white focus:outline-none focus:border-amber-400"
+                />
+              </div>
+
+              {/* Signatories config */}
+              <div className="space-y-1">
+                <label className="text-[9px] font-mono uppercase font-black text-neutral-400">Board Chairperson Title</label>
+                <input
+                  type="text"
+                  value={directorsChairperson}
+                  onChange={(e) => setDirectorsChairperson(e.target.value)}
+                  className="w-full bg-neutral-950 border-2 border-neutral-800 px-3.5 py-1.5 text-xs font-mono text-white focus:outline-none focus:border-amber-400"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[9px] font-mono uppercase font-black text-neutral-400">Administrative Signatory</label>
+                <input
+                  type="text"
+                  value={directorsSignatory}
+                  onChange={(e) => setDirectorsSignatory(e.target.value)}
+                  className="w-full bg-neutral-950 border-2 border-neutral-800 px-3.5 py-1.5 text-xs font-mono text-white focus:outline-none focus:border-amber-400"
+                />
+              </div>
+
+              {/* Memo/Notes */}
+              <div className="space-y-1">
+                <label className="text-[9px] font-mono uppercase font-black text-neutral-400">Board study instruction directive</label>
+                <textarea
+                  rows={3}
+                  value={directorsNotes}
+                  onChange={(e) => setDirectorsNotes(e.target.value)}
+                  className="w-full bg-neutral-950 border-2 border-neutral-800 px-3.5 py-1.5 text-xs font-mono text-white focus:outline-none focus:border-amber-400 text-[10px] leading-relaxed resize-none"
+                />
+              </div>
+
+              {/* Run Metrics info */}
+              <div className="bg-neutral-950 border border-neutral-800 p-3 space-y-1.5">
+                <span className="text-[8px] font-mono uppercase text-neutral-500 font-extrabold block">Directors' Financial Ledger Metrics</span>
+                <div className="grid grid-cols-2 gap-1.5 text-[10px] font-mono font-bold text-neutral-300">
+                  <div className="bg-neutral-900 p-1.5 border border-neutral-850">
+                    <span className="text-neutral-500 text-[8px] block">TOTAL DEBT</span>
+                    <span className="text-red-400 text-xs font-black font-mono">GHC {directorsReportTotals.totalDue.toFixed(2)}</span>
+                  </div>
+                  <div className="bg-neutral-900 p-1.5 border border-neutral-850">
+                    <span className="text-neutral-500 text-[8px] block font-mono">RECOVERY RATE</span>
+                    <span className="text-emerald-400 text-xs font-black font-mono">{directorsReportTotals.recoveryRate.toFixed(1)}%</span>
+                  </div>
+                  <div className="bg-neutral-900 p-1.5 border border-neutral-850">
+                    <span className="text-neutral-500 text-[8px] block font-mono">DEBT ACCOUNTS</span>
+                    <span className="text-amber-400 text-xs font-black">{directorsReportTotals.debtorsCount} PUPILS</span>
+                  </div>
+                  <div className="bg-neutral-900 p-1.5 border border-neutral-850">
+                    <span className="text-neutral-500 text-[8px] block">LEGACY DEBT</span>
+                    <span className="text-neutral-400 text-xs font-black font-mono font-mono">GHC {directorsReportTotals.totalLegacyDebt.toFixed(2)}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Bottom actions */}
+            <div className="pt-3 space-y-2 shrink-0 border-t border-neutral-800">
+              <button
+                type="button"
+                onClick={() => {
+                  if (typeof window !== 'undefined') {
+                    window.focus();
+                    window.print();
+                  }
+                }}
+                className="w-full py-3.5 text-xs font-black uppercase text-black bg-amber-400 hover:bg-amber-300 transition-colors flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Printer size={16} /> PRINT BOARD SHEETS
+              </button>
+
+              <button
+                type="button"
+                onClick={triggerDirectorsDebtCSV}
+                className="w-full py-3 text-xs font-black uppercase text-neutral-300 hover:text-white bg-neutral-800 hover:bg-neutral-750 border border-neutral-700 transition-colors flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <FileSpreadsheet size={15} className="text-emerald-400" /> EXPORT BOARD CSV
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowDirectorsDebtModal(false)}
+                className="w-full py-2.5 text-xs font-black uppercase text-neutral-500 hover:text-neutral-350 transition-colors cursor-pointer"
+              >
+                CLOSE BOARD ROOM
+              </button>
+            </div>
+          </div>
+
+          {/* RIGHT COLUMN: Continuous high-fidelity print documents catalog container */}
+          <div className="flex-1 overflow-y-auto bg-neutral-950 p-4 md:p-8 space-y-8 no-print-scroll scrollbar-thin">
+            <div className="max-w-[210mm] mx-auto flex items-center justify-between no-print border-b border-neutral-850 pb-3">
+              <span className="text-[10px] font-mono font-black uppercase text-neutral-450 flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse"></span>
+                BOARD STUDY RECONCILIATION DOCUMENT ({filteredDirectorsDebt.length} ACCOUNTS MATCHED)
+              </span>
+              <span className="text-[10px] font-mono text-neutral-500">A4 PAPER PORTRAIT PREVIEW</span>
+            </div>
+
+            {/* Print Area */}
+            <div id="print-directors-debt-area" className="space-y-6">
+              <div className="print-directors-page bg-white text-black p-10 shadow-2xl max-w-[210mm] mx-auto min-h-[297mm] flex flex-col justify-between relative border border-neutral-300 font-sans text-left">
+                <div className="space-y-6">
+                  {/* Print Document Header */}
+                  <div className="border-b-4 border-black pb-4 flex justify-between items-start">
+                    <div className="flex items-center gap-3 text-left">
+                      <SchoolLogo size={42} className="shrink-0" lightBackground={true} />
+                      <div className="space-y-1">
+                        <span className="text-[10px] font-black uppercase tracking-wider text-black bg-neutral-200 px-2 py-0.5 font-mono">
+                          SAAKO HOLY CHILD ACADEMY
+                        </span>
+                        <h1 className="text-lg font-black text-black uppercase tracking-tight">
+                          Board of Directors Smart Debt Assessment
+                        </h1>
+                        <p className="text-[8px] font-mono uppercase text-neutral-500 tracking-wider">
+                          Faith, Discipline & Academic Excellence • GES Registered No. G/GAR/AN/12/342
+                        </p>
+                      </div>
+                    </div>
+                    
+                    <div className="text-right">
+                      <div className="text-[8px] font-black uppercase bg-black text-amber-400 px-2.5 py-1 font-mono tracking-widest inline-block mb-1">
+                        DIRECTORS STUDY DOCUMENT
+                      </div>
+                      <div className="text-[9px] font-mono text-neutral-500">
+                        Date Compiled: {currentDate}
+                      </div>
+                      <div className="text-[9px] font-mono text-neutral-500 font-bold uppercase">
+                        Reference Term: {activeTerm?.name || 'Current Term'}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Core Executive Metrics */}
+                  <div>
+                    <h3 className="text-xs font-black text-black uppercase tracking-wider mb-2 border-b border-neutral-300 pb-1">
+                      I. Executive Financial Recovery Summary
+                    </h3>
+                    <div className="grid grid-cols-5 gap-3 text-center uppercase font-mono">
+                      <div className="border border-neutral-300 p-2.5 bg-neutral-50">
+                        <span className="text-neutral-500 text-[8px] block leading-tight">TOTAL EXPECTED</span>
+                        <strong className="text-xs font-bold text-black font-mono">GHC {directorsReportTotals.totalBilled.toFixed(2)}</strong>
+                      </div>
+                      <div className="border border-neutral-300 p-2.5 bg-neutral-50">
+                        <span className="text-neutral-500 text-[8px] block leading-tight">FUNDS COLLECTED</span>
+                        <strong className="text-xs font-bold text-emerald-750 font-mono font-mono">GHC {directorsReportTotals.totalPaid.toFixed(2)}</strong>
+                      </div>
+                      <div className="border border-neutral-300 p-2.5 bg-red-50/40 border-red-200">
+                        <span className="text-red-655 text-[8px] block font-black leading-tight font-sans">OUTSTANDING DEBT</span>
+                        <strong className="text-xs font-black text-red-655 font-mono">GHC {directorsReportTotals.totalDue.toFixed(2)}</strong>
+                      </div>
+                      <div className="border border-neutral-300 p-2.5 bg-neutral-50">
+                        <span className="text-neutral-500 text-[8px] block leading-tight">RECOVERY PROGRESS</span>
+                        <strong className="text-xs font-bold text-black font-mono">{directorsReportTotals.recoveryRate.toFixed(1)}%</strong>
+                      </div>
+                      <div className="border border-neutral-300 p-2.5 bg-neutral-50">
+                        <span className="text-neutral-500 text-[8px] block leading-tight">DEBTOR ACCOUNTS</span>
+                        <strong className="text-xs font-bold text-black font-mono">{directorsReportTotals.debtorsCount} PUPILS</strong>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Class-by-Class Table Summary */}
+                  <div className="print-avoid-break">
+                    <h3 className="text-xs font-black text-black uppercase tracking-wider mb-2 border-b border-neutral-300 pb-1">
+                      II. Class-by-Class Debt Exposure Assessment
+                    </h3>
+                    <table className="w-full text-left text-[9px] font-mono uppercase tracking-tight border-collapse">
+                      <thead>
+                        <tr className="bg-neutral-100 border-y border-neutral-300 text-[8px] font-bold text-neutral-600">
+                          <th className="py-1 px-2 text-left">Class Grade</th>
+                          <th className="py-1 px-2 text-center">Pupils</th>
+                          <th className="py-1 px-2 text-center">Owed Accounts</th>
+                          <th className="py-1 px-2 text-right">Tuition Owed (GHC)</th>
+                          <th className="py-1 px-2 text-right">Exams Owed (GHC)</th>
+                          <th className="py-1 px-2 text-right">Total Arrears (GHC)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {directorsClassBreakdown.map((item) => {
+                          if (item.totalDue === 0 && item.pupilsCount === 0) return null;
+                          return (
+                            <tr key={item.class} className="border-b border-neutral-200 hover:bg-neutral-50">
+                              <td className="py-1 px-2 font-bold text-black">{item.class}</td>
+                              <td className="py-1 px-2 text-center text-neutral-500">{item.pupilsCount}</td>
+                              <td className={`py-1 px-2 text-center font-bold ${item.debtorsCount > 0 ? 'text-red-650' : 'text-neutral-400'}`}>
+                                {item.debtorsCount}
+                              </td>
+                              <td className="py-1 px-2 text-right font-bold text-neutral-600">GHC {item.tuitionDue.toFixed(2)}</td>
+                              <td className="py-1 px-2 text-right font-bold text-neutral-600">GHC {item.examsDue.toFixed(2)}</td>
+                              <td className={`py-1 px-2 text-right font-black ${item.totalDue > 0 ? 'text-red-650 bg-red-50/10' : 'text-emerald-700'}`}>
+                                GHC {item.totalDue.toFixed(2)}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        <tr className="bg-neutral-50 font-bold border-t-2 border-neutral-400 text-[10px]">
+                          <td className="py-1.5 px-2">Total Exposure</td>
+                          <td className="py-1.5 px-2 text-center">-</td>
+                          <td className="py-1.5 px-2 text-center text-red-600">{directorsReportTotals.debtorsCount}</td>
+                          <td className="py-1.5 px-2 text-right">GHC {directorsReportTotals.totalTuitionDue.toFixed(2)}</td>
+                          <td className="py-1.5 px-2 text-right">GHC {directorsReportTotals.totalExamsDue.toFixed(2)}</td>
+                          <td className="py-1.5 px-2 text-right text-red-600 font-black">
+                            GHC {directorsReportTotals.totalDue.toFixed(2)}
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Board Study Memo instructions */}
+                  {directorsNotes && (
+                    <div className="bg-neutral-50 border-l-4 border-amber-400 p-3 text-[9.5px] font-sans leading-relaxed text-neutral-700 print-avoid-break">
+                      <strong className="text-black uppercase text-[8px] font-mono block font-black mb-1">Administrative Directives & Board Action Directives:</strong>
+                      "{directorsNotes}"
+                    </div>
+                  )}
+
+                  {/* Detailed Pupils Debt Breakdown Ledger */}
+                  <div>
+                    <h3 className="text-xs font-black text-black uppercase tracking-wider mb-2 border-b border-neutral-300 pb-1 print-avoid-break">
+                      III. Detailed Student Outstanding Arrears Ledger
+                    </h3>
+
+                    <div className="space-y-4">
+                      {classes.map(cls => {
+                        const classDebtors = filteredDirectorsDebt.filter(item => item.student.class === cls && item.totalDue > 0);
+                        if (classDebtors.length === 0) return null;
+
+                        const classDueSub = classDebtors.reduce((sum, item) => sum + item.totalDue, 0);
+
+                        return (
+                          <div key={cls} className="border border-neutral-300 rounded p-3 space-y-2 print-avoid-break bg-white">
+                            <div className="flex justify-between items-center bg-neutral-100 p-1 px-2 text-[9px] font-mono font-bold text-black border-b border-neutral-300 uppercase">
+                              <span>CLASS / GRADE: {cls} ({classDebtors.length} Debtor Accounts)</span>
+                              <span>Exposure Subtotal: <strong className="text-red-600">GHC {classDueSub.toFixed(2)}</strong></span>
+                            </div>
+
+                            <table className="w-full text-left text-[8px] font-mono uppercase tracking-tight border-collapse">
+                              <thead>
+                                <tr className="border-b border-neutral-250 text-neutral-500 font-semibold text-[7.5px]">
+                                  <th className="py-0.5 px-1 text-left">Pupil Student Name</th>
+                                  <th className="py-0.5 px-1 text-center">Structure</th>
+                                  <th className="py-0.5 px-1 text-center">Contact Phone</th>
+                                  <th className="py-0.5 px-1 text-right">Tuition Due</th>
+                                  <th className="py-0.5 px-1 text-right">Exams Due</th>
+                                  <th className="py-0.5 px-1 text-right">Total Due</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {classDebtors.map(item => (
+                                  <tr key={item.student.id} className="border-b border-neutral-100 hover:bg-neutral-50 text-[8.5px]">
+                                    <td className="py-1 px-1 font-bold text-black">{item.student.name}</td>
+                                    <td className="py-1 px-1 text-center text-neutral-600">{item.isTermPayer ? 'Term' : 'Daily'}</td>
+                                    <td className="py-1 px-1 text-center font-bold text-neutral-700 select-all">{item.parentPhone}</td>
+                                    <td className="py-1 px-1 text-right text-neutral-600 font-mono">GHC {item.tuitionDue.toFixed(2)}</td>
+                                    <td className="py-1 px-1 text-right text-neutral-600 font-mono">GHC {item.examsDue.toFixed(2)}</td>
+                                    <td className="py-1 px-1 text-right text-red-655 font-extrabold bg-red-50/5 font-mono">
+                                      GHC {item.totalDue.toFixed(2)}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Signatures Panel */}
+                  <div className="grid grid-cols-2 gap-10 pt-8 border-t border-neutral-300 print-avoid-break">
+                    <div className="space-y-4 text-[10px] leading-relaxed">
+                      <span className="text-neutral-500 font-bold uppercase text-[8px] block">PREPARED BY (ADMINISTRATOR):</span>
+                      <div className="h-10 border-b border-black w-44"></div>
+                      <div>
+                        <span className="text-black font-extrabold uppercase block font-sans">{directorsSignatory}</span>
+                        <span className="text-neutral-500 block text-[9px] font-sans">Institutional Auditor & Registrar</span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-4 text-[10px] leading-relaxed text-right">
+                      <span className="text-neutral-500 font-bold uppercase text-[8px] block">APPROVED FOR BOARD ROOM STUDY BY:</span>
+                      <div className="h-10 border-b border-black w-44 ml-auto"></div>
+                      <div>
+                        <span className="text-black font-extrabold uppercase block font-sans">{directorsChairperson}</span>
+                        <span className="text-neutral-500 block text-[9px] font-sans">Governing Board Authority</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Print Run footer info */}
+                <div className="flex justify-between items-center text-[7.5px] font-mono font-black text-neutral-400 pt-3 border-t border-neutral-200 mt-10">
+                  <span>RUN CODE: SAAKO-BOARD-{currentDate.replace(/-/g, "")}-{(activeTerm?.id || 'TERM').substring(0, 8).toUpperCase()}</span>
+                  <span>SYSTEM PORTAL GENERATION • CONFIDENTIAL FOR BOARD STUDY ONLY</span>
+                </div>
+              </div>
             </div>
           </div>
         </div>

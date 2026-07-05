@@ -2,6 +2,7 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import dotenv from "dotenv";
+import { GoogleGenAI } from "@google/genai";
 import { initializeApp } from "firebase/app";
 import { initializeFirestore, memoryLocalCache, collection, doc, getDoc, getDocs, setDoc, deleteDoc, writeBatch } from "firebase/firestore";
 
@@ -18,8 +19,12 @@ interface DatabaseSchema {
   expenses?: any[];
   salaries?: any[];
   whatsappLogs?: any[];
+  auditLogs?: any[];
   systemSettings?: any;
   budgetTargets?: any[];
+  examsPayments?: any[];
+  examsExpenses?: any[];
+  examsSettings?: any;
 }
 
 function loadDatabase(): DatabaseSchema {
@@ -30,15 +35,41 @@ function loadDatabase(): DatabaseSchema {
       if (!parsed.whatsappLogs) {
         parsed.whatsappLogs = [];
       }
+      if (!parsed.auditLogs) {
+        parsed.auditLogs = [];
+      }
       if (!parsed.budgetTargets) {
         parsed.budgetTargets = [];
+      }
+      if (!parsed.examsPayments) {
+        parsed.examsPayments = [];
+      }
+      if (!parsed.examsExpenses) {
+        parsed.examsExpenses = [];
+      }
+      if (!parsed.examsSettings) {
+        parsed.examsSettings = null;
       }
       return parsed;
     }
   } catch (error) {
     console.error("Failed to load local DB file, using fallback:", error);
   }
-  return { users: [], students: [], payments: [], terms: [], expenses: [], salaries: [], whatsappLogs: [], systemSettings: null, budgetTargets: [] };
+  return { 
+    users: [], 
+    students: [], 
+    payments: [], 
+    terms: [], 
+    expenses: [], 
+    salaries: [], 
+    whatsappLogs: [], 
+    auditLogs: [],
+    systemSettings: null, 
+    budgetTargets: [],
+    examsPayments: [],
+    examsExpenses: [],
+    examsSettings: null
+  };
 }
 
 function saveDatabase(data: DatabaseSchema) {
@@ -46,6 +77,43 @@ function saveDatabase(data: DatabaseSchema) {
     fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), "utf-8");
   } catch (error) {
     console.error("Failed to persist local DB file:", error);
+  }
+}
+
+async function addAuditLog(log: {
+  action: string;
+  category: 'students' | 'payments' | 'expenses' | 'settings' | 'security' | 'other';
+  operatorName: string;
+  operatorRole: string;
+  details: string;
+  studentId?: string;
+  studentName?: string;
+  amount?: number;
+}) {
+  const logId = "log_" + Date.now() + "_" + Math.floor(Math.random() * 1000);
+  const logEntry = {
+    id: logId,
+    timestamp: new Date().toISOString(),
+    ...log
+  };
+
+  const dbLocal = loadDatabase();
+  if (!dbLocal.auditLogs) dbLocal.auditLogs = [];
+  dbLocal.auditLogs.unshift(logEntry);
+  
+  // Cap at 1000 logs locally to keep DB small and lightweight
+  if (dbLocal.auditLogs.length > 1000) {
+    dbLocal.auditLogs = dbLocal.auditLogs.slice(0, 1000);
+  }
+
+  saveDatabase(dbLocal);
+
+  if (firestoreDb) {
+    try {
+      await withTimeout(setDoc(doc(firestoreDb, "auditLogs", logId), logEntry), 1500, "saveAuditLog");
+    } catch (e) {
+      console.error("Firestore saveAuditLog failed:", e);
+    }
   }
 }
 
@@ -175,6 +243,25 @@ async function bootstrapCloudSeeding() {
   }
 }
 
+let aiClient: any = null;
+function getGeminiClient() {
+  if (!aiClient) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new Error("GEMINI_API_KEY is not defined. Please configure your Gemini API Key in the Settings > Secrets panel.");
+    }
+    aiClient = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        }
+      }
+    });
+  }
+  return aiClient;
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -201,6 +288,92 @@ async function startServer() {
   // API health check
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok" });
+  });
+
+  // POST /api/ai/chat
+  app.post("/api/ai/chat", async (req, res) => {
+    const { message, history } = req.body;
+    if (!message) {
+      return res.status(400).json({ error: "Message is required" });
+    }
+
+    try {
+      const ai = getGeminiClient();
+      
+      // Compile real-time context
+      const dbLocal = loadDatabase();
+      const students = dbLocal.students || [];
+      const payments = dbLocal.payments || [];
+      const expenses = dbLocal.expenses || [];
+      const terms = dbLocal.terms || [];
+      const salaries = dbLocal.salaries || [];
+
+      const totalStudents = students.length;
+      const activeStudents = students.filter((s: any) => s.active).length;
+      const classCounts = students.reduce((acc: any, s: any) => {
+        acc[s.class] = (acc[s.class] || 0) + 1;
+        return acc;
+      }, {});
+
+      const totalPaymentsCollected = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
+      const totalExpenses = expenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+      const totalSalaries = salaries.reduce((sum, s) => sum + (s.netPaid || 0), 0);
+      const currentTerm = terms.find((t: any) => t.active)?.name || "N/A";
+
+      // Include up to 15 top students (their names, class, rollNumber, and general billing type)
+      const sampleStudents = students.slice(0, 15).map((s: any) => `- ${s.name} (Class: ${s.class}, Roll: ${s.rollNumber || 'None'}, Status: ${s.active ? 'Active' : 'Inactive'}, Billing: ${s.paymentType || 'Daily'})`).join('\n');
+
+      const systemInstruction = `You are 'SHCA Sawla AI Assistant', a professional administrative agent for SAAKO HOLY CHILD ACADEMY (Sacred Heart Catholic Academy) in Sawla, Savannah Region, Ghana.
+You assist administrators, directors, and headmasters with managing finances, student directories, payments, and communication templates.
+
+REAL-TIME SCHOOL DATA:
+- Active Term: ${currentTerm}
+- Total Enrolled Students: ${totalStudents} (Active: ${activeStudents}, Inactive: ${totalStudents - activeStudents})
+- Class Enrollments: ${JSON.stringify(classCounts, null, 2)}
+- Total Tuition/Daily Fees Collected: GHC ${totalPaymentsCollected.toLocaleString()}
+- Total Expenditures Registered: GHC ${totalExpenses.toLocaleString()}
+- Total Staff Salaries Executed: GHC ${totalSalaries.toLocaleString()}
+- Current Cash Position: GHC ${(totalPaymentsCollected - totalExpenses - totalSalaries).toLocaleString()}
+
+SAMPLE OF RECENTLY REGISTERED PUPILS:
+${sampleStudents}
+
+INSTRUCTIONS:
+1. Always state numbers and financial balances in GHC (Ghanaian Cedi) or GHC/GHC prefix.
+2. If asked to compose a WhatsApp/SMS alert for a parent, make it polite, professional, and clear. Format it clearly using placeholders like [Student Name], [Outstanding Balance], [Term Name], and [Guardian Contact].
+3. For administrative queries, rely on the provided REAL-TIME SCHOOL DATA. If a user asks for a student's exact details not in the sample list, tell them you can see general metrics, but they can search in the Student Registry or Class Register.
+4. Keep explanations brief, clear, and actionable. Do not use overly complex academic jargon.
+5. Emphasize that your data is directly synced with their live database.`;
+
+      const contents = [
+        ...(history || []).map((item: any) => ({
+          role: item.role === 'user' ? 'user' : 'model',
+          parts: [{ text: item.text }]
+        })),
+        { role: 'user', parts: [{ text: message }] }
+      ];
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents,
+        config: {
+          systemInstruction,
+          temperature: 0.7,
+        },
+      });
+
+      res.json({
+        success: true,
+        text: response.text || "I was unable to generate a response."
+      });
+
+    } catch (error: any) {
+      console.error("Gemini AI API Error:", error);
+      res.status(500).json({
+        success: false,
+        error: error?.message || "An unexpected error occurred in the Gemini AI engine."
+      });
+    }
   });
 
   // GET /api/users
@@ -852,6 +1025,163 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // GET /api/exams/payments
+  app.get("/api/exams/payments", async (req, res) => {
+    if (firestoreDb) {
+      try {
+        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "exams_payments")), 1500, "getExamsPayments");
+        const list = qSnaps.docs.map(d => d.data());
+        const dbLocal = loadDatabase();
+        dbLocal.examsPayments = list;
+        saveDatabase(dbLocal);
+        return res.json(list);
+      } catch (e) {
+        console.error("Firestore getExamsPayments failed, falling back to local database:", e);
+      }
+    }
+    const dbLocal = loadDatabase();
+    res.json(dbLocal.examsPayments || []);
+  });
+
+  // POST /api/exams/payments
+  app.post("/api/exams/payments", async (req, res) => {
+    const payment = req.body;
+    const dbLocal = loadDatabase();
+    if (!dbLocal.examsPayments) dbLocal.examsPayments = [];
+    const idx = dbLocal.examsPayments.findIndex((p) => p.id === payment.id);
+    if (idx >= 0) {
+      dbLocal.examsPayments[idx] = payment;
+    } else {
+      dbLocal.examsPayments.push(payment);
+    }
+    saveDatabase(dbLocal);
+
+    if (firestoreDb) {
+      try {
+        await withTimeout(setDoc(doc(firestoreDb, "exams_payments", payment.id), payment), 1500, "saveExamsPayment");
+      } catch (e) {
+        console.error("Firestore saveExamsPayment failed:", e);
+      }
+    }
+    res.json({ success: true });
+  });
+
+  // DELETE /api/exams/payments/:id
+  app.delete("/api/exams/payments/:id", async (req, res) => {
+    const id = req.params.id;
+    const dbLocal = loadDatabase();
+    if (dbLocal.examsPayments) {
+      dbLocal.examsPayments = dbLocal.examsPayments.filter((p) => p.id !== id);
+      saveDatabase(dbLocal);
+    }
+
+    if (firestoreDb) {
+      try {
+        await withTimeout(deleteDoc(doc(firestoreDb, "exams_payments", id)), 1500, "deleteExamsPayment");
+      } catch (e) {
+        console.error("Firestore deleteExamsPayment failed:", e);
+      }
+    }
+    res.json({ success: true });
+  });
+
+  // GET /api/exams/expenses
+  app.get("/api/exams/expenses", async (req, res) => {
+    if (firestoreDb) {
+      try {
+        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "exams_expenses")), 1500, "getExamsExpenses");
+        const list = qSnaps.docs.map(d => d.data());
+        const dbLocal = loadDatabase();
+        dbLocal.examsExpenses = list;
+        saveDatabase(dbLocal);
+        return res.json(list);
+      } catch (e) {
+        console.error("Firestore getExamsExpenses failed, falling back to local database:", e);
+      }
+    }
+    const dbLocal = loadDatabase();
+    res.json(dbLocal.examsExpenses || []);
+  });
+
+  // POST /api/exams/expenses
+  app.post("/api/exams/expenses", async (req, res) => {
+    const expense = req.body;
+    const dbLocal = loadDatabase();
+    if (!dbLocal.examsExpenses) dbLocal.examsExpenses = [];
+    const idx = dbLocal.examsExpenses.findIndex((e) => e.id === expense.id);
+    if (idx >= 0) {
+      dbLocal.examsExpenses[idx] = expense;
+    } else {
+      dbLocal.examsExpenses.push(expense);
+    }
+    saveDatabase(dbLocal);
+
+    if (firestoreDb) {
+      try {
+        await withTimeout(setDoc(doc(firestoreDb, "exams_expenses", expense.id), expense), 1500, "saveExamsExpense");
+      } catch (e) {
+        console.error("Firestore saveExamsExpense failed:", e);
+      }
+    }
+    res.json({ success: true });
+  });
+
+  // DELETE /api/exams/expenses/:id
+  app.delete("/api/exams/expenses/:id", async (req, res) => {
+    const id = req.params.id;
+    const dbLocal = loadDatabase();
+    if (dbLocal.examsExpenses) {
+      dbLocal.examsExpenses = dbLocal.examsExpenses.filter((e) => e.id !== id);
+      saveDatabase(dbLocal);
+    }
+
+    if (firestoreDb) {
+      try {
+        await withTimeout(deleteDoc(doc(firestoreDb, "exams_expenses", id)), 1500, "deleteExamsExpense");
+      } catch (e) {
+        console.error("Firestore deleteExamsExpense failed:", e);
+      }
+    }
+    res.json({ success: true });
+  });
+
+  // GET /api/exams/settings
+  app.get("/api/exams/settings", async (req, res) => {
+    if (firestoreDb) {
+      try {
+        const docSnap = await withTimeout(getDoc(doc(firestoreDb, "exams_settings", "main")), 1500, "getExamsSettings");
+        if (docSnap.exists()) {
+          const settingsObj = docSnap.data();
+          const dbLocal = loadDatabase();
+          dbLocal.examsSettings = settingsObj;
+          saveDatabase(dbLocal);
+          return res.json(settingsObj);
+        }
+      } catch (e) {
+        console.error("Firestore getExamsSettings failed, falling back to local database:", e);
+      }
+    }
+    const dbLocal = loadDatabase();
+    res.json(dbLocal.examsSettings || null);
+  });
+
+  // POST /api/exams/settings
+  app.post("/api/exams/settings", async (req, res) => {
+    const settings = req.body;
+    const dbLocal = loadDatabase();
+    dbLocal.examsSettings = settings;
+    saveDatabase(dbLocal);
+
+    if (firestoreDb) {
+      try {
+        await withTimeout(setDoc(doc(firestoreDb, "exams_settings", "main"), settings), 1500, "saveExamsSettings");
+      } catch (e) {
+        console.error("Firestore saveExamsSettings failed:", e);
+      }
+    }
+    res.json({ success: true });
+  });
+
   // GET /api/settings
   app.get("/api/settings", async (req, res) => {
     if (firestoreDb) {
@@ -910,6 +1240,45 @@ async function startServer() {
     res.json(sorted);
   });
 
+  // GET /api/audit-logs
+  app.get("/api/audit-logs", async (req, res) => {
+    if (firestoreDb) {
+      try {
+        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "auditLogs")), 2000, "getAuditLogs");
+        const list = qSnaps.docs.map(d => d.data());
+        const sorted = list.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        const dbLocal = loadDatabase();
+        dbLocal.auditLogs = sorted;
+        saveDatabase(dbLocal);
+        return res.json(sorted);
+      } catch (e) {
+        console.error("Firestore getAuditLogs failed, falling back to local database:", e);
+      }
+    }
+    const db = loadDatabase();
+    const sorted = (db.auditLogs || []).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    res.json(sorted);
+  });
+
+  // POST /api/audit-logs (Frontend manual logging of actions)
+  app.post("/api/audit-logs", async (req, res) => {
+    const { action, category, operatorName, operatorRole, details, studentId, studentName, amount } = req.body;
+    if (!action || !category || !operatorName || !operatorRole || !details) {
+      return res.status(400).json({ error: "Missing required audit log parameters." });
+    }
+    await addAuditLog({
+      action,
+      category,
+      operatorName,
+      operatorRole,
+      details,
+      studentId,
+      studentName,
+      amount
+    });
+    res.json({ success: true });
+  });
+
   // POST /api/whatsapp/send
   app.post("/api/whatsapp/send", async (req, res) => {
     const { phone, message, studentId, studentName, type, operator } = req.body;
@@ -927,16 +1296,20 @@ async function startServer() {
     let responseStatus = "simulated_success";
     let responseDetails = "Simulated delivery. To trigger real messages, configure WHATSAPP_PROVIDER and required credentials in Environment Variables.";
 
-    const provider = (process.env.WHATSAPP_PROVIDER || "ultramsg").toLowerCase();
+    const provider = (process.env.WHATSAPP_PROVIDER || "simulated").toLowerCase();
 
     // Check if any API credentials or URLs are configured to decide whether to trigger a real API
     const isConfigured = 
       provider === "meta" ||
       provider === "twilio" ||
       provider === "ultramsg" ||
-      !!process.env.WHATSAPP_API_URL || 
-      !!process.env.WHATSAPP_TWILIO_SID || 
-      !!process.env.WHATSAPP_PHONE_NUMBER_ID;
+      provider === "arkesel" ||
+      (provider !== "simulated" && (
+        !!process.env.WHATSAPP_API_URL || 
+        !!process.env.WHATSAPP_TWILIO_SID || 
+        !!process.env.WHATSAPP_PHONE_NUMBER_ID ||
+        !!process.env.WHATSAPP_API_TOKEN
+      ));
 
     if (isConfigured) {
       try {
@@ -945,7 +1318,17 @@ async function startServer() {
         let headers: Record<string, string> = { "Content-Type": "application/json" };
         let body: any = "";
 
-        if (provider === "twilio" || (!!process.env.WHATSAPP_TWILIO_SID && !process.env.WHATSAPP_API_URL)) {
+        if (provider === "arkesel") {
+          // Arkesel Ghana Integration (Mobile Money friendly)
+          const apiKey = process.env.WHATSAPP_API_TOKEN || "";
+          const sender = process.env.WHATSAPP_SENDER_PHONE || "SAAKOHCA";
+          
+          url = `https://sms.arkesel.com/sms/api?action=send-sms&api_key=${encodeURIComponent(apiKey)}&to=${encodeURIComponent(normalizedPhone)}&from=${encodeURIComponent(sender)}&sms=${encodeURIComponent(message)}`;
+          method = "GET";
+          headers = {};
+          body = null;
+        } 
+        else if (provider === "twilio" || (!!process.env.WHATSAPP_TWILIO_SID && !process.env.WHATSAPP_API_URL)) {
           // Twilio Integration
           const twilioSid = process.env.WHATSAPP_TWILIO_SID || "";
           const twilioAuthToken = process.env.WHATSAPP_TWILIO_AUTH_TOKEN || process.env.WHATSAPP_API_TOKEN || "";

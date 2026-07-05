@@ -35,6 +35,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { VoiceSearchButton } from "./VoiceSearchButton";
+import { TermAttendanceHeatmap } from "./TermAttendanceHeatmap";
 import {
   ResponsiveContainer,
   LineChart,
@@ -71,6 +72,7 @@ export const Dashboard: React.FC = React.memo(() => {
     expenses,
     sendautomatedWhatsApp,
     theme,
+    systemSettings,
   } = useApp();
 
   const isDaylight = theme === "daylight";
@@ -133,6 +135,7 @@ export const Dashboard: React.FC = React.memo(() => {
     | "absence-heatmap"
     | "arrears-performance"
     | "monthly-attendance"
+    | "term-attendance-heatmap"
   >("bento");
 
   // Monthly Attendance trends chart selection
@@ -944,7 +947,8 @@ export const Dashboard: React.FC = React.memo(() => {
         payments || [],
         activeTerm,
         currentDate,
-        5.0
+        5.0,
+        systemSettings
       );
       const debt = state ? state.totalDebt : 0;
       
@@ -990,7 +994,8 @@ export const Dashboard: React.FC = React.memo(() => {
           payments || [],
           activeTerm,
           currentDate,
-          5.0
+          5.0,
+          systemSettings
         );
         if (state) {
           totalCollected += state.totalPaid || 0;
@@ -1552,6 +1557,7 @@ export const Dashboard: React.FC = React.memo(() => {
           activeTerm,
           currentDate,
           5.0,
+          systemSettings,
         );
         arrears = debtState ? debtState.totalDebt : 0;
       }
@@ -1746,6 +1752,16 @@ export const Dashboard: React.FC = React.memo(() => {
             }`}
           >
             <Calendar size={14} /> Absentee Heatmap
+          </button>
+          <button
+            onClick={() => setActiveLayout("term-attendance-heatmap")}
+            className={`px-4 py-2 text-[10px] font-black uppercase tracking-widest transition-all cursor-pointer flex items-center gap-2 ${
+              activeLayout === "term-attendance-heatmap"
+                ? "bg-emerald-500 text-black font-black"
+                : "text-neutral-400 hover:text-white hover:bg-neutral-900/40"
+            }`}
+          >
+            <Calendar size={14} className={activeLayout === "term-attendance-heatmap" ? "text-black" : "text-emerald-400"} /> Term Presence Heatmap 🔥
           </button>
           <button
             onClick={() => setActiveLayout("monthly-attendance")}
@@ -5333,6 +5349,20 @@ export const Dashboard: React.FC = React.memo(() => {
           </motion.div>
         )}
 
+        {/* Perspective Tab 5B: Term Presence Frequency Heatmap */}
+        {activeLayout === "term-attendance-heatmap" && (
+          <motion.div
+            key="term-attendance-heatmap-layout"
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -15 }}
+            transition={{ duration: 0.2 }}
+            className="bg-neutral-900 border-4 border-neutral-800 p-8 space-y-6 text-left"
+          >
+            <TermAttendanceHeatmap />
+          </motion.div>
+        )}
+
         {/* Perspective Tab 6: Executive Arrears & Performance Console */}
         {activeLayout === "arrears-performance" && (
           <motion.div
@@ -5521,7 +5551,7 @@ export const Dashboard: React.FC = React.memo(() => {
                           <span className="text-neutral-500 uppercase font-bold">With Outstanding Debt:</span>
                           <span className="text-red-405 font-black">
                             {students.filter(s => {
-                              const state = calculateStudentFinancialState(s, payments || [], activeTerm, currentDate, 5.0);
+                              const state = calculateStudentFinancialState(s, payments || [], activeTerm, currentDate, 5.0, systemSettings);
                               return state && state.totalDebt > 0;
                             }).length} Pupils
                           </span>
@@ -6566,6 +6596,21 @@ export const Dashboard: React.FC = React.memo(() => {
                             ))}
                           </tbody>
                         </table>
+                      </div>
+                    )}
+
+                    {/* Case F: Term Attendance Heatmap Print Out */}
+                    {activeLayout === 'term-attendance-heatmap' && (
+                      <div className="space-y-4">
+                        <p className="text-[8px] font-mono text-neutral-500 uppercase tracking-widest leading-none">
+                          Term-wide presence summary & average attendance frequency by week of term
+                        </p>
+                        <div className="border border-neutral-300 p-4 font-mono text-[9px] space-y-2 text-center bg-neutral-50 rounded-sm">
+                          <p className="font-extrabold uppercase text-neutral-900">Term Attendance Heatmap Matrix Selected</p>
+                          <p className="text-neutral-600 leading-relaxed max-w-lg mx-auto">
+                            To view the full interactive, responsive multi-colored 12-week grid (Monday to Friday) of school-wide attendance rates, please access the digital Term Presence Heatmap workspace on the main dashboard, or trigger the "Export Term Report" action to obtain a detailed spreadsheet ledger of presence data.
+                          </p>
+                        </div>
                       </div>
                     )}
                   </div>

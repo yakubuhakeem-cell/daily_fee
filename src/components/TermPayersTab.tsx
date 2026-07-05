@@ -3,9 +3,25 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo } from 'react';
-import { useApp } from '../context/AppContext';
+import React, { useState, useMemo, useEffect } from 'react';
+import { useApp, getSchoolWeekForDate, getDiscountedTermFee, getStudentBaselineTermFee } from '../context/AppContext';
 import { Student, PaymentRecord, StudentClass } from '../types';
+import {
+  ResponsiveContainer,
+  AreaChart,
+  Area,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  PieChart,
+  Pie,
+  Cell,
+  ReferenceLine
+} from 'recharts';
 import { 
   Users, 
   Receipt, 
@@ -27,13 +43,18 @@ import {
   Building,
   Check,
   Copy,
+  TrendingUp,
+  BarChart3,
   Info,
   MessageSquare,
   Send,
   Download,
   FileText,
   Clock,
-  ArrowUpDown
+  ArrowUpDown,
+  Sparkles,
+  Smartphone,
+  Link
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { VoiceSearchButton } from './VoiceSearchButton';
@@ -43,6 +64,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
     students, 
     payments, 
     recordPayment, 
+    recordMomoPayment,
     currentUser, 
     currentDate,
     theme,
@@ -88,7 +110,121 @@ export const TermPayersTab: React.FC = React.memo(() => {
 
   // Selected student for detail overlay/modal and quick collection
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
-  
+
+  // Active sub-tab inside the selected student modal (Ledger vs Analytics)
+  const [drawerActiveTab, setDrawerActiveTab] = useState<'ledger' | 'analytics'>('ledger');
+
+  // Payment mode state inside selected student modal
+  const [paymentModeTab, setPaymentModeTab] = useState<'cash' | 'momo'>('cash');
+
+  // Mobile Money simulation and payment link generation states
+  const [momoAmountInput, setMomoAmountInput] = useState<string>('');
+  const [momoProvider, setMomoProvider] = useState<string>('MTN');
+  const [momoPhone, setMomoPhone] = useState<string>('');
+  const [momoSimState, setMomoSimState] = useState<'idle' | 'step1' | 'step2' | 'step3' | 'step4' | 'success' | 'failed'>('idle');
+  const [momoLogs, setMomoLogs] = useState<string[]>([]);
+  const [generatedMomoLink, setGeneratedMomoLink] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (selectedStudent) {
+      setMomoPhone(selectedStudent.guardianPhone || '');
+      // Calculate selected student finance info on selection
+      const studentPayments = payments.filter(p => p.studentId === selectedStudent.id && !p.isAbsent);
+      const totalPaid = studentPayments.reduce((sum, p) => sum + p.amount, 0);
+      const termFee = selectedStudent.termFee || baseTermFee;
+      const legacyDebt = selectedStudent.legacyDebt || 0;
+      const totalExpected = termFee + legacyDebt;
+      const balanceDue = Math.max(0, totalExpected - totalPaid);
+
+      setMomoAmountInput(balanceDue > 0 ? balanceDue.toFixed(2) : '50.00');
+      
+      // Reset simulator
+      setMomoSimState('idle');
+      setMomoLogs([]);
+      setGeneratedMomoLink(null);
+      setPaymentModeTab('cash'); // Reset tab to cash on change
+      setDrawerActiveTab('ledger'); // Reset drawer active sub-tab on change
+    }
+  }, [selectedStudent, payments, baseTermFee]);
+
+  const momoTimersRef = React.useRef<NodeJS.Timeout[]>([]);
+  useEffect(() => {
+    return () => {
+      momoTimersRef.current.forEach(clearTimeout);
+      momoTimersRef.current = [];
+    };
+  }, [selectedStudent]);
+
+  const runMomoSimulation = () => {
+    if (!selectedStudent) return;
+    const amt = parseFloat(momoAmountInput);
+    if (isNaN(amt) || amt <= 0) {
+      showToast("Please enter a valid amount to simulate.");
+      return;
+    }
+    if (!momoPhone.trim()) {
+      showToast("Please enter a mobile money phone number.");
+      return;
+    }
+
+    // Clear old timers
+    momoTimersRef.current.forEach(clearTimeout);
+    momoTimersRef.current = [];
+
+    const txId = 'TXN_' + Math.floor(10000000 + Math.random() * 90000000);
+    setMomoSimState('step1');
+    setMomoLogs([
+      `⚡ [${new Date().toLocaleTimeString()}] INITIATING: Creating API payment session with ID: session_${txId}...`
+    ]);
+
+    const t1 = setTimeout(() => {
+      setMomoSimState('step2');
+      setMomoLogs(prev => [
+        ...prev,
+        `📲 [${new Date().toLocaleTimeString()}] PUSHING: Triggering remote USSD prompt via ${momoProvider} core gateway on subscriber line ${momoPhone}...`
+      ]);
+    }, 1500);
+
+    const t2 = setTimeout(() => {
+      setMomoSimState('step3');
+      setMomoLogs(prev => [
+        ...prev,
+        `🔑 [${new Date().toLocaleTimeString()}] USER PROMPT: Handset alert sent. Waiting for guardian PIN authentication code & acceptance response...`,
+        `💡 SIMULATION KEYBOARD: Prompting guardian with: "Pay ${currencySymbol} ${amt.toFixed(2)} to SAAKO HOLY CHILD ACADEMY? Enter PIN to approve."`
+      ]);
+    }, 3500);
+
+    const t3 = setTimeout(() => {
+      setMomoSimState('step4');
+      setMomoLogs(prev => [
+        ...prev,
+        `✅ [${new Date().toLocaleTimeString()}] PIN AUTHORIZED: Correct PIN verified. Transferring funds from subscriber pocket...`
+      ]);
+    }, 6000);
+
+    const t4 = setTimeout(() => {
+      // Record payment in context!
+      recordMomoPayment(
+        selectedStudent.id,
+        amt,
+        txId,
+        momoProvider,
+        momoPhone,
+        'successful',
+        `Simulated ${momoProvider} Momo payment [Ref: ${txId}]`
+      );
+
+      setMomoSimState('success');
+      setMomoLogs(prev => [
+        ...prev,
+        `🎉 [${new Date().toLocaleTimeString()}] COMPLETED: Ledger updated successfully! ${currencySymbol} ${amt.toFixed(2)} cleared. Digital receipt issued.`
+      ]);
+      showToast(`Momo Payment of ${currencySymbol} ${amt.toFixed(2)} simulated successfully!`);
+    }, 8000);
+
+    momoTimersRef.current = [t1, t2, t3, t4];
+  };
+
   // Quick collection states
   const [collectAmount, setCollectAmount] = useState<string>('');
   const [collectNotes, setCollectNotes] = useState<string>('');
@@ -114,6 +250,399 @@ export const TermPayersTab: React.FC = React.memo(() => {
   const [historySearchQuery, setHistorySearchQuery] = useState('');
   const [historyClassFilter, setHistoryClassFilter] = useState<string>('ALL');
   const [historySortOrder, setHistorySortOrder] = useState<'asc' | 'desc'>('desc');
+  
+  // Selected receipt payment for modal & printing
+  const [selectedReceiptPayment, setSelectedReceiptPayment] = useState<PaymentRecord | null>(null);
+
+  const downloadTermReceipt = (
+    student: Student,
+    payment: PaymentRecord,
+    totalPaid: number,
+    balanceDue: number
+  ) => {
+    const txId = `SHC-TERM-${payment.date.replace(/-/g, '')}-${payment.id.substring(0, 8).toUpperCase()}`;
+    const rollRef = student.rollNumber || 'SHC-' + student.id.substring(0, 5).toUpperCase();
+    const amountStr = `GHC ${payment.amount.toFixed(2)}`;
+    const termFee = student.termFee || 350;
+    const legacyDebt = student.legacyDebt || 0;
+    const totalCommitment = termFee + legacyDebt;
+    const auditor = payment.collectedBy || 'Certified Registrar';
+
+    const legacyDebtRowHtml = legacyDebt > 0 ? `
+      <div class="summary-row">
+        <span>Legacy Debt Balance</span>
+        <span style="font-family: monospace; font-weight: bold;">GHC ${legacyDebt.toFixed(2)}</span>
+      </div>
+    ` : '';
+
+    const notesRowHtml = payment.notes ? `
+      <br><strong style="font-size: 9px; color: #fbbf24;">NOTE:</strong> ${payment.notes}
+    ` : '';
+
+    const htmlContent = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Term Fee Receipt - ${student.name} - ${payment.date}</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #0b0f19;
+      color: #f3f4f6;
+      margin: 0;
+      padding: 40px 20px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+    }
+    .receipt-container {
+      background-color: #111827;
+      border: 4px solid #1f2937;
+      border-top: 12px solid #fbbf24;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+      width: 100%;
+      max-width: 600px;
+      padding: 40px;
+      position: relative;
+      box-sizing: border-box;
+    }
+    .watermark {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%) rotate(-25deg);
+      font-size: 45px;
+      font-weight: 900;
+      color: rgba(16, 185, 129, 0.05);
+      letter-spacing: 4px;
+      pointer-events: none;
+      text-transform: uppercase;
+      border: 4px dashed rgba(16, 185, 129, 0.05);
+      padding: 15px 30px;
+      white-space: nowrap;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: start;
+      border-b: 2px solid #1f2937;
+      padding-bottom: 24px;
+      margin-bottom: 24px;
+    }
+    .school-title {
+      font-size: 18px;
+      font-weight: 900;
+      color: #ffffff;
+      letter-spacing: 0.5px;
+      margin: 0;
+      text-transform: uppercase;
+    }
+    .school-subtitle {
+      font-size: 10px;
+      color: #fbbf24;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      margin: 6px 0 0 0;
+      font-weight: 700;
+    }
+    .receipt-type {
+      background-color: rgba(251, 191, 36, 0.1);
+      color: #fbbf24;
+      border: 1px solid rgba(251, 191, 36, 0.3);
+      font-size: 10px;
+      font-weight: 800;
+      padding: 6px 12px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      display: inline-block;
+      text-align: right;
+    }
+    .tx-id {
+      font-family: monospace;
+      font-size: 10px;
+      color: #9ca3af;
+      margin-top: 8px;
+      text-align: right;
+    }
+    .grid-container {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .info-block {
+      background-color: #0b0f19;
+      border: 1px solid #1f2937;
+      padding: 14px;
+      border-radius: 6px;
+    }
+    .info-label {
+      font-size: 9px;
+      font-weight: 700;
+      color: #6b7280;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+    .info-value {
+      font-size: 12px;
+      font-weight: 700;
+      color: #ffffff;
+    }
+    .summary-box {
+      border: 1px solid #1f2937;
+      border-radius: 6px;
+      padding: 20px;
+      background-color: rgba(11, 15, 25, 0.6);
+      margin-bottom: 24px;
+    }
+    .summary-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 0;
+      border-bottom: 1px solid #1f2937;
+      font-size: 12px;
+    }
+    .summary-row:last-child {
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+    .amount-value {
+      font-size: 20px;
+      font-weight: 900;
+      color: #10b981;
+    }
+    .audit-msg {
+      font-size: 11px;
+      color: #9ca3af;
+      background-color: rgba(59, 130, 246, 0.05);
+      padding: 14px;
+      border-radius: 6px;
+      border-left: 4px solid #3b82f6;
+      margin-bottom: 24px;
+      line-height: 1.5;
+    }
+    .btn-container {
+      display: flex;
+      gap: 12px;
+      margin-top: 20px;
+    }
+    .btn {
+      flex: 1;
+      padding: 12px;
+      border: none;
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      cursor: pointer;
+      letter-spacing: 1px;
+      text-align: center;
+      transition: all 0.2s;
+      text-decoration: none;
+    }
+    .btn-primary {
+      background-color: #fbbf24;
+      color: #000000;
+    }
+    .btn-primary:hover {
+      background-color: #f59e0b;
+    }
+    .btn-secondary {
+      background-color: #1f2937;
+      color: #f3f4f6;
+      border: 1px solid #374151;
+    }
+    .btn-secondary:hover {
+      background-color: #374151;
+    }
+    .footer {
+      text-align: center;
+      font-size: 10px;
+      color: #4b5563;
+      margin-top: 24px;
+      border-top: 1px solid #1f2937;
+      padding-top: 16px;
+    }
+    @media print {
+      body {
+        background-color: white;
+        color: black;
+        padding: 0;
+      }
+      .receipt-container {
+        border: none;
+        box-shadow: none;
+        max-width: 100%;
+        padding: 0;
+        background-color: white;
+      }
+      .btn-container {
+        display: none;
+      }
+      .info-block {
+        background-color: white;
+        border: 1px solid #e5e7eb;
+      }
+      .info-value, .school-title {
+        color: black;
+      }
+      .summary-box {
+        background-color: white;
+        border: 1px solid #e5e7eb;
+      }
+      .summary-row {
+        border-bottom: 1px solid #e5e7eb;
+        color: black;
+      }
+      .amount-value {
+        color: #059669;
+      }
+      .btn {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="receipt-container">
+    <div class="watermark">TERM PAID</div>
+    
+    <div class="header">
+      <div>
+        <h1 class="school-title">SAAKO HOLY CHILD ACADEMY</h1>
+        <p class="school-subtitle">Sawla Branch • Term Ledger Docket</p>
+      </div>
+      <div>
+        <span class="receipt-type">Term installment</span>
+        <div class="tx-id">Ref: ${txId}</div>
+      </div>
+    </div>
+
+    <div class="grid-container">
+      <div class="info-block">
+        <div class="info-label">Pupil Name</div>
+        <div class="info-value" style="text-transform: uppercase;">${student.name}</div>
+      </div>
+      <div class="info-block">
+        <div class="info-label">Cohort Grade / Class</div>
+        <div class="info-value">${student.class} (${student.category})</div>
+      </div>
+      <div class="info-block">
+        <div class="info-label">Enrollment Roll ID</div>
+        <div class="info-value">${rollRef}</div>
+      </div>
+      <div class="info-block">
+        <div class="info-label">Student Gender</div>
+        <div class="info-value">${student.gender || 'Not Specified'}</div>
+      </div>
+      <div class="info-block">
+        <div class="info-label">Guardian Contact</div>
+        <div class="info-value">${student.guardianPhone || 'Not Specified'}</div>
+      </div>
+      <div class="info-block">
+        <div class="info-label">Billing Scheme</div>
+        <div class="info-value">Term Fee Scheme</div>
+      </div>
+      <div class="info-block" style="grid-column: span 2;">
+        <div class="info-label">Date Cleared</div>
+        <div class="info-value">${payment.date}</div>
+      </div>
+    </div>
+
+    <div class="summary-box">
+      <div class="summary-row">
+        <span>Subscribed Term Fee</span>
+        <span style="font-family: monospace; font-weight: bold;">GHC ${termFee.toFixed(2)}</span>
+      </div>
+      ${legacyDebtRowHtml}
+      <div class="summary-row" style="background-color: rgba(59, 130, 246, 0.05); padding: 6px 8px; margin: 4px 0;">
+        <span>Total Outstanding Obligation</span>
+        <span style="font-family: monospace; font-weight: bold;">GHC ${totalCommitment.toFixed(2)}</span>
+      </div>
+      <div class="summary-row">
+        <span>Cumulative Paid to Date</span>
+        <span style="font-family: monospace; font-weight: bold; color: #34d399;">GHC ${totalPaid.toFixed(2)}</span>
+      </div>
+      <div class="summary-row">
+        <span>Remaining Balance Due</span>
+        <span style="font-family: monospace; font-weight: bold; color: ${balanceDue > 0 ? '#f87171' : '#34d399'};">GHC ${balanceDue.toFixed(2)}</span>
+      </div>
+      <div class="summary-row" style="border-top: 2px solid #374151; padding-top: 12px; margin-top: 12px;">
+        <span style="font-weight: 900; text-transform: uppercase; font-size: 13px;">This Installment Amount</span>
+        <span class="amount-value">${amountStr}</span>
+      </div>
+    </div>
+
+    <div class="audit-msg">
+      This acts as secure verification of the term installment ledger update. Collected & stamped by Registrar Office: <strong>${auditor}</strong>.
+      ${notesRowHtml}
+    </div>
+
+    <div class="btn-container">
+      <button class="btn btn-primary" onclick="window.print()">Print Receipt</button>
+      <button class="btn btn-secondary" onclick="window.close()">Close</button>
+    </div>
+
+    <div class="footer">
+      SAAKO HOLY CHILD ACADEMY • Official Termly Ledger Audit System • Ref: ${student.id}
+    </div>
+  </div>
+</body>
+</html>`;
+
+    const blob = new Blob([htmlContent], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `TERM_RECEIPT_${student.name.replace(/\s+/g, '_')}_${payment.date}.html`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast(`Standalone receipt downloaded for ${student.name}!`);
+  };
+
+  // Listen for background auto-flagged pupil updates
+  const [autoFlaggedPupils, setAutoFlaggedPupils] = useState<string[]>(() => {
+    try {
+      const stored = localStorage.getItem('auto_flagged_debt_pupils');
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    const handleThresholdUpdate = (e: Event) => {
+      const customEvent = e as CustomEvent<string[]>;
+      if (customEvent && customEvent.detail) {
+        setAutoFlaggedPupils(customEvent.detail);
+      }
+    };
+    
+    const runLocalCheck = () => {
+      try {
+        const stored = localStorage.getItem('auto_flagged_debt_pupils');
+        if (stored) {
+          setAutoFlaggedPupils(JSON.parse(stored));
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    };
+
+    window.addEventListener('debt-threshold-updated', handleThresholdUpdate);
+    const interval = setInterval(runLocalCheck, 5000);
+
+    return () => {
+      window.removeEventListener('debt-threshold-updated', handleThresholdUpdate);
+      clearInterval(interval);
+    };
+  }, []);
 
   // Active Term Payers list
   const activeTermPayers = useMemo(() => {
@@ -178,7 +707,8 @@ export const TermPayersTab: React.FC = React.memo(() => {
     let outstandingCount = 0;
 
     activeTermPayers.forEach(s => {
-      const studentFee = s.termFee || baseTermFee;
+      const discountInfo = getDiscountedTermFee(s, payments, activeTerm, currentDate, systemSettings);
+      const studentFee = discountInfo.termFee;
       const legacyDebt = s.legacyDebt || 0;
       totalExpected += studentFee + legacyDebt;
 
@@ -205,12 +735,13 @@ export const TermPayersTab: React.FC = React.memo(() => {
       fullySettledCount,
       outstandingCount
     };
-  }, [activeTermPayers, payments]);
+  }, [activeTermPayers, payments, activeTerm, currentDate, systemSettings]);
 
   // Outstanding students helper for bulk notifications
   const outstandingStudents = useMemo(() => {
     return activeTermPayers.map(s => {
-      const studentFee = s.termFee || baseTermFee;
+      const discountInfo = getDiscountedTermFee(s, payments, activeTerm, currentDate, systemSettings);
+      const studentFee = discountInfo.termFee;
       const legacyDebt = s.legacyDebt || 0;
       const studentPayments = payments.filter(p => p.studentId === s.id && !p.isAbsent);
       const studentTotalPaid = studentPayments.reduce((sum, p) => sum + p.amount, 0);
@@ -224,12 +755,13 @@ export const TermPayersTab: React.FC = React.memo(() => {
         isOutstanding: balanceDue > 0
       };
     }).filter(item => item.isOutstanding);
-  }, [activeTermPayers, payments]);
+  }, [activeTermPayers, payments, activeTerm, currentDate, systemSettings]);
 
   // Pupils with non-zero legacy debt for targeted debt reporting
   const legacyDebtStudents = useMemo(() => {
     return activeTermPayers.map(s => {
-      const studentFee = s.termFee || baseTermFee;
+      const discountInfo = getDiscountedTermFee(s, payments, activeTerm, currentDate, systemSettings);
+      const studentFee = discountInfo.termFee;
       const legacyDebt = s.legacyDebt || 0;
       const studentPayments = payments.filter(p => p.studentId === s.id && !p.isAbsent);
       const studentTotalPaid = studentPayments.reduce((sum, p) => sum + p.amount, 0);
@@ -242,7 +774,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
         balanceDue
       };
     }).filter(item => item.legacyDebt > 0);
-  }, [activeTermPayers, payments, baseTermFee]);
+  }, [activeTermPayers, payments, baseTermFee, activeTerm, currentDate, systemSettings]);
 
   // Bulk notifications handler
   const handleTriggerBulkNotifications = async () => {
@@ -318,7 +850,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
   };
 
   const handleSendSingleReminder = async (student: Student) => {
-    const studentFee = student.termFee || baseTermFee;
+    const studentFee = student.termFee || getStudentBaselineTermFee(student.class, systemSettings);
     const legacyDebt = student.legacyDebt || 0;
     const studentPayments = payments.filter(p => p.studentId === student.id && !p.isAbsent);
     const studentTotalPaid = studentPayments.reduce((sum, p) => sum + p.amount, 0);
@@ -341,6 +873,21 @@ export const TermPayersTab: React.FC = React.memo(() => {
     setWhatsAppReminderModal({
       student,
       messageText: message,
+      defaultPhone: student.guardianPhone || ''
+    });
+  };
+
+  const handleSendSmsReminder = async (student: Student, balanceDue: number) => {
+    const template = systemSettings?.debtAlertTemplate || "Alert: Your ward {name} has accumulated a high school debt of {currency} {debt}. Please settle this balance promptly to ensure compliance with check-in procedures.";
+    const currency = systemSettings?.currencyCode || 'GHC';
+    const messageText = template
+      .replace(/{name}/g, student.name)
+      .replace(/{currency}/g, currency)
+      .replace(/{debt}/g, balanceDue.toFixed(2));
+
+    setWhatsAppReminderModal({
+      student,
+      messageText,
       defaultPhone: student.guardianPhone || ''
     });
   };
@@ -403,33 +950,57 @@ export const TermPayersTab: React.FC = React.memo(() => {
   // Filter Term Payers for display
   const displayedTermPayers = useMemo(() => {
     return activeTermPayers.filter(s => {
-      // 1. Name or roll number search
-      const matchesSearch = 
-        s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        s.rollNumber.toLowerCase().includes(searchQuery.toLowerCase());
-      
-      // 2. Class filter
-      const matchesClass = classFilter === 'ALL' || s.class === classFilter;
+      // 1. Name, roll number, class, category, or payment status search
+      const query = searchQuery.toLowerCase().trim();
+      const normalizedQuery = query.replace(/[-_ ]/g, '');
 
-      // 3. Status filter
-      const studentFee = s.termFee || baseTermFee;
+      const discountInfo = getDiscountedTermFee(s, payments, activeTerm, currentDate, systemSettings);
+      const studentFee = discountInfo.termFee;
+      const legacyDebt = s.legacyDebt || 0;
       const studentPayments = payments.filter(p => p.studentId === s.id && !p.isAbsent);
       const studentTotalPaid = studentPayments.reduce((sum, p) => sum + p.amount, 0);
-      const isPaid = studentTotalPaid >= studentFee;
+      const isPaid = studentTotalPaid >= (studentFee + legacyDebt);
 
-      const matchesStatus = 
+      let matchesSearch = true;
+      if (query) {
+        const matchesNameOrRoll = 
+          s.name.toLowerCase().includes(query) ||
+          (s.rollNumber || '').toLowerCase().includes(query);
+
+        const normalizedClass = s.class.toLowerCase().replace(/[-_ ]/g, '');
+        const matchesClass = 
+          normalizedClass === normalizedQuery || 
+          s.class.toLowerCase().includes(query) ||
+          (s.category && s.category.toLowerCase().includes(query));
+
+        let matchesStatus = false;
+        if (query === 'paid' || query === 'present' || query === 'checked' || query === 'cleared' || query === 'complete' || query === 'completed') {
+          matchesStatus = isPaid;
+        } else if (query === 'outstanding' || query === 'unpaid' || query === 'arrears' || query === 'debt' || query === 'owing' || query === 'pending') {
+          matchesStatus = !isPaid;
+        }
+
+        matchesSearch = matchesNameOrRoll || matchesClass || matchesStatus;
+      }
+      
+      // 2. Class filter
+      const matchesClassFilter = classFilter === 'ALL' || s.class === classFilter;
+
+      // 3. Status filter
+      const matchesStatusFilter = 
         statusFilter === 'ALL' ||
         (statusFilter === 'PAID' && isPaid) ||
         (statusFilter === 'OUTSTANDING' && !isPaid);
 
-      return matchesSearch && matchesClass && matchesStatus;
+      return matchesSearch && matchesClassFilter && matchesStatusFilter;
     });
-  }, [activeTermPayers, searchQuery, classFilter, statusFilter, payments]);
+  }, [activeTermPayers, searchQuery, classFilter, statusFilter, payments, activeTerm, currentDate, systemSettings]);
 
   // Calculate detailed finances for the selected student in detail panel
   const selectedStudentFinances = useMemo(() => {
     if (!selectedStudent) return null;
-    const studentFee = selectedStudent.termFee || baseTermFee;
+    const discountInfo = getDiscountedTermFee(selectedStudent, payments, activeTerm, currentDate, systemSettings);
+    const studentFee = discountInfo.termFee;
     const legacyDebt = selectedStudent.legacyDebt || 0;
     const studentPayments = payments.filter(p => p.studentId === selectedStudent.id);
     const paidPayments = studentPayments.filter(p => !p.isAbsent);
@@ -463,7 +1034,101 @@ export const TermPayersTab: React.FC = React.memo(() => {
       isCompleted,
       percentDone,
       presentDaysTerm,
-      schoolDaysNoHolidaysCount
+      schoolDaysNoHolidaysCount,
+      discountInfo
+    };
+  }, [selectedStudent, payments, activeTerm, currentDate, systemSettings]);
+
+  // Calculate detailed analytics for the selected student
+  const analyticsData = useMemo(() => {
+    if (!selectedStudent || !activeTerm) return null;
+
+    const termDays = activeTerm.schoolDays || [];
+    const holidaysList = activeTerm.publicHolidays || [];
+    const startDate = activeTerm.startDate;
+
+    // Filter out holidays and days in the future
+    const elapsedDays = termDays.filter(d => d <= currentDate && !holidaysList.includes(d));
+
+    // Group elapsed school days by week
+    const weekDataMap: { [week: number]: { present: number; absent: number; days: string[] } } = {};
+
+    elapsedDays.forEach(dStr => {
+      const weekNum = getSchoolWeekForDate(dStr, startDate);
+      if (!weekDataMap[weekNum]) {
+        weekDataMap[weekNum] = { present: 0, absent: 0, days: [] };
+      }
+
+      const record = payments.find(p => p.studentId === selectedStudent.id && p.date === dStr);
+      const isAbsent = !!(record?.isAbsent);
+
+      if (isAbsent) {
+        weekDataMap[weekNum].absent += 1;
+      } else {
+        weekDataMap[weekNum].present += 1;
+      }
+      weekDataMap[weekNum].days.push(dStr);
+    });
+
+    // Convert map to sorted array
+    const sortedWeeks = Object.keys(weekDataMap)
+      .map(Number)
+      .sort((a, b) => a - b);
+
+    const attendanceWeeklyChartData = sortedWeeks.map(weekNum => {
+      const data = weekDataMap[weekNum];
+      const total = data.present + data.absent;
+      const rate = total > 0 ? (data.present / total) * 100 : 0;
+      return {
+        week: `Wk ${weekNum}`,
+        present: data.present,
+        absent: data.absent,
+        total,
+        rate: Math.round(rate),
+      };
+    });
+
+    // Pie chart data for overall term attendance
+    const totalPresent = elapsedDays.filter(dStr => {
+      const record = payments.find(p => p.studentId === selectedStudent.id && p.date === dStr);
+      return !(record?.isAbsent);
+    }).length;
+
+    const totalAbsent = elapsedDays.length - totalPresent;
+
+    const attendancePieData = [
+      { name: 'Present', value: totalPresent },
+      { name: 'Absent', value: totalAbsent }
+    ];
+
+    // Cumulative and individual payment data over time
+    const studentTermPayments = payments.filter(p => 
+      p.studentId === selectedStudent.id && 
+      !p.isAbsent &&
+      termDays.includes(p.date)
+    );
+
+    const sortedPayments = [...studentTermPayments].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+    let runningSum = 0;
+    const paymentChartData = sortedPayments.map((p, idx) => {
+      runningSum += p.amount;
+      return {
+        idx: idx + 1,
+        date: p.date,
+        amount: p.amount,
+        cumulative: runningSum,
+      };
+    });
+
+    return {
+      attendanceWeeklyChartData,
+      attendancePieData,
+      paymentChartData,
+      totalPresent,
+      totalAbsent,
+      totalSchoolDays: elapsedDays.length,
+      attendanceRate: elapsedDays.length > 0 ? Math.round((totalPresent / elapsedDays.length) * 100) : 0,
     };
   }, [selectedStudent, payments, activeTerm, currentDate]);
 
@@ -514,7 +1179,8 @@ export const TermPayersTab: React.FC = React.memo(() => {
 
   const historySelectedStudentFinances = useMemo(() => {
     if (!historySelectedStudent) return null;
-    const studentFee = historySelectedStudent.termFee || baseTermFee;
+    const discountInfo = getDiscountedTermFee(historySelectedStudent, payments, activeTerm, currentDate, systemSettings);
+    const studentFee = discountInfo.termFee;
     const legacyDebt = historySelectedStudent.legacyDebt || 0;
     const studentPayments = payments.filter(p => p.studentId === historySelectedStudent.id);
     const paidPayments = studentPayments.filter(p => !p.isAbsent);
@@ -540,9 +1206,34 @@ export const TermPayersTab: React.FC = React.memo(() => {
       totalPaid,
       balanceDue,
       percentDone,
-      isCompleted
+      isCompleted,
+      discountInfo
     };
-  }, [historySelectedStudent, payments, historySortOrder, baseTermFee]);
+  }, [historySelectedStudent, payments, historySortOrder, baseTermFee, activeTerm, currentDate, systemSettings]);
+
+  const receiptStudent = useMemo(() => {
+    if (!selectedReceiptPayment) return null;
+    return activeTermPayers.find(s => s.id === selectedReceiptPayment.studentId) || null;
+  }, [activeTermPayers, selectedReceiptPayment]);
+
+  const receiptStudentFinances = useMemo(() => {
+    if (!receiptStudent) return null;
+    const discountInfo = getDiscountedTermFee(receiptStudent, payments, activeTerm, currentDate, systemSettings);
+    const studentFee = discountInfo.termFee;
+    const legacyDebt = receiptStudent.legacyDebt || 0;
+    const studentPayments = payments.filter(p => p.studentId === receiptStudent.id);
+    const paidPayments = studentPayments.filter(p => !p.isAbsent && p.verified);
+    const totalPaid = paidPayments.reduce((sum, p) => sum + p.amount, 0);
+    const totalTarget = studentFee + legacyDebt;
+    const balanceDue = Math.max(0, totalTarget - totalPaid);
+    
+    return {
+      termFee: studentFee,
+      legacyDebt,
+      totalPaid,
+      balanceDue
+    };
+  }, [receiptStudent, payments, activeTerm, currentDate, systemSettings]);
 
   // Helper list of potential classes for filtering
   const studentClasses: StudentClass[] = [
@@ -724,6 +1415,27 @@ export const TermPayersTab: React.FC = React.memo(() => {
 
       {viewMode === 'DIRECTORY' ? (
         <>
+          {/* Early Payment Discount Admin Badge / Summary Banner if enabled */}
+          {systemSettings?.termDiscountEnabled && (
+            <div className="bg-amber-950/20 border-2 border-amber-500/30 p-4 rounded-lg flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-6">
+              <div className="flex gap-3">
+                <Sparkles className="w-5 h-5 text-amber-400 shrink-0 mt-0.5 animate-pulse" />
+                <div className="text-left">
+                  <h4 className="text-xs font-black uppercase text-amber-400 tracking-wider font-mono">
+                    Active Early Payment Discount Scheme
+                  </h4>
+                  <p className="text-[11px] text-neutral-300 mt-0.5 leading-relaxed font-sans">
+                    Pupils who settle their term fee within <span className="text-amber-400 font-extrabold font-mono">Week {systemSettings.termDiscountWeek}</span> of the active academic term are granted a <span className="text-amber-400 font-extrabold font-mono">{systemSettings.termDiscountPercentage}% discount</span> on their term fee.
+                  </p>
+                </div>
+              </div>
+              <div className="bg-neutral-950 px-3 py-1.5 border border-neutral-800 rounded font-mono text-[10px] uppercase font-bold shrink-0 text-amber-400/90 flex items-center gap-1.5 self-end md:self-auto">
+                <Calendar className="w-3.5 h-3.5" />
+                <span>Target: Week {systemSettings.termDiscountWeek} • {systemSettings.termDiscountPercentage}% Off</span>
+              </div>
+            </div>
+          )}
+
           {/* Advanced Filter, Search, and Status bar */}
       <div className="bg-neutral-900 border-2 border-neutral-800 p-4 flex flex-col md:flex-row items-center gap-4">
         {/* Dynamic Search */}
@@ -733,7 +1445,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
             <input
               id="term-payers-search"
               type="text"
-              placeholder="Search term payers by pupil name, roll ID..."
+              placeholder="Search by name, roll, class, or status (paid, outstanding)..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full bg-neutral-950 border-2 border-neutral-800 pl-10 pr-16 py-2 text-xs text-white font-medium outline-none focus:border-amber-400 focus:ring-0 placeholder:text-neutral-600 transition-colors"
@@ -833,7 +1545,8 @@ export const TermPayersTab: React.FC = React.memo(() => {
               </thead>
               <tbody className="divide-y divide-neutral-800 text-xs text-neutral-250 font-medium">
                 {displayedTermPayers.map((student) => {
-                  const termFee = student.termFee || baseTermFee;
+                  const discountInfo = getDiscountedTermFee(student, payments, activeTerm, currentDate, systemSettings);
+                  const termFee = discountInfo.termFee;
                   const legacyDebt = student.legacyDebt || 0;
                   const totalExpected = termFee + legacyDebt;
                   const studentPayments = payments.filter(p => p.studentId === student.id && !p.isAbsent);
@@ -843,15 +1556,20 @@ export const TermPayersTab: React.FC = React.memo(() => {
                   const percentPaid = Math.min(100, (totalPaid / totalExpected) * 100);
                   const isLowProgress = percentPaid < 25;
 
-                  // Soft red hue highlighting for low progress (<25%) or significant legacy debt
+                  // Soft red/amber hue highlighting for low progress (<25%) or significant legacy debt or auto-flagged high debt
                   // Adaptive for daylight / dark mode
                   const isSignificantDebt = legacyDebt >= 100;
                   const hasAnyLegacyDebt = legacyDebt > 0;
+                  const isAutoFlagged = autoFlaggedPupils.includes(student.id);
 
                   const rowClass = isLowProgress || isSignificantDebt
                     ? theme === 'daylight'
                       ? 'bg-red-50/70 hover:bg-red-100/80 transition-all border-l-4 border-l-red-500 group font-bold'
                       : 'bg-red-950/15 hover:bg-red-900/10 transition-all border-l-4 border-l-red-500/80 group font-bold'
+                    : isAutoFlagged
+                    ? theme === 'daylight'
+                      ? 'bg-amber-50/60 hover:bg-amber-100/70 transition-all border-l-4 border-l-amber-500 group font-bold shadow-[inset_4px_0_0_0_#f59e0b]'
+                      : 'bg-amber-950/20 hover:bg-amber-900/15 transition-all border-l-4 border-l-amber-500/80 group font-bold'
                     : hasAnyLegacyDebt
                     ? theme === 'daylight'
                       ? 'bg-amber-50/40 hover:bg-amber-100/50 transition-all border-l-4 border-l-red-400 group font-medium'
@@ -888,6 +1606,11 @@ export const TermPayersTab: React.FC = React.memo(() => {
                               }`}>
                                 {student.name}
                               </span>
+                              {isAutoFlagged && (
+                                <span className="text-[8px] font-black tracking-wide text-amber-400 bg-amber-950/40 border border-amber-500/35 px-1.5 py-0.5 uppercase shrink-0 font-sans flex items-center gap-1 animate-pulse" title="High Debt Threshold Exceeded (Auto-Flagged)">
+                                  ⚠️ AUTO-FLAGGED
+                                </span>
+                              )}
                               {isLowProgress && (
                                 <span className="text-[8px] font-black tracking-wide text-red-500 bg-red-950/30 border border-red-500/35 px-1.5 py-0.5 uppercase shrink-0 font-sans">
                                   CRITICAL &lt; 25%
@@ -919,13 +1642,32 @@ export const TermPayersTab: React.FC = React.memo(() => {
                         </span>
                       </td>
 
-                      <td className="px-6 py-4 font-mono font-black text-white">
-                        <div>GHC {termFee.toFixed(2)}</div>
-                        {legacyDebt > 0 && (
-                          <div className="text-[10px] text-red-400 font-bold mt-1" title="Legacy Debt before this system was adopted">
-                            + GHC {legacyDebt.toFixed(2)} Legacy
-                          </div>
-                        )}
+                      <td className="px-6 py-4 font-mono font-black text-white text-left">
+                        <div className="flex flex-col">
+                          <span className={discountInfo.isApplied ? "text-emerald-400 font-black" : "text-white"}>
+                            GHC {termFee.toFixed(2)}
+                          </span>
+                          {discountInfo.originalFee !== termFee && (
+                            <span className="text-[9px] text-neutral-500 font-medium line-through">
+                              GHC {discountInfo.originalFee.toFixed(2)}
+                            </span>
+                          )}
+                          {discountInfo.isApplied && (
+                            <span className="text-[8px] text-emerald-500 font-black mt-0.5 uppercase tracking-wide">
+                              ✓ Early Bird
+                            </span>
+                          )}
+                          {discountInfo.isEligibleButUnpaid && (
+                            <span className="text-[8px] text-amber-500 font-black mt-0.5 uppercase tracking-wide animate-pulse">
+                              ⏳ Early Bird Eligible
+                            </span>
+                          )}
+                          {legacyDebt > 0 && (
+                            <div className="text-[10px] text-red-400 font-bold mt-1" title="Legacy Debt before this system was adopted">
+                              + GHC {legacyDebt.toFixed(2)} Legacy
+                            </div>
+                          )}
+                        </div>
                       </td>
 
                       <td className="px-6 py-4">
@@ -987,7 +1729,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
                       </td>
 
                       <td className="px-6 py-4 text-right">
-                        <div className="flex items-center justify-end gap-2">
+                        <div className="flex items-center justify-end gap-2 font-mono">
                           {!isSettled && (
                             <button
                               disabled={sendingReminderId === student.id}
@@ -997,6 +1739,18 @@ export const TermPayersTab: React.FC = React.memo(() => {
                             >
                               <MessageSquare size={13} className={sendingReminderId === student.id ? "animate-bounce" : ""} />
                               <span>{sendingReminderId === student.id ? "Sending..." : "Remind"}</span>
+                            </button>
+                          )}
+                          {!isSettled && balanceDue >= (systemSettings?.debtThresholdLimit ?? 50) && (
+                            <button
+                              disabled={sendingReminderId === student.id}
+                              onClick={() => handleSendSmsReminder(student, balanceDue)}
+                              className="bg-amber-950/40 hover:bg-amber-900/30 text-amber-400 hover:text-amber-300 border border-amber-500/30 hover:border-amber-500/50 px-3 py-1.5 text-xs font-black uppercase tracking-tight transition-all cursor-pointer rounded-xs inline-flex items-center gap-1.5 hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50"
+                              title="Send automated high-debt threshold warning alert"
+                              id={`btn-sms-reminder-${student.id}`}
+                            >
+                              <Send size={13} className={sendingReminderId === student.id ? "animate-bounce" : ""} />
+                              <span>Send SMS Reminder</span>
                             </button>
                           )}
                           <button
@@ -1092,7 +1846,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
             ) : (
               filteredHistoryStudents.map(student => {
                 const isSelected = student.id === historySelectedStudentId;
-                const studentFee = student.termFee || baseTermFee;
+                const studentFee = student.termFee || getStudentBaselineTermFee(student.class, systemSettings);
                 const legacyDebt = student.legacyDebt || 0;
                 const studentPayments = payments.filter(p => p.studentId === student.id && !p.isAbsent);
                 const totalPaid = studentPayments.reduce((sum, p) => sum + p.amount, 0);
@@ -1296,6 +2050,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
                           <th className="py-3 px-3 font-bold">Recorded By (Staff)</th>
                           <th className="py-3 px-3 font-bold">Transaction Reference</th>
                           <th className="py-3 px-3 font-bold">Status</th>
+                          <th className="py-3 px-3 font-bold text-right no-print">Receipt</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-neutral-850/50">
@@ -1325,6 +2080,17 @@ export const TermPayersTab: React.FC = React.memo(() => {
                                 <span className="text-[8.5px] bg-emerald-950/40 border border-emerald-500/20 text-emerald-400 px-1.5 py-0.5 font-bold uppercase rounded-xs">
                                   VERIFIED
                                 </span>
+                              </td>
+                              <td className="py-3 px-3 text-right no-print">
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedReceiptPayment(p)}
+                                  className="bg-neutral-900 hover:bg-neutral-800 text-amber-400 hover:text-amber-300 border border-neutral-850 px-2 py-1 text-[9px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded-xs flex items-center gap-1 inline-flex shrink-0"
+                                  title="View and print official payment receipt"
+                                >
+                                  <Receipt size={10} />
+                                  <span>View Receipt</span>
+                                </button>
                               </td>
                             </tr>
                           );
@@ -1389,7 +2155,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {pendingPaymentsStudents.map(({ student, consecutiveDays, unpaidDates }) => {
-            const termFee = student.termFee || baseTermFee;
+            const termFee = student.termFee || getStudentBaselineTermFee(student.class, systemSettings);
             const legacyDebt = student.legacyDebt || 0;
             const totalExpected = termFee + legacyDebt;
             const studentPayments = payments.filter(p => p.studentId === student.id && !p.isAbsent);
@@ -1875,164 +2641,611 @@ export const TermPayersTab: React.FC = React.memo(() => {
 
                 {/* Quick Payment Collection Form */}
                 <div className="border border-neutral-800/80 p-5 bg-neutral-950/45 space-y-4">
-                  <div className="flex items-center gap-2 border-b border-neutral-850 pb-2">
-                    <CreditCard size={14} className="text-amber-400" />
-                    <h4 className="text-[11px] font-black uppercase tracking-wider text-white font-mono">
-                      Log Custom Scheme Payment
-                    </h4>
+                  {/* Tab bar header */}
+                  <div className="flex border-b border-neutral-800">
+                    <button
+                      type="button"
+                      onClick={() => setPaymentModeTab('cash')}
+                      className={`flex-1 py-2 text-[10px] font-mono font-black uppercase tracking-wider border-b-2 transition-all cursor-pointer ${
+                        paymentModeTab === 'cash'
+                          ? 'border-amber-400 text-amber-400 font-extrabold bg-neutral-900/50'
+                          : 'border-transparent text-neutral-400 hover:text-white hover:bg-neutral-900/25'
+                      }`}
+                    >
+                      Cash / Bank Log
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPaymentModeTab('momo')}
+                      className={`flex-1 py-2 text-[10px] font-mono font-black uppercase tracking-wider border-b-2 transition-all cursor-pointer ${
+                        paymentModeTab === 'momo'
+                          ? 'border-emerald-400 text-emerald-400 font-extrabold bg-neutral-900/50'
+                          : 'border-transparent text-neutral-400 hover:text-white hover:bg-neutral-900/25'
+                      }`}
+                    >
+                      Mobile Money Push
+                    </button>
                   </div>
 
-                  <form onSubmit={handleCollectPayment} className="space-y-3 font-sans" id="scheme-collection-form">
-                    <div>
-                      <label className="block text-[10px] text-neutral-500 uppercase font-black mb-1">
-                        Immediate Collection Amount (GHC)
-                      </label>
-                      <div className="relative">
-                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-mono font-black text-neutral-500">
-                          GHC
-                        </span>
-                        <input
-                          type="number"
-                          step="0.01"
-                          required
-                          placeholder="Amount e.g. 50.00"
-                          value={collectAmount}
-                          onChange={(e) => setCollectAmount(e.target.value)}
-                          className="w-full bg-neutral-950 border-2 border-neutral-800 pl-12 pr-4 py-2.5 text-xs text-white font-mono outline-none focus:border-amber-400 focus:ring-0 transition-colors"
-                        />
+                  {paymentModeTab === 'cash' ? (
+                    <>
+                      <div className="flex items-center gap-2 border-b border-neutral-850 pb-2">
+                        <CreditCard size={14} className="text-amber-400" />
+                        <h4 className="text-[11px] font-black uppercase tracking-wider text-white font-mono">
+                          Log Custom Scheme Payment
+                        </h4>
+                      </div>
+
+                      <form onSubmit={handleCollectPayment} className="space-y-3 font-sans" id="scheme-collection-form">
+                        <div>
+                          <label className="block text-[10px] text-neutral-500 uppercase font-black mb-1">
+                            Immediate Collection Amount (GHC)
+                          </label>
+                          <div className="relative">
+                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-mono font-black text-neutral-500">
+                              GHC
+                            </span>
+                            <input
+                              type="number"
+                              step="0.01"
+                              required
+                              placeholder="Amount e.g. 50.00"
+                              value={collectAmount}
+                              onChange={(e) => setCollectAmount(e.target.value)}
+                              className="w-full bg-neutral-950 border-2 border-neutral-800 pl-12 pr-4 py-2.5 text-xs text-white font-mono outline-none focus:border-amber-400 focus:ring-0 transition-colors"
+                            />
+                          </div>
+                        </div>
+
+                        <button
+                          type="submit"
+                          className="w-full bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black font-mono tracking-wider uppercase text-[10px] py-3.5 transition-all cursor-pointer flex items-center justify-center gap-1 hover:-translate-y-0.5 active:translate-y-0"
+                        >
+                          <Plus size={11} className="stroke-[3.5]" />
+                          <span>Log Collection Entry</span>
+                        </button>
+
+                        {/* Status Feedback alerts inside drawer info */}
+                        <AnimatePresence>
+                          {formSuccess && (
+                            <div className="space-y-2">
+                              <motion.div
+                                initial={{ opacity: 0, y: 5 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0 }}
+                                className="p-3 border border-emerald-400/30 bg-emerald-950/20 text-emerald-400 text-[10px] font-bold uppercase flex items-center justify-center gap-1.5"
+                              >
+                                <Check size={11} className="stroke-[3]" />
+                                <span>{formSuccess}</span>
+                              </motion.div>
+                              
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (!selectedStudent) return;
+                                  const studentPayments = payments.filter(p => p.studentId === selectedStudent.id && !p.isAbsent);
+                                  const latestPayment = [...studentPayments].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
+                                  if (latestPayment) {
+                                    setSelectedReceiptPayment(latestPayment);
+                                  } else {
+                                    showToast("No transaction record found to generate receipt.");
+                                  }
+                                }}
+                                className="w-full bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black font-mono tracking-wider uppercase text-[9px] py-2.5 transition-all cursor-pointer flex items-center justify-center gap-1.5 rounded-xs"
+                              >
+                                <Receipt size={12} />
+                                <span>Print Receipt for this payment</span>
+                              </button>
+                            </div>
+                          )}
+                          
+                          {formError && (
+                            <motion.div
+                              initial={{ opacity: 0, y: 5 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0 }}
+                              className="p-3 border border-red-500/30 bg-red-950/20 text-red-400 text-[10px] font-bold uppercase flex items-center justify-center gap-1.5"
+                            >
+                              <AlertCircle size={11} />
+                              <span>{formError}</span>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </form>
+                    </>
+                  ) : (
+                    <div className="space-y-4 animate-fadeIn">
+                      <div className="flex items-center gap-2 border-b border-neutral-850 pb-2">
+                        <Smartphone size={14} className="text-emerald-400" />
+                        <h4 className="text-[11px] font-black uppercase tracking-wider text-white font-mono">
+                          Mobile Money Integration
+                        </h4>
+                      </div>
+
+                      <div className="space-y-3 font-sans">
+                        <div>
+                          <label className="block text-[10px] text-neutral-400 uppercase font-black mb-1">
+                            Amount to Bill ({currencySymbol})
+                          </label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={momoAmountInput}
+                            onChange={(e) => setMomoAmountInput(e.target.value)}
+                            disabled={momoSimState !== 'idle' && momoSimState !== 'success' && momoSimState !== 'failed'}
+                            placeholder="Amount e.g. 150.00"
+                            className="w-full bg-neutral-950 border-2 border-neutral-800 py-2.5 px-3 text-xs text-white font-mono focus:border-emerald-400 focus:outline-none disabled:opacity-50"
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="block text-[10px] text-neutral-400 uppercase font-black mb-1">
+                              Network Provider
+                            </label>
+                            <select
+                              value={momoProvider}
+                              onChange={(e) => setMomoProvider(e.target.value)}
+                              disabled={momoSimState !== 'idle' && momoSimState !== 'success' && momoSimState !== 'failed'}
+                              className="w-full bg-neutral-950 border-2 border-neutral-850 py-2.5 px-2 text-xs text-white font-mono focus:border-emerald-400 focus:outline-none disabled:opacity-50"
+                            >
+                              <option value="MTN">MTN MoMo</option>
+                              <option value="Telecel">Telecel Cash</option>
+                              <option value="AirtelTigo">AT Money</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-[10px] text-neutral-400 uppercase font-black mb-1">
+                              Subscriber Phone
+                            </label>
+                            <input
+                              type="tel"
+                              value={momoPhone}
+                              onChange={(e) => setMomoPhone(e.target.value.replace(/\D/g, ''))}
+                              disabled={momoSimState !== 'idle' && momoSimState !== 'success' && momoSimState !== 'failed'}
+                              placeholder="e.g. 0541234567"
+                              className="w-full bg-neutral-950 border-2 border-neutral-850 py-2.5 px-3 text-xs text-white font-mono focus:border-emerald-400 focus:outline-none disabled:opacity-50"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Action Buttons */}
+                        <div className="flex flex-col gap-2 pt-2">
+                          <button
+                            type="button"
+                            onClick={runMomoSimulation}
+                            disabled={momoSimState !== 'idle' && momoSimState !== 'success' && momoSimState !== 'failed'}
+                            className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:bg-neutral-850 text-neutral-950 disabled:text-neutral-500 font-extrabold font-mono tracking-wider uppercase text-[10px] py-3.5 transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                          >
+                            <Smartphone size={12} className="stroke-[2.5]" />
+                            <span>
+                              {momoSimState === 'idle' ? 'Trigger Live USSD Push' : momoSimState === 'success' ? 'Restart Simulation' : 'Simulator Running...'}
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const amt = parseFloat(momoAmountInput);
+                              if (isNaN(amt) || amt <= 0) {
+                                showToast("Please enter a valid amount to generate a payment link.");
+                                return;
+                              }
+                              const link = `${window.location.origin}/pay/momo?studentId=${selectedStudent.id}&amount=${amt}&provider=${momoProvider}&phone=${momoPhone}`;
+                              setGeneratedMomoLink(link);
+                              navigator.clipboard.writeText(link);
+                              showToast("Momo Payment checkout link generated and copied to clipboard!");
+                            }}
+                            className="w-full bg-neutral-900 hover:bg-neutral-800 text-amber-400 hover:text-amber-300 border border-neutral-800 py-2.5 text-[9px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                          >
+                            <Link size={12} />
+                            <span>Generate & Copy Checkout Link</span>
+                          </button>
+                        </div>
+
+                        {/* Live Link Feedback */}
+                        {generatedMomoLink && (
+                          <div className="bg-neutral-950 border border-neutral-850 p-2.5 space-y-1">
+                            <span className="text-[8.5px] font-mono text-neutral-500 uppercase tracking-widest block font-bold">
+                              🔗 Active Payment Portal URL (Copied)
+                            </span>
+                            <div className="flex gap-1.5 items-center">
+                              <input
+                                type="text"
+                                readOnly
+                                value={generatedMomoLink}
+                                className="w-full bg-neutral-900 border-0 p-1.5 text-[9px] text-amber-400 font-mono focus:outline-none select-all"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(generatedMomoLink);
+                                  showToast("Payment link copied!");
+                                }}
+                                className="bg-neutral-900 border border-neutral-800 hover:bg-neutral-800 p-1.5 text-neutral-400 hover:text-white rounded-xs"
+                                title="Copy"
+                              >
+                                <Copy size={11} />
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Simulation Console Screen */}
+                        {momoSimState !== 'idle' && (
+                          <div className="bg-neutral-950 border-2 border-neutral-850 p-4 font-mono text-[9.5px] space-y-2">
+                            <div className="flex justify-between items-center border-b border-neutral-900 pb-1.5">
+                              <span className="text-neutral-400 font-bold uppercase tracking-widest flex items-center gap-1.5">
+                                <span className={`w-2 h-2 rounded-full ${momoSimState === 'success' ? 'bg-emerald-500' : 'bg-amber-400 animate-ping'}`} />
+                                Live USSD Simulation Screen
+                              </span>
+                              <span className="text-neutral-550">
+                                {momoSimState === 'success' ? 'SUCCESS ✓' : 'PROCESSING...'}
+                              </span>
+                            </div>
+
+                            {/* Logs screen */}
+                            <div className="space-y-1.5 max-h-36 overflow-y-auto select-text scrollbar-thin">
+                              {momoLogs.map((log, idx) => (
+                                <p key={idx} className="text-neutral-300 tracking-tight leading-relaxed">
+                                  {log}
+                                </p>
+                              ))}
+                            </div>
+
+                            {/* Dynamic Live Indicator Graphic */}
+                            {momoSimState !== 'success' && momoSimState !== 'failed' && (
+                              <div className="pt-2 border-t border-neutral-900/50 flex items-center justify-between text-neutral-500 italic">
+                                <span>Waiting on network handshake...</span>
+                                <span className="animate-pulse">● TRANSMITTING</span>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
-
-                    <button
-                      type="submit"
-                      className="w-full bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black font-mono tracking-wider uppercase text-[10px] py-3.5 transition-all cursor-pointer flex items-center justify-center gap-1 hover:-translate-y-0.5 active:translate-y-0"
-                    >
-                      <Plus size={11} className="stroke-[3.5]" />
-                      <span>Log Collection Entry</span>
-                    </button>
-
-                    {/* Status Feedback alerts inside drawer info */}
-                    <AnimatePresence>
-                      {formSuccess && (
-                        <motion.div
-                          initial={{ opacity: 0, y: 5 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0 }}
-                          className="p-3 border border-emerald-400/30 bg-emerald-950/20 text-emerald-400 text-[10px] font-bold uppercase flex items-center justify-center gap-1.5"
-                        >
-                          <Check size={11} className="stroke-[3]" />
-                          <span>{formSuccess}</span>
-                        </motion.div>
-                      )}
-                      
-                      {formError && (
-                        <motion.div
-                          initial={{ opacity: 0, y: 5 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0 }}
-                          className="p-3 border border-red-500/30 bg-red-950/20 text-red-400 text-[10px] font-bold uppercase flex items-center justify-center gap-1.5"
-                        >
-                          <AlertCircle size={11} />
-                          <span>{formError}</span>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </form>
+                  )}
                 </div>
               </div>
 
               {/* Column 2: Financial records list & receipt ledger (Span 7) */}
               <div className="md:col-span-7 flex flex-col justify-between">
                 <div>
-                  <span className="text-[10px] font-black uppercase tracking-wide text-neutral-500 block">
-                    ★ TRANSACTION BALANCE SHEET
-                  </span>
-
-                  {/* Summary row */}
-                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3.5 mt-3 mb-6">
-                    <div className="bg-neutral-950 border border-neutral-800 p-3.5">
-                      <span className="text-[9px] text-neutral-500 uppercase font-black block">Fixed quota</span>
-                      <strong className="text-white text-base font-mono font-black mt-1 block">
-                        GHC {selectedStudentFinances.studentFee.toFixed(2)}
-                      </strong>
-                    </div>
-                    <div className="bg-neutral-950 border border-neutral-800 p-3.5">
-                      <span className="text-[9px] text-emerald-400 uppercase font-bold block">Amount Cleared</span>
-                      <strong className="text-emerald-400 text-base font-mono font-black mt-1 block">
-                        GHC {selectedStudentFinances.totalPaid.toFixed(2)}
-                      </strong>
-                    </div>
-                    <div className="bg-neutral-950 border border-neutral-800 p-3.5 col-span-2 md:col-span-1">
-                      <span className="text-[9px] text-red-400 uppercase font-black block">Remaining Balance</span>
-                      <strong className={`${selectedStudentFinances.isCompleted ? 'text-emerald-500' : 'text-red-550'} text-base font-mono font-black mt-1 block`}>
-                        GHC {selectedStudentFinances.balanceDue.toFixed(2)}
-                      </strong>
-                    </div>
-                  </div>
-
-                  {/* Balance progression progress bar */}
-                  <div className="mb-6 bg-neutral-950 p-4 border border-neutral-850">
-                    <div className="flex items-center justify-between text-[10px] text-neutral-400 font-bold uppercase mb-2 font-mono">
-                      <span>Ledger Clearance Rate</span>
-                      <span className={selectedStudentFinances.isCompleted ? 'text-emerald-400 font-extrabold' : 'text-amber-400 font-extrabold'}>
-                        {selectedStudentFinances.percentDone.toFixed(0)}% SETTLED
-                      </span>
-                    </div>
-                    <div className="w-full bg-neutral-900 h-2.5 rounded-full overflow-hidden border border-neutral-800">
-                      <div 
-                        className={`h-full ${selectedStudentFinances.isCompleted ? 'bg-emerald-500' : 'bg-amber-400'}`} 
-                        style={{ width: `${selectedStudentFinances.percentDone}%` }}
-                      />
+                  <div className="flex items-center justify-between border-b border-neutral-800 pb-2 mb-4">
+                    <span className="text-[10px] font-black uppercase tracking-wide text-neutral-500 block">
+                      ★ TRANSACTION BALANCE SHEET
+                    </span>
+                    <div className="flex gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setDrawerActiveTab('ledger')}
+                        className={`text-[9.5px] font-mono font-black uppercase tracking-wider px-3 py-1 border transition-all cursor-pointer ${
+                          drawerActiveTab === 'ledger'
+                            ? 'bg-amber-400 text-neutral-950 border-amber-400'
+                            : 'bg-transparent text-neutral-400 border-neutral-850 hover:text-white'
+                        }`}
+                        id="tab-view-ledger"
+                      >
+                        Ledger & Receipts
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDrawerActiveTab('analytics')}
+                        className={`text-[9.5px] font-mono font-black uppercase tracking-wider px-3 py-1 border transition-all cursor-pointer ${
+                          drawerActiveTab === 'analytics'
+                            ? 'bg-amber-400 text-neutral-950 border-amber-400'
+                            : 'bg-transparent text-neutral-400 border-neutral-850 hover:text-white'
+                        }`}
+                        id="tab-view-analytics"
+                      >
+                        Visual Analytics
+                      </button>
                     </div>
                   </div>
 
-                  {/* Payment Docket history table */}
-                  <h4 className="text-[10px] font-black uppercase tracking-wider text-neutral-400 border-b border-neutral-800 pb-2 mb-3 font-mono">
-                    🧾 ITEMISED RECEIPT LOGS ({selectedStudentFinances.paidPayments.length} entries)
-                  </h4>
+                  {drawerActiveTab === 'ledger' && (
+                    <div className="animate-fadeIn">
+                      {/* Summary row */}
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-3.5 mt-3 mb-6">
+                        <div className="bg-neutral-950 border border-neutral-800 p-3.5">
+                          <span className="text-[9px] text-neutral-500 uppercase font-black block">Fixed quota</span>
+                          <strong className="text-white text-base font-mono font-black mt-1 block">
+                            GHC {selectedStudentFinances.studentFee.toFixed(2)}
+                          </strong>
+                        </div>
+                        <div className="bg-neutral-950 border border-neutral-800 p-3.5">
+                          <span className="text-[9px] text-emerald-400 uppercase font-bold block">Amount Cleared</span>
+                          <strong className="text-emerald-400 text-base font-mono font-black mt-1 block">
+                            GHC {selectedStudentFinances.totalPaid.toFixed(2)}
+                          </strong>
+                        </div>
+                        <div className="bg-neutral-950 border border-neutral-800 p-3.5 col-span-2 md:col-span-1">
+                          <span className="text-[9px] text-red-400 uppercase font-black block">Remaining Balance</span>
+                          <strong className={`${selectedStudentFinances.isCompleted ? 'text-emerald-500' : 'text-red-550'} text-base font-mono font-black mt-1 block`}>
+                            GHC {selectedStudentFinances.balanceDue.toFixed(2)}
+                          </strong>
+                        </div>
+                      </div>
 
-                  {selectedStudentFinances.paidPayments.length === 0 ? (
-                    <div className="p-8 text-center text-neutral-500 bg-neutral-950 border border-neutral-850">
-                      <AlertCircle size={20} className="mx-auto text-neutral-600 mb-2" />
-                      <p className="text-[11px] font-bold uppercase text-neutral-405 leading-normal">
-                        No financial transactions on file.
-                      </p>
-                      <p className="text-[9px] text-neutral-505 mt-0.5 leading-relaxed">
-                        Use the left panel to register the student's installments or school payments.
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="space-y-2 max-h-[18rem] overflow-y-auto">
-                      {selectedStudentFinances.paidPayments.map((p, idx) => (
-                        <div 
-                          key={p.id} 
-                          className="bg-neutral-950 border border-neutral-850 p-3 flex items-center justify-between font-mono text-[11px]"
-                          id={`payment-log-${p.id}`}
-                        >
-                          <div>
-                            <span className="text-[8px] font-bold uppercase tracking-wide bg-neutral-900 text-neutral-400 px-1.5 py-0.5 border border-neutral-800 inline-block mb-1.5">
-                              ENTRY {idx + 1}
-                            </span>
-                            <div className="text-[9px] text-neutral-500 uppercase font-black">
-                              LOGGED ON: {p.date} • {new Date(p.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      {/* Balance progression progress bar */}
+                      <div className="mb-6 bg-neutral-950 p-4 border border-neutral-850">
+                        <div className="flex items-center justify-between text-[10px] text-neutral-400 font-bold uppercase mb-2 font-mono">
+                          <span>Ledger Clearance Rate</span>
+                          <span className={selectedStudentFinances.isCompleted ? 'text-emerald-400 font-extrabold' : 'text-amber-400 font-extrabold'}>
+                            {selectedStudentFinances.percentDone.toFixed(0)}% SETTLED
+                          </span>
+                        </div>
+                        <div className="w-full bg-neutral-900 h-2.5 rounded-full overflow-hidden border border-neutral-800">
+                          <div 
+                            className={`h-full ${selectedStudentFinances.isCompleted ? 'bg-emerald-500' : 'bg-amber-400'}`} 
+                            style={{ width: `${selectedStudentFinances.percentDone}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Payment Docket history table */}
+                      <h4 className="text-[10px] font-black uppercase tracking-wider text-neutral-400 border-b border-neutral-800 pb-2 mb-3 font-mono">
+                        🧾 ITEMISED RECEIPT LOGS ({selectedStudentFinances.paidPayments.length} entries)
+                      </h4>
+
+                      {selectedStudentFinances.paidPayments.length === 0 ? (
+                        <div className="p-8 text-center text-neutral-500 bg-neutral-950 border border-neutral-850">
+                          <AlertCircle size={20} className="mx-auto text-neutral-600 mb-2" />
+                          <p className="text-[11px] font-bold uppercase text-neutral-405 leading-normal">
+                            No financial transactions on file.
+                          </p>
+                          <p className="text-[9px] text-neutral-505 mt-0.5 leading-relaxed">
+                            Use the left panel to register the student's installments or school payments.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="space-y-2 max-h-[18rem] overflow-y-auto">
+                          {selectedStudentFinances.paidPayments.map((p, idx) => (
+                            <div 
+                              key={p.id} 
+                              className="bg-neutral-950 border border-neutral-850 p-3 flex items-center justify-between font-mono text-[11px]"
+                              id={`payment-log-${p.id}`}
+                            >
+                              <div>
+                                <span className="text-[8px] font-bold uppercase tracking-wide bg-neutral-900 text-neutral-400 px-1.5 py-0.5 border border-neutral-800 inline-block mb-1.5">
+                                  ENTRY {idx + 1}
+                                </span>
+                                <div className="text-[9px] text-neutral-500 uppercase font-black">
+                                  LOGGED ON: {p.date} • {new Date(p.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                </div>
+                                {p.notes && (
+                                  <div className="text-[10px] text-neutral-300 font-sans font-bold mt-1 max-w-[17rem] md:max-w-md break-words italic">
+                                    "{p.notes}"
+                                  </div>
+                                )}
+                              </div>
+                              
+                              <div className="text-right flex items-center gap-3">
+                                <div className="text-right">
+                                  <div className="text-emerald-400 font-black text-sm">
+                                    GHC {p.amount.toFixed(2)}
+                                  </div>
+                                  <span className="text-[8.5px] text-neutral-500 font-sans block mt-0.5 uppercase">
+                                    By {p.collectedBy}
+                                  </span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedReceiptPayment(p)}
+                                  className="bg-neutral-900 hover:bg-neutral-800 text-amber-400 hover:text-amber-300 border border-neutral-800 px-2 py-1.5 text-[9px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded-xs flex items-center gap-1 inline-flex shrink-0 self-center"
+                                  title="Print / View Official Receipt"
+                                >
+                                  <Receipt size={10} />
+                                  <span>Receipt</span>
+                                </button>
+                              </div>
                             </div>
-                            {p.notes && (
-                              <div className="text-[10px] text-neutral-300 font-sans font-bold mt-1 max-w-[17rem] md:max-w-md break-words italic">
-                                "{p.notes}"
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {drawerActiveTab === 'analytics' && analyticsData && (
+                    <div className="space-y-4 animate-fadeIn">
+                      {/* Financial Progress Area Chart */}
+                      <div className="bg-neutral-950 border border-neutral-850 p-4">
+                        <div className="flex items-center justify-between border-b border-neutral-900 pb-2 mb-3">
+                          <span className="text-[10px] font-black uppercase tracking-wide text-amber-400 font-mono flex items-center gap-1.5">
+                            <TrendingUp size={12} className="text-amber-400" />
+                            Cumulative Payment Clearance Trend
+                          </span>
+                          <span className="text-[9px] font-mono text-neutral-550 font-bold uppercase">
+                            GHC CLEARANCE OVER TIME
+                          </span>
+                        </div>
+
+                        {analyticsData.paymentChartData.length === 0 ? (
+                          <div className="py-12 text-center text-neutral-500 font-sans">
+                            <AlertCircle size={20} className="mx-auto text-neutral-600 mb-2" />
+                            <p className="text-[11px] font-bold uppercase text-neutral-405 leading-normal">
+                              No payment logs found for this term.
+                            </p>
+                            <p className="text-[9px] text-neutral-505 mt-0.5 leading-relaxed">
+                              Installment collections logged on the left panel will draw a trend line here.
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="h-44 w-full">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <AreaChart
+                                data={analyticsData.paymentChartData}
+                                margin={{ top: 15, right: 10, left: -20, bottom: 0 }}
+                              >
+                                <defs>
+                                  <linearGradient id="colorCumulative" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor="#eab308" stopOpacity={0.25}/>
+                                    <stop offset="95%" stopColor="#eab308" stopOpacity={0}/>
+                                  </linearGradient>
+                                </defs>
+                                <CartesianGrid stroke="#171717" strokeDasharray="3 3" />
+                                <XAxis 
+                                  dataKey="date" 
+                                  stroke="#525252" 
+                                  fontSize={8} 
+                                  fontFamily="monospace"
+                                  tickLine={false}
+                                />
+                                <YAxis 
+                                  stroke="#525252" 
+                                  fontSize={8} 
+                                  fontFamily="monospace"
+                                  tickLine={false}
+                                />
+                                <Tooltip 
+                                  contentStyle={{ 
+                                    backgroundColor: '#0a0a0a', 
+                                    borderColor: '#404040',
+                                    borderRadius: '2px',
+                                    fontFamily: 'monospace',
+                                    fontSize: '9px',
+                                    color: '#fff'
+                                  }}
+                                  labelStyle={{ color: '#909090', fontWeight: 'bold' }}
+                                />
+                                <ReferenceLine 
+                                  y={selectedStudentFinances.totalTarget} 
+                                  stroke="#f43f5e" 
+                                  strokeDasharray="4 4" 
+                                  label={{ 
+                                    value: `Quota target: GHC ${selectedStudentFinances.totalTarget.toFixed(0)}`, 
+                                    fill: '#f43f5e', 
+                                    fontSize: 8, 
+                                    position: 'top',
+                                    fontFamily: 'monospace'
+                                  }} 
+                                />
+                                <Area 
+                                  type="monotone" 
+                                  dataKey="cumulative" 
+                                  name="Cumulative Paid"
+                                  stroke="#eab308" 
+                                  strokeWidth={2}
+                                  fillOpacity={1} 
+                                  fill="url(#colorCumulative)" 
+                                />
+                              </AreaChart>
+                            </ResponsiveContainer>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Attendance & Registration Info Row */}
+                      <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+                        {/* Donut Chart: Overall attendance rate */}
+                        <div className="md:col-span-5 bg-neutral-950 border border-neutral-850 p-4 flex flex-col justify-between">
+                          <div>
+                            <div className="border-b border-neutral-900 pb-1.5 mb-3">
+                              <span className="text-[10px] font-black uppercase tracking-wide text-emerald-400 font-mono">
+                                Term Attendance
+                              </span>
+                            </div>
+
+                            {analyticsData.totalSchoolDays === 0 ? (
+                              <div className="py-8 text-center text-neutral-500 text-[10px]">
+                                No attendance records.
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-3">
+                                <div className="w-16 h-16 shrink-0 relative flex items-center justify-center">
+                                  <ResponsiveContainer width="100%" height="100%">
+                                    <PieChart>
+                                      <Pie
+                                        data={analyticsData.attendancePieData}
+                                        innerRadius={18}
+                                        outerRadius={28}
+                                        paddingAngle={3}
+                                        dataKey="value"
+                                      >
+                                        <Cell fill="#10b981" /> {/* Present */}
+                                        <Cell fill="#f43f5e" /> {/* Absent */}
+                                      </Pie>
+                                    </PieChart>
+                                  </ResponsiveContainer>
+                                  <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                                    <span className="text-[10px] font-mono font-black text-emerald-400 leading-none">
+                                      {analyticsData.attendanceRate}%
+                                    </span>
+                                  </div>
+                                </div>
+
+                                <div className="space-y-1 font-mono text-[9px] leading-tight">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                                    <span className="text-neutral-400">Present:</span>
+                                    <strong className="text-white">{analyticsData.totalPresent}d</strong>
+                                  </div>
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                                    <span className="text-neutral-400">Absent:</span>
+                                    <strong className="text-white">{analyticsData.totalAbsent}d</strong>
+                                  </div>
+                                  <div className="pt-1.5 border-t border-neutral-900 text-[8px] text-neutral-550 uppercase">
+                                    Out of {analyticsData.totalSchoolDays} school days
+                                  </div>
+                                </div>
                               </div>
                             )}
                           </div>
-                          
-                          <div className="text-right">
-                            <div className="text-emerald-400 font-black text-sm">
-                              GHC {p.amount.toFixed(2)}
-                            </div>
-                            <span className="text-[8.5px] text-neutral-500 font-sans block mt-0.5 uppercase">
-                              By {p.collectedBy}
+                        </div>
+
+                        {/* Stacked Bar Chart: Weekly Distribution */}
+                        <div className="md:col-span-7 bg-neutral-950 border border-neutral-850 p-4">
+                          <div className="border-b border-neutral-900 pb-1.5 mb-3">
+                            <span className="text-[10px] font-black uppercase tracking-wide text-neutral-400 font-mono">
+                              Weekly Registration Frequency
                             </span>
                           </div>
+
+                          {analyticsData.attendanceWeeklyChartData.length === 0 ? (
+                            <div className="py-8 text-center text-neutral-500 text-[10px]">
+                              No active school weeks yet.
+                            </div>
+                          ) : (
+                            <div className="h-20 w-full">
+                              <ResponsiveContainer width="100%" height="100%">
+                                <BarChart
+                                  data={analyticsData.attendanceWeeklyChartData}
+                                  margin={{ top: 5, right: 5, left: -30, bottom: 0 }}
+                                >
+                                  <CartesianGrid stroke="#171717" vertical={false} />
+                                  <XAxis 
+                                    dataKey="week" 
+                                    stroke="#525252" 
+                                    fontSize={8} 
+                                    fontFamily="monospace"
+                                    tickLine={false}
+                                  />
+                                  <YAxis 
+                                    stroke="#525252" 
+                                    fontSize={8} 
+                                    fontFamily="monospace"
+                                    allowDecimals={false}
+                                    tickLine={false}
+                                  />
+                                  <Tooltip
+                                    contentStyle={{ 
+                                      backgroundColor: '#0a0a0a', 
+                                      borderColor: '#404040',
+                                      borderRadius: '2px',
+                                      fontFamily: 'monospace',
+                                      fontSize: '9px',
+                                      color: '#fff'
+                                    }}
+                                  />
+                                  <Bar dataKey="present" name="Presents" stackId="a" fill="#10b981" radius={[0, 0, 0, 0]} />
+                                  <Bar dataKey="absent" name="Absents" stackId="a" fill="#f43f5e" radius={[1, 1, 0, 0]} />
+                                </BarChart>
+                              </ResponsiveContainer>
+                            </div>
+                          )}
                         </div>
-                      ))}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -2233,7 +3446,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
                   )}
 
                   {/* Signatures block for printing */}
-                  <div className="mt-12 hidden print:flex justify-between items-center text-[10px] font-mono border-t border-neutral-300 pt-8 print:text-black print:border-black">
+                  <div className="mt-12 hidden print:flex print-signature-block justify-between items-center text-[10px] font-mono border-t border-neutral-300 pt-8 print:text-black print:border-black">
                     <div>
                       <div className="border-b border-black w-48 mb-1.5" />
                       <p className="font-bold text-neutral-600">Issued By: Yakubu Hakeem</p>
@@ -2496,6 +3709,387 @@ export const TermPayersTab: React.FC = React.memo(() => {
                 </div>
               </div>
 
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedReceiptPayment && receiptStudent && receiptStudentFinances && (
+        <div className="fixed inset-0 z-50 bg-neutral-950/90 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto no-print animate-fade-in">
+          <div className="bg-neutral-900 border-4 border-amber-400 p-6 max-w-lg w-full rounded-none space-y-4 shadow-[8px_8px_0px_0px_rgba(0,0,0,0.55)] relative text-white">
+            <button
+              onClick={() => setSelectedReceiptPayment(null)}
+              className="absolute top-4 right-4 text-neutral-400 hover:text-white font-mono text-xs p-1 cursor-pointer font-black border border-neutral-800 hover:border-red-500 hover:text-red-500 px-1.5 py-0.5 transition-all"
+            >
+              ✕ CLOSE
+            </button>
+            
+            <div className="text-center space-y-1 pb-2 border-b border-neutral-850">
+              <span className="text-[9px] font-mono font-black uppercase tracking-widest text-amber-400 block">SAAKO HOLY CHILD ACADEMY</span>
+              <h3 className="text-sm font-black uppercase tracking-tight font-mono text-white">
+                OFFICIAL TERM SCHEME RECEIPT
+              </h3>
+              <p className="text-[10px] text-neutral-500 font-mono">
+                REF-{selectedReceiptPayment.id.substring(0, 8).toUpperCase()}
+              </p>
+            </div>
+
+            {/* Receipt Content Card */}
+            <div className="bg-neutral-950 border border-neutral-800 p-4 space-y-3 font-mono text-[11px] rounded-none">
+              <div className="flex justify-between border-b border-neutral-900 pb-1.5">
+                <span className="text-neutral-550 uppercase font-bold">PUPIL BENEFICIARY:</span>
+                <span className="text-white font-black uppercase">{receiptStudent.name}</span>
+              </div>
+              <div className="flex justify-between border-b border-neutral-900 pb-1.5">
+                <span className="text-neutral-550 uppercase font-bold">ADMISSION ROLL ID:</span>
+                <span className="text-amber-400 font-black">{receiptStudent.rollNumber || `SHC-${receiptStudent.id.substring(0, 5).toUpperCase()}`}</span>
+              </div>
+              <div className="flex justify-between border-b border-neutral-900 pb-1.5">
+                <span className="text-neutral-550 uppercase font-bold">COHORT CLASS:</span>
+                <span className="text-white font-bold">{receiptStudent.class} ({receiptStudent.category})</span>
+              </div>
+              <div className="flex justify-between border-b border-neutral-900 pb-1.5">
+                <span className="text-neutral-550 uppercase font-bold">DATE CLEARED:</span>
+                <span className="text-white font-bold">{selectedReceiptPayment.date}</span>
+              </div>
+              <div className="flex justify-between border-b border-neutral-900 pb-1.5">
+                <span className="text-neutral-550 uppercase font-bold">REGISTRAR STAFF:</span>
+                <span className="text-white font-bold">{selectedReceiptPayment.collectedBy || 'Certified Registrar'}</span>
+              </div>
+              
+              {/* Financials details */}
+              <div className="bg-neutral-900/40 p-3.5 border border-neutral-850 space-y-2 mt-4 text-[11px]">
+                <div className="flex justify-between">
+                  <span className="text-neutral-400">Subscribed Term Fee:</span>
+                  <span className="text-neutral-200">GHC {receiptStudentFinances.termFee.toFixed(2)}</span>
+                </div>
+                {receiptStudentFinances.legacyDebt > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-neutral-400">Legacy Debt Carried:</span>
+                    <span className="text-neutral-200">GHC {receiptStudentFinances.legacyDebt.toFixed(2)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between border-t border-neutral-850/50 pt-1 text-xs">
+                  <span className="text-neutral-400 uppercase font-black text-[9px]">Total Cumulative Paid:</span>
+                  <span className="text-emerald-400 font-black">GHC {receiptStudentFinances.totalPaid.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-neutral-400 uppercase font-black text-[9px]">Remaining Balance:</span>
+                  <span className={`${receiptStudentFinances.balanceDue > 0 ? 'text-rose-400' : 'text-emerald-400'} font-black`}>
+                    GHC {receiptStudentFinances.balanceDue.toFixed(2)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Transacted amount badge */}
+              <div className="border-t-2 border-dashed border-neutral-800 pt-3 mt-4 flex items-center justify-between">
+                <div>
+                  <span className="text-[9px] text-neutral-500 font-black block uppercase">TRANSACTION STATUS</span>
+                  <span className="text-[10px] text-emerald-400 font-black">✓ VERIFIED & RECORDED</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-[9px] text-neutral-500 font-black block uppercase">AMOUNT PAID</span>
+                  <span className="text-base text-emerald-400 font-black">
+                    GHC {selectedReceiptPayment.amount.toFixed(2)}
+                  </span>
+                </div>
+              </div>
+              
+              {selectedReceiptPayment.notes && (
+                <div className="text-[9.5px] text-neutral-400 border-t border-neutral-900 pt-2 italic leading-relaxed">
+                  Memo: "{selectedReceiptPayment.notes}"
+                </div>
+              )}
+            </div>
+
+            {/* Receipt actions */}
+            <div className="grid grid-cols-2 gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black font-mono tracking-wider uppercase text-[10px] py-3.5 transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow"
+              >
+                <Printer size={13} className="stroke-[3.5]" />
+                <span>Print Receipt</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => downloadTermReceipt(receiptStudent, selectedReceiptPayment, receiptStudentFinances.totalPaid, receiptStudentFinances.balanceDue)}
+                className="bg-neutral-950 hover:bg-neutral-850 text-white hover:text-amber-400 border border-neutral-800 py-3.5 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <Download size={13} />
+                <span>Download Docket</span>
+              </button>
+            </div>
+
+            <div className="flex gap-2.5">
+              <button
+                type="button"
+                onClick={() => {
+                  const messageText = `*SAAKO HOLY CHILD ACADEMY*\n*OFFICIAL TERM FEE RECEIPT*\n\n` +
+                    `*Pupil:* ${receiptStudent.name}\n` +
+                    `*Admission ID:* ${receiptStudent.rollNumber || `SHC-${receiptStudent.id.substring(0, 5).toUpperCase()}`}\n` +
+                    `*Class:* ${receiptStudent.class} (${receiptStudent.category})\n` +
+                    `*Payment Date:* ${selectedReceiptPayment.date}\n` +
+                    `*Receipt Reference:* REF-${selectedReceiptPayment.id.substring(0, 8).toUpperCase()}\n\n` +
+                    `_Financial Summary:_\n` +
+                    `* Installment Settled: GHC ${selectedReceiptPayment.amount.toFixed(2)}\n` +
+                    `* Total Term Fee: GHC ${receiptStudentFinances.termFee.toFixed(2)}\n` +
+                    `${receiptStudentFinances.legacyDebt > 0 ? `* Legacy Debt Carried: GHC ${receiptStudentFinances.legacyDebt.toFixed(2)}\n` : ''}` +
+                    `* Cumulative Paid to Date: GHC ${receiptStudentFinances.totalPaid.toFixed(2)}\n` +
+                    `* Remaining Balance: GHC ${receiptStudentFinances.balanceDue.toFixed(2)}\n\n` +
+                    `_Thank you for your prompt payment and support of our pupils. Verified by: ${selectedReceiptPayment.collectedBy || 'Certified Registrar'}._`;
+
+                  setWhatsAppReminderModal({
+                    student: receiptStudent,
+                    messageText,
+                    defaultPhone: receiptStudent.guardianPhone || ''
+                  });
+                }}
+                className="w-full bg-emerald-950 hover:bg-emerald-900 text-emerald-400 border border-emerald-800 hover:border-emerald-500 py-3 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <MessageSquare size={12} />
+                <span>Share on WhatsApp</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedReceiptPayment(null)}
+                className="w-full bg-neutral-950 hover:bg-neutral-850 text-neutral-400 hover:text-white border border-neutral-800 py-3 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer"
+              >
+                ✕ Dismiss
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PORTRAIT PHYSICAL PRINT-READY RECEIPT PAGE (HIDDEN ON SCREEN, VISIBLE ON PRINT) */}
+      {selectedReceiptPayment && receiptStudent && receiptStudentFinances && (
+        <div id="print-term-receipt" className="hidden print:block bg-white text-black p-8 font-sans leading-relaxed max-w-[210mm] mx-auto">
+          {/* DUAL COPIES OF THE RECEIPT: DOCK 1 (GUARDIAN'S COPY) & DOCK 2 (SCHOOL COPY) */}
+          
+          {/* -------------------- GUARDIAN COPY -------------------- */}
+          <div className="space-y-4 pb-8">
+            <div className="flex justify-between items-start border-b-2 border-black pb-3">
+              <div className="flex items-center gap-2">
+                <div className="h-10 w-10 border-2 border-black bg-black text-white font-black font-mono text-center flex items-center justify-center text-xs">
+                  SHCA
+                </div>
+                <div>
+                  <h2 className="text-sm font-black uppercase tracking-tight">SAAKO HOLY CHILD ACADEMY</h2>
+                  <span className="text-[9px] text-neutral-600 block uppercase">Official Scholastic Receipts Registry</span>
+                </div>
+              </div>
+              <div className="text-right">
+                <span className="text-[9px] border-2 border-black font-black uppercase px-2 py-0.5">GUARDIAN'S COPY</span>
+                <span className="text-[9px] font-mono block mt-1.5 text-neutral-600">REF: REF-{selectedReceiptPayment.id.substring(0, 8).toUpperCase()}</span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4 text-xs font-mono my-3">
+              <div>
+                <span className="text-[8px] text-neutral-500 block">PUPIL BENEFICIARY:</span>
+                <strong className="text-black uppercase text-sm block">{receiptStudent.name}</strong>
+              </div>
+              <div>
+                <span className="text-[8px] text-neutral-500 block">ADMISSION ROLL NUMBER:</span>
+                <strong className="text-black block">{receiptStudent.rollNumber || `SHC-${receiptStudent.id.substring(0, 5).toUpperCase()}`}</strong>
+              </div>
+              <div>
+                <span className="text-[8px] text-neutral-500 block">COHORT GRADE:</span>
+                <strong className="text-black block">{receiptStudent.class} ({receiptStudent.category})</strong>
+              </div>
+              <div>
+                <span className="text-[8px] text-neutral-500 block">STUDENT GENDER:</span>
+                <strong className="text-black block">{receiptStudent.gender || 'Not Specified'}</strong>
+              </div>
+              <div>
+                <span className="text-[8px] text-neutral-500 block">GUARDIAN CONTACT:</span>
+                <strong className="text-black block">{receiptStudent.guardianPhone || 'Not Specified'}</strong>
+              </div>
+              <div>
+                <span className="text-[8px] text-neutral-500 block">BILLING SCHEME:</span>
+                <strong className="text-black block">{receiptStudent.paymentType === 'Term' ? 'Term Fee Scheme' : 'Daily Gate Scheme'}</strong>
+              </div>
+              <div className="col-span-2">
+                <span className="text-[8px] text-neutral-500 block">DATE CLEARED:</span>
+                <strong className="text-black block">{selectedReceiptPayment.date}</strong>
+              </div>
+            </div>
+
+            {/* Financial statement breakdown table */}
+            <table className="w-full text-left text-xs my-4 border-collapse font-mono">
+              <thead>
+                <tr className="border-b border-black">
+                  <th className="py-1 font-bold">FEES TYPE DESCRIPTION</th>
+                  <th className="py-1 text-right font-bold">DEBIT COMMITMENT</th>
+                  <th className="py-1 text-right font-bold">CUMULATIVE PAID</th>
+                  <th className="py-1 text-right font-bold">BALANCE DUE</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr className="border-b border-neutral-200">
+                  <td className="py-1.5">Standard School Term Subscription Fee</td>
+                  <td className="py-1.5 text-right">GHC {receiptStudentFinances.termFee.toFixed(2)}</td>
+                  <td className="py-1.5 text-right">-</td>
+                  <td className="py-1.5 text-right">-</td>
+                </tr>
+                {receiptStudentFinances.legacyDebt > 0 && (
+                  <tr className="border-b border-neutral-200">
+                    <td className="py-1.5">Pre-adoption Legacy Arrears / Debt Carried</td>
+                    <td className="py-1.5 text-right">GHC {receiptStudentFinances.legacyDebt.toFixed(2)}</td>
+                    <td className="py-1.5 text-right">-</td>
+                    <td className="py-1.5 text-right">-</td>
+                  </tr>
+                )}
+                <tr className="border-b-2 border-black font-bold bg-neutral-50">
+                  <td className="py-1.5 font-sans">Summary (Fee Obligation + Legacy Arrears)</td>
+                  <td className="py-1.5 text-right">GHC {(receiptStudentFinances.termFee + receiptStudentFinances.legacyDebt).toFixed(2)}</td>
+                  <td className="py-1.5 text-right text-emerald-700">GHC {receiptStudentFinances.totalPaid.toFixed(2)}</td>
+                  <td className="py-1.5 text-right text-rose-700">GHC {receiptStudentFinances.balanceDue.toFixed(2)}</td>
+                </tr>
+              </tbody>
+            </table>
+
+            {/* Cleared payment row with stamp */}
+            <div className="flex justify-between items-center my-4 pt-1">
+              <div className="border border-emerald-600/50 bg-emerald-50 p-2 border-dashed flex items-center gap-2 max-w-sm">
+                <div className="text-[10px] text-emerald-800 leading-tight font-sans">
+                  <div className="font-black text-[8px] uppercase tracking-wider">OFFICIAL SYSTEM SEAL</div>
+                  <div>AUTHORIZED & CHECKED-IN</div>
+                  <div className="font-mono text-[7.5px] text-neutral-500">SIGN: {selectedReceiptPayment.collectedBy || 'Certified Registrar'}</div>
+                </div>
+              </div>
+              
+              <div className="text-right">
+                <span className="text-[8px] text-neutral-500 font-black uppercase block font-sans">INSTANT AMOUNT PAID</span>
+                <strong className="text-lg font-black font-mono text-emerald-700">GHC {selectedReceiptPayment.amount.toFixed(2)}</strong>
+              </div>
+            </div>
+
+            {selectedReceiptPayment.notes && (
+              <div className="text-[9px] text-neutral-600 font-mono italic">
+                Notes: "{selectedReceiptPayment.notes}"
+              </div>
+            )}
+            
+            <div className="grid grid-cols-2 gap-8 pt-6 font-mono text-[9px]">
+              <div className="border-t border-neutral-400 pt-1 text-center">
+                Parent Signature & Date
+              </div>
+              <div className="border-t border-neutral-400 pt-1 text-center">
+                Registrar Staff Sign / Stamp
+              </div>
+            </div>
+          </div>
+
+          {/* TEAR OFF DIVIDER */}
+          <div className="border-t-2 border-dashed border-neutral-400 my-6 pt-4 text-center select-none text-[8.5px] font-mono tracking-widest text-neutral-500 flex items-center justify-center gap-2">
+            <span>✂</span>
+            <span>TEAR ALONG THIS LINE TO SEPARATE COPIES</span>
+            <span>✂</span>
+          </div>
+
+          {/* -------------------- SCHOOL ARCHIVE COPY -------------------- */}
+          <div className="space-y-4 pt-4">
+            <div className="flex justify-between items-start border-b-2 border-black pb-3">
+              <div className="flex items-center gap-2">
+                <div className="h-10 w-10 border-2 border-black bg-black text-white font-black font-mono text-center flex items-center justify-center text-xs">
+                  SHCA
+                </div>
+                <div>
+                  <h2 className="text-sm font-black uppercase tracking-tight">SAAKO HOLY CHILD ACADEMY</h2>
+                  <span className="text-[9px] text-neutral-600 block uppercase">Official Scholastic Receipts Registry</span>
+                </div>
+              </div>
+              <div className="text-right">
+                <span className="text-[9px] border-2 border-black bg-neutral-100 font-black uppercase px-2 py-0.5">SCHOOL ARCHIVE COPY</span>
+                <span className="text-[9px] font-mono block mt-1.5 text-neutral-600">REF: REF-{selectedReceiptPayment.id.substring(0, 8).toUpperCase()}</span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4 text-xs font-mono my-3">
+              <div>
+                <span className="text-[8px] text-neutral-500 block">PUPIL BENEFICIARY:</span>
+                <strong className="text-black uppercase text-sm block">{receiptStudent.name}</strong>
+              </div>
+              <div>
+                <span className="text-[8px] text-neutral-500 block">ADMISSION ROLL NUMBER:</span>
+                <strong className="text-black block">{receiptStudent.rollNumber || `SHC-${receiptStudent.id.substring(0, 5).toUpperCase()}`}</strong>
+              </div>
+              <div>
+                <span className="text-[8px] text-neutral-500 block">COHORT GRADE:</span>
+                <strong className="text-black block">{receiptStudent.class} ({receiptStudent.category})</strong>
+              </div>
+              <div>
+                <span className="text-[8px] text-neutral-500 block">STUDENT GENDER:</span>
+                <strong className="text-black block">{receiptStudent.gender || 'Not Specified'}</strong>
+              </div>
+              <div>
+                <span className="text-[8px] text-neutral-500 block">GUARDIAN CONTACT:</span>
+                <strong className="text-black block">{receiptStudent.guardianPhone || 'Not Specified'}</strong>
+              </div>
+              <div>
+                <span className="text-[8px] text-neutral-500 block">BILLING SCHEME:</span>
+                <strong className="text-black block">{receiptStudent.paymentType === 'Term' ? 'Term Fee Scheme' : 'Daily Gate Scheme'}</strong>
+              </div>
+              <div className="col-span-2">
+                <span className="text-[8px] text-neutral-500 block">DATE CLEARED:</span>
+                <strong className="text-black block">{selectedReceiptPayment.date}</strong>
+              </div>
+            </div>
+
+            {/* Condensed table for school archive */}
+            <table className="w-full text-left text-[11px] my-3 border-collapse font-mono">
+              <thead>
+                <tr className="border-b border-black">
+                  <th className="py-1 font-bold">SUMMARY BREAKDOWN</th>
+                  <th className="py-1 text-right font-bold">AMOUNT VALUE</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td className="py-1">Standard Term fee Due</td>
+                  <td className="py-1 text-right">GHC {receiptStudentFinances.termFee.toFixed(2)}</td>
+                </tr>
+                {receiptStudentFinances.legacyDebt > 0 && (
+                  <tr>
+                    <td className="py-1">Legacy Debt Carried</td>
+                    <td className="py-1 text-right">GHC {receiptStudentFinances.legacyDebt.toFixed(2)}</td>
+                  </tr>
+                )}
+                <tr>
+                  <td className="py-1">Total Obligation</td>
+                  <td className="py-1 text-right font-bold">GHC {(receiptStudentFinances.termFee + receiptStudentFinances.legacyDebt).toFixed(2)}</td>
+                </tr>
+                <tr className="border-t border-black font-bold">
+                  <td className="py-1.5">THIS INSTALLMENT RECORDED</td>
+                  <td className="py-1.5 text-right text-emerald-700">GHC {selectedReceiptPayment.amount.toFixed(2)}</td>
+                </tr>
+                <tr className="border-t border-neutral-300 font-bold">
+                  <td className="py-1">Total Paid to Date (Including this)</td>
+                  <td className="py-1 text-right">GHC {receiptStudentFinances.totalPaid.toFixed(2)}</td>
+                </tr>
+                <tr className="border-t border-neutral-300 font-bold">
+                  <td className="py-1">Outstanding Balance Remaining</td>
+                  <td className="py-1 text-right text-rose-700">GHC {receiptStudentFinances.balanceDue.toFixed(2)}</td>
+                </tr>
+              </tbody>
+            </table>
+
+            {selectedReceiptPayment.notes && (
+              <div className="text-[9px] text-neutral-600 font-mono italic">
+                Memo: "{selectedReceiptPayment.notes}"
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-8 pt-4 font-mono text-[9px]">
+              <div className="border-t border-neutral-400 pt-1 text-center">
+                Depositor Signature
+              </div>
+              <div className="border-t border-neutral-400 pt-1 text-center">
+                Registrar Verification & Seal
+              </div>
             </div>
           </div>
         </div>

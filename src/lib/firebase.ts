@@ -17,7 +17,7 @@ import {
   memoryLocalCache
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { Student, PaymentRecord, UserAccount, Term, Expense, WorkerSalary, SystemSettings, BudgetTarget } from '../types';
+import { Student, PaymentRecord, UserAccount, Term, Expense, WorkerSalary, SystemSettings, BudgetTarget, AuditLog } from '../types';
 
 const dbId = (!firebaseConfig.firestoreDatabaseId || firebaseConfig.firestoreDatabaseId === 'default') 
   ? undefined 
@@ -474,6 +474,138 @@ export const db = {
       return res.ok;
     } catch (e) {
       console.error("Local Server API deleteBudgetTarget error: ", e);
+      return false;
+    }
+  },
+
+  async getExamsPayments(): Promise<any[] | null> {
+    try {
+      const res = await fetch("/api/exams/payments");
+      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+      return await res.json();
+    } catch (e) {
+      console.error("Local Server API getExamsPayments error: ", e);
+      return null;
+    }
+  },
+
+  async saveExamsPayment(payment: any): Promise<boolean> {
+    try {
+      const res = await fetch("/api/exams/payments", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payment),
+      });
+      return res.ok;
+    } catch (e) {
+      console.error("Local Server API saveExamsPayment error: ", e);
+      return false;
+    }
+  },
+
+  async deleteExamsPayment(paymentId: string): Promise<boolean> {
+    try {
+      const res = await fetch(`/api/exams/payments/${paymentId}`, {
+        method: "DELETE",
+      });
+      return res.ok;
+    } catch (e) {
+      console.error("Local Server API deleteExamsPayment error: ", e);
+      return false;
+    }
+  },
+
+  async getExamsExpenses(): Promise<any[] | null> {
+    try {
+      const res = await fetch("/api/exams/expenses");
+      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+      return await res.json();
+    } catch (e) {
+      console.error("Local Server API getExamsExpenses error: ", e);
+      return null;
+    }
+  },
+
+  async saveExamsExpense(expense: any): Promise<boolean> {
+    try {
+      const res = await fetch("/api/exams/expenses", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(expense),
+      });
+      return res.ok;
+    } catch (e) {
+      console.error("Local Server API saveExamsExpense error: ", e);
+      return false;
+    }
+  },
+
+  async deleteExamsExpense(expenseId: string): Promise<boolean> {
+    try {
+      const res = await fetch(`/api/exams/expenses/${expenseId}`, {
+        method: "DELETE",
+      });
+      return res.ok;
+    } catch (e) {
+      console.error("Local Server API deleteExamsExpense error: ", e);
+      return false;
+    }
+  },
+
+  async getExamsSettings(): Promise<any | null> {
+    try {
+      const res = await fetch("/api/exams/settings");
+      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+      return await res.json();
+    } catch (e) {
+      console.error("Local Server API getExamsSettings error: ", e);
+      return null;
+    }
+  },
+
+  async saveExamsSettings(settings: any): Promise<boolean> {
+    try {
+      const res = await fetch("/api/exams/settings", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(settings),
+      });
+      return res.ok;
+    } catch (e) {
+      console.error("Local Server API saveExamsSettings error: ", e);
+      return false;
+    }
+  },
+  
+  async getAuditLogs(): Promise<AuditLog[] | null> {
+    try {
+      const res = await fetch("/api/audit-logs");
+      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+      return await res.json();
+    } catch (e) {
+      console.error("Local Server API getAuditLogs error: ", e);
+      return null;
+    }
+  },
+
+  async saveAuditLog(log: Omit<AuditLog, 'id' | 'timestamp'>): Promise<boolean> {
+    try {
+      const res = await fetch("/api/audit-logs", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(log),
+      });
+      return res.ok;
+    } catch (e) {
+      console.error("Local Server API saveAuditLog error: ", e);
       return false;
     }
   }

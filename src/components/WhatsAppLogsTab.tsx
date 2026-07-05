@@ -23,8 +23,7 @@ export function WhatsAppLogsTab() {
   const [showGuide, setShowGuide] = useState(true);
 
   // Read current active connection configuration
-  const activeProvider = process.env.WHATSAPP_PROVIDER || 
-    (process.env.WHATSAPP_TWILIO_SID ? 'twilio' : process.env.WHATSAPP_PHONE_NUMBER_ID ? 'meta' : process.env.WHATSAPP_API_URL ? 'ultramsg/custom' : 'simulated');
+  const activeProvider = (process.env.WHATSAPP_PROVIDER || 'simulated').toLowerCase();
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -219,6 +218,47 @@ export function WhatsAppLogsTab() {
                     <div className="text-neutral-400">WHATSAPP_TWILIO_SID="your_account_sid"</div>
                     <div className="text-neutral-400">WHATSAPP_TWILIO_AUTH_TOKEN="your_auth_token"</div>
                     <div className="text-neutral-400">WHATSAPP_SENDER_PHONE="whatsapp:+14155238886"</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Option D: Arkesel Ghana (Mobile Money Friendly) */}
+              <div className="bg-neutral-900/40 border border-neutral-850 p-4.5 rounded-xs space-y-3 flex flex-col justify-between col-span-1 lg:col-span-3">
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-[9px] font-mono font-black uppercase tracking-wider bg-amber-950/40 text-amber-400 border border-amber-900/60 px-2 py-0.5 rounded-xs">
+                      Option D (Ghana MoMo Friendly)
+                    </span>
+                    <span className="text-[9px] font-mono font-black text-neutral-500">LOCAL TOP-UP</span>
+                  </div>
+                  <h5 className="text-xs font-black text-white uppercase font-sans tracking-tight">
+                    Arkesel Ghana SMS/WhatsApp
+                  </h5>
+                  <p className="text-[10.5px] text-neutral-400 leading-relaxed font-sans">
+                    Perfect for West Africa (Ghana). Arkesel lets you purchase messaging units directly using <strong className="text-amber-400">MTN Mobile Money, Telecel Cash, or AT Money</strong>. No international credit card or PayPal needed!
+                  </p>
+                  
+                  <div className="space-y-1 pt-1 font-mono text-[9.5px]">
+                    <div className="text-white font-black uppercase tracking-widest text-[8px] text-neutral-500">Instructions:</div>
+                    <ol className="list-decimal pl-4.5 text-neutral-400 space-y-1 leading-normal list-outside">
+                      <li>Go to <a href="https://arkesel.com" target="_blank" rel="noopener noreferrer" className="text-amber-400 hover:underline inline-flex items-center gap-0.5 font-bold">arkesel.com <ExternalLink size={8} /></a> and register an account.</li>
+                      <li>Top up your balance using MTN Mobile Money, Telecel Cash, or AT Money directly from their dashboard.</li>
+                      <li>Generate your unique <strong className="text-neutral-200">API Key</strong>.</li>
+                    </ol>
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-neutral-850 space-y-2">
+                  <div className="text-[8px] font-mono text-neutral-500 uppercase tracking-wider font-extrabold">Config Parameters:</div>
+                  <div className="bg-neutral-950 p-3 border border-neutral-850 rounded-xs font-mono text-[10px] leading-relaxed select-all grid grid-cols-1 md:grid-cols-2 gap-2">
+                    <div>
+                      <div className="text-amber-400">WHATSAPP_PROVIDER="arkesel"</div>
+                      <div className="text-neutral-400">WHATSAPP_API_TOKEN="your_arkesel_api_key_here"</div>
+                    </div>
+                    <div>
+                      <div className="text-neutral-400">WHATSAPP_SENDER_PHONE="SAAKOHCA"</div>
+                      <div className="text-neutral-500 italic"># (Optional) Your registered Sender ID</div>
+                    </div>
                   </div>
                 </div>
               </div>

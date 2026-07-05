@@ -6,7 +6,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useApp, PendingAlert, calculateStudentFinancialState } from '../context/AppContext';
 import { StudentClass, Student, SchoolCategory, PaymentRecord } from '../types';
-import { Check, X, Search, Landmark, BellRing, ChevronRight, ChevronLeft, CheckSquare, Users, MessageSquareCode, CalendarDays, CalendarPlus, CalendarX, Plus, ChevronDown, Trash2, Coins, History, Printer, Camera, Upload, Copy, Pencil, QrCode, AlertCircle, User, Phone, DollarSign, Award, ShieldAlert, CheckCircle2, TrendingUp, Info, Download, MessageSquare, RefreshCw, Layers } from 'lucide-react';
+import { Check, X, Search, Landmark, BellRing, ChevronRight, ChevronLeft, CheckSquare, Users, MessageSquareCode, CalendarDays, CalendarPlus, CalendarX, Plus, ChevronDown, Trash2, Coins, History, Printer, Camera, Upload, Copy, Pencil, QrCode, AlertCircle, User, Phone, DollarSign, Award, ShieldAlert, CheckCircle2, TrendingUp, Info, Download, MessageSquare, RefreshCw, Layers, Smartphone, Send, Link } from 'lucide-react';
 import { motion } from 'motion/react';
 import { Html5Qrcode } from 'html5-qrcode';
 import { SchoolLogo } from './SchoolLogo';
@@ -20,6 +20,7 @@ export const ClassRegister: React.FC = React.memo(() => {
     currentDate, 
     setCurrentDate,
     recordPayment, 
+    recordMomoPayment,
     recordPresentZeroPay,
     recordAbsent,
     recordAdvancePayment,
@@ -73,6 +74,17 @@ export const ClassRegister: React.FC = React.memo(() => {
   const [searchQuery, setSearchQuery] = useState('');
   const [highlightedStudentId, setHighlightedStudentId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<'all' | 'unmarked' | 'present' | 'absent' | 'arrears' | 'term_payers'>('all');
+  const [sortBy, setSortBy] = useState<'name' | 'checkin' | 'rollNumber'>('name');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+
+  const toggleSort = (field: 'name' | 'checkin' | 'rollNumber') => {
+    if (sortBy === field) {
+      setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortBy(field);
+      setSortOrder(field === 'checkin' ? 'desc' : 'asc');
+    }
+  };
   const [guardianSmsStudent, setGuardianSmsStudent] = useState<Student | null>(null);
   const [successSms, setSuccessSms] = useState(false);
   const [receiptStudent, setReceiptStudent] = useState<Student | null>(null);
@@ -97,6 +109,8 @@ export const ClassRegister: React.FC = React.memo(() => {
   useEffect(() => {
     setStatusFilter('all');
     setSearchQuery('');
+    setSortBy('name');
+    setSortOrder('asc');
   }, [selectedClass]);
 
   useEffect(() => {
@@ -736,7 +750,93 @@ export const ClassRegister: React.FC = React.memo(() => {
 
   // Transaction History modal states
   const [historyStudent, setHistoryStudent] = useState<Student | null>(null);
-  const [historyModalTab, setHistoryModalTab] = useState<'profile' | 'ledger' | 'print'>('profile');
+  const [historyModalTab, setHistoryModalTab] = useState<'profile' | 'ledger' | 'print' | 'momo'>('profile');
+
+  // Mobile Money simulation and payment link generation states
+  const [momoAmountInput, setMomoAmountInput] = useState<string>('');
+  const [momoProvider, setMomoProvider] = useState<string>('MTN');
+  const [momoPhone, setMomoPhone] = useState<string>('');
+  const [momoSimState, setMomoSimState] = useState<'idle' | 'step1' | 'step2' | 'step3' | 'step4' | 'success' | 'failed'>('idle');
+  const [momoLogs, setMomoLogs] = useState<string[]>([]);
+  const [generatedMomoLink, setGeneratedMomoLink] = useState<string | null>(null);
+
+  const momoTimersRef = React.useRef<NodeJS.Timeout[]>([]);
+  useEffect(() => {
+    return () => {
+      momoTimersRef.current.forEach(clearTimeout);
+      momoTimersRef.current = [];
+    };
+  }, [historyStudent]);
+
+  const runMomoSimulation = () => {
+    if (!historyStudent) return;
+    const amt = parseFloat(momoAmountInput);
+    if (isNaN(amt) || amt <= 0) {
+      showToast("Please enter a valid amount to simulate.");
+      return;
+    }
+    if (!momoPhone.trim()) {
+      showToast("Please enter a mobile money phone number.");
+      return;
+    }
+
+    // Clear old timers
+    momoTimersRef.current.forEach(clearTimeout);
+    momoTimersRef.current = [];
+
+    const txId = 'TXN_' + Math.floor(10000000 + Math.random() * 90000000);
+    setMomoSimState('step1');
+    setMomoLogs([
+      `⚡ [${new Date().toLocaleTimeString()}] INITIATING: Creating API payment session with ID: session_${txId}...`
+    ]);
+
+    const t1 = setTimeout(() => {
+      setMomoSimState('step2');
+      setMomoLogs(prev => [
+        ...prev,
+        `📲 [${new Date().toLocaleTimeString()}] PUSHING: Triggering remote USSD prompt via ${momoProvider} core gateway on subscriber line ${momoPhone}...`
+      ]);
+    }, 1500);
+
+    const t2 = setTimeout(() => {
+      setMomoSimState('step3');
+      setMomoLogs(prev => [
+        ...prev,
+        `🔑 [${new Date().toLocaleTimeString()}] USER PROMPT: Handset alert sent. Waiting for guardian PIN authentication code & acceptance response...`,
+        `💡 SIMULATION KEYBOARD: Prompting guardian with: "Pay ${currencySymbol} ${amt.toFixed(2)} to SAAKO HOLY CHILD ACADEMY? Enter PIN to approve."`
+      ]);
+    }, 3500);
+
+    const t3 = setTimeout(() => {
+      setMomoSimState('step4');
+      setMomoLogs(prev => [
+        ...prev,
+        `✅ [${new Date().toLocaleTimeString()}] PIN AUTHORIZED: Correct PIN verified. Transferring funds from subscriber pocket...`
+      ]);
+    }, 6000);
+
+    const t4 = setTimeout(() => {
+      // Record payment in context!
+      recordMomoPayment(
+        historyStudent.id,
+        amt,
+        txId,
+        momoProvider,
+        momoPhone,
+        'successful',
+        `Simulated ${momoProvider} Momo payment [Ref: ${txId}]`
+      );
+
+      setMomoSimState('success');
+      setMomoLogs(prev => [
+        ...prev,
+        `🎉 [${new Date().toLocaleTimeString()}] COMPLETED: Ledger updated successfully! ${currencySymbol} ${amt.toFixed(2)} cleared. Digital receipt issued.`
+      ]);
+      showToast(`Momo Payment of ${currencySymbol} ${amt.toFixed(2)} simulated successfully!`);
+    }, 8000);
+
+    momoTimersRef.current = [t1, t2, t3, t4];
+  };
   const [paymentToDelete, setPaymentToDelete] = useState<{ id: string; label: string; studentName: string } | null>(null);
   const [showDeleteAllPaymentsConfirm, setShowDeleteAllPaymentsConfirm] = useState(false);
   const [showResetDailyConfirm, setShowResetDailyConfirm] = useState(false);
@@ -834,24 +934,61 @@ export const ClassRegister: React.FC = React.memo(() => {
     
     // Calculate for active class students
     classStudents.forEach(student => {
-      const state = calculateStudentFinancialState(student, payments, activeTerm, currentDate, baseDailyFee);
+      const state = calculateStudentFinancialState(student, payments, activeTerm, currentDate, baseDailyFee, systemSettings);
       map.set(student.id, state);
     });
 
     // Also calculate for historyStudent if specified and not already calculated
     if (historyStudent && !map.has(historyStudent.id)) {
-      const state = calculateStudentFinancialState(historyStudent, payments, activeTerm, currentDate, baseDailyFee);
+      const state = calculateStudentFinancialState(historyStudent, payments, activeTerm, currentDate, baseDailyFee, systemSettings);
       map.set(historyStudent.id, state);
     }
 
     // Also calculate for debtStudent if specified and not already calculated
     if (debtStudent && !map.has(debtStudent.id)) {
-      const state = calculateStudentFinancialState(debtStudent, payments, activeTerm, currentDate, baseDailyFee);
+      const state = calculateStudentFinancialState(debtStudent, payments, activeTerm, currentDate, baseDailyFee, systemSettings);
       map.set(debtStudent.id, state);
     }
 
     return map;
-  }, [classStudents, payments, activeTerm, currentDate, baseDailyFee, historyStudent, debtStudent]);
+  }, [classStudents, payments, activeTerm, currentDate, baseDailyFee, historyStudent, debtStudent, systemSettings]);
+
+  useEffect(() => {
+    if (historyStudent) {
+      setMomoPhone(historyStudent.guardianPhone || '');
+      const studentDebt = studentDebtMap.get(historyStudent.id);
+      const debtAmount = studentDebt ? studentDebt.totalDebt : 0;
+      setMomoAmountInput(debtAmount > 0 ? debtAmount.toFixed(2) : '5.00');
+      
+      // Reset simulator
+      setMomoSimState('idle');
+      setMomoLogs([]);
+      setGeneratedMomoLink(null);
+    }
+  }, [historyStudent, studentDebtMap]);
+
+  // Map of studentId -> latest check-in timestamp overall (with priority for today's check-in)
+  const studentLastCheckInMap = useMemo(() => {
+    const map = new Map<string, number>();
+    
+    // Default to 0 (no check-in)
+    classStudents.forEach(s => {
+      map.set(s.id, 0);
+    });
+
+    // Populate with the latest payment timestamp for each student in the selected class
+    payments.forEach(p => {
+      if (p.class === selectedClass && !p.id.endsWith('_debt') && !p.isAbsent) {
+        const t = p.timestamp ? new Date(p.timestamp).getTime() : 0;
+        const current = map.get(p.studentId) || 0;
+        if (t > current) {
+          map.set(p.studentId, t);
+        }
+      }
+    });
+
+    return map;
+  }, [payments, classStudents, selectedClass]);
 
   // Filter students by search query and status filter
   const filteredStudents = useMemo(() => {
@@ -873,12 +1010,79 @@ export const ClassRegister: React.FC = React.memo(() => {
       list = list.filter(s => s.paymentType === 'Term');
     }
 
-    if (!searchQuery.trim()) return list;
-    return list.filter(s => 
-      s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.rollNumber.toLowerCase().includes(searchQuery.toLowerCase())
-    );
-  }, [classStudents, searchQuery, statusFilter, paidStudentMap, studentDebtMap]);
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase().trim();
+      const normalizedQuery = query.replace(/[-_ ]/g, '');
+
+      list = list.filter(s => {
+        // Name & Roll matches
+        const matchesNameOrRoll = 
+          s.name.toLowerCase().includes(query) ||
+          (s.rollNumber || '').toLowerCase().includes(query);
+
+        // Class and Category matches
+        const normalizedClass = s.class.toLowerCase().replace(/[-_ ]/g, '');
+        const matchesClass = 
+          normalizedClass === normalizedQuery || 
+          s.class.toLowerCase().includes(query) ||
+          (s.category && s.category.toLowerCase().includes(query));
+
+        // Payment status check
+        const isAbsent = paidStudentMap.has(s.id) && !!paidStudentMap.get(s.id)?.isAbsent;
+        const isPaid = !isAbsent && (studentDebtMap.get(s.id)?.isPaidToday || false);
+        const isUnmarked = !paidStudentMap.has(s.id);
+        const hasArrears = (studentDebtMap.get(s.id)?.outstandingBalance || 0) > 0;
+
+        let matchesStatus = false;
+        if (query === 'absent' || query === 'missing' || query === 'away') {
+          matchesStatus = isAbsent;
+        } else if (query === 'paid' || query === 'present' || query === 'checked' || query === 'checkin' || query === 'checked in' || query === 'checked-in') {
+          matchesStatus = isPaid;
+        } else if (query === 'unmarked' || query === 'pending' || query === 'not checked' || query === 'not marked') {
+          matchesStatus = isUnmarked;
+        } else if (query === 'arrears' || query === 'debt' || query === 'owing' || query === 'outstanding' || query === 'unpaid' || query === 'not paid') {
+          matchesStatus = hasArrears;
+        } else if (query === 'term' || query === 'term payer' || query === 'term payers') {
+          matchesStatus = s.paymentType === 'Term';
+        } else if (query === 'daily' || query === 'daily payer' || query === 'daily payers') {
+          matchesStatus = s.paymentType === 'Daily';
+        }
+
+        return matchesNameOrRoll || matchesClass || matchesStatus;
+      });
+    }
+
+    // Dynamic Sort Operation
+    if (sortBy === 'name') {
+      list = [...list].sort((a, b) => {
+        const res = a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+        return sortOrder === 'asc' ? res : -res;
+      });
+    } else if (sortBy === 'rollNumber') {
+      list = [...list].sort((a, b) => {
+        const res = (a.rollNumber || '').localeCompare(b.rollNumber || '', undefined, { numeric: true, sensitivity: 'base' });
+        return sortOrder === 'asc' ? res : -res;
+      });
+    } else if (sortBy === 'checkin') {
+      list = [...list].sort((a, b) => {
+        const timeA = studentLastCheckInMap.get(a.id) || 0;
+        const timeB = studentLastCheckInMap.get(b.id) || 0;
+        
+        if (timeA === 0 && timeB === 0) {
+          // Fallback to alphabetical order
+          return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+        }
+        // Non-checked-in elements always go to the bottom
+        if (timeA === 0) return 1;
+        if (timeB === 0) return -1;
+        
+        const res = timeA - timeB;
+        return sortOrder === 'asc' ? res : -res;
+      });
+    }
+
+    return list;
+  }, [classStudents, searchQuery, statusFilter, paidStudentMap, studentDebtMap, sortBy, sortOrder, studentLastCheckInMap]);
 
   // Find the first unmarked student in the current view to automatically guide high-volume workflow
   const nextUnmarkedStudent = useMemo(() => {
@@ -919,6 +1123,19 @@ export const ClassRegister: React.FC = React.memo(() => {
     setTimeout(() => {
       setHighlightedStudentId(null);
     }, 3000);
+  };
+
+  const formatLastCheckIn = (timestamp: number) => {
+    if (!timestamp) return 'Never Checked-In';
+    const date = new Date(timestamp);
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    const dStr = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+    const tStr = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    
+    if (dStr === currentDate) {
+      return `Today at ${tStr}`;
+    }
+    return `${dStr} ${tStr}`;
   };
 
   // Helper to automatically scroll to the next unmarked student in the current filtered class view after marking a payment or absent
@@ -1875,14 +2092,26 @@ export const ClassRegister: React.FC = React.memo(() => {
         <div class="info-value" style="text-transform: uppercase;">${student.name}</div>
       </div>
       <div class="info-block">
-        <div class="info-label">Class Name</div>
-        <div class="info-value">${student.class}</div>
+        <div class="info-label">Class & Category</div>
+        <div class="info-value">${student.class} (${student.category})</div>
       </div>
       <div class="info-block">
         <div class="info-label">Admission Roll ID</div>
         <div class="info-value">${rollRef}</div>
       </div>
       <div class="info-block">
+        <div class="info-label">Student Gender</div>
+        <div class="info-value">${student.gender || 'Not Specified'}</div>
+      </div>
+      <div class="info-block">
+        <div class="info-label">Guardian Contact</div>
+        <div class="info-value">${student.guardianPhone || 'Not Specified'}</div>
+      </div>
+      <div class="info-block">
+        <div class="info-label">Billing Scheme</div>
+        <div class="info-value">${student.paymentType === 'Term' ? 'Term Fee Scheme' : 'Daily Gate Scheme'}</div>
+      </div>
+      <div class="info-block" style="grid-column: span 2;">
         <div class="info-label">Payment Date</div>
         <div class="info-value">${date}</div>
       </div>
@@ -2927,7 +3156,7 @@ export const ClassRegister: React.FC = React.memo(() => {
                       }
                     }
                   }}
-                  placeholder="SEARCH NAME/ROLL (ENTER TO AUTO-PAY NEXT UP)..."
+                  placeholder="SEARCH NAME, ROLL, CLASS, OR STATUS (PAID, ABSENT, ARREARS)..."
                   className="w-full bg-neutral-900 border-2 border-neutral-800 py-3 pl-11 pr-24 text-[11px] font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600 tracking-wide"
                   title="Type to search, or simply press Enter to record check-in for the active next student and shift forward"
                 />
@@ -3405,6 +3634,60 @@ export const ClassRegister: React.FC = React.memo(() => {
                 </div>
               </div>
             )}
+            {/* COLUMN HEADERS FOR REGISTER TABLE/ROSTER */}
+            <div className="bg-neutral-950 px-6 py-3.5 border-b border-neutral-800/80 flex justify-between items-center text-[10px] font-mono font-black text-neutral-400 select-none">
+              <div className="flex items-center gap-4 flex-wrap sm:flex-nowrap">
+                {/* Visual gap matching checkbox + avatar of student row */}
+                <div className="w-20 shrink-0 hidden sm:block"></div>
+                
+                <button
+                  type="button"
+                  onClick={() => toggleSort('name')}
+                  className={`flex items-center gap-1.5 hover:text-amber-400 uppercase tracking-widest transition-colors cursor-pointer focus:outline-none ${
+                    sortBy === 'name' ? 'text-amber-400 font-black' : 'text-neutral-450 font-bold'
+                  }`}
+                  title="Click to toggle alphabetical name sorting"
+                >
+                  <span>Student Profile & Info</span>
+                  <span className="text-[11px] transition-transform duration-200">
+                    {sortBy === 'name' ? (sortOrder === 'asc' ? '▲' : '▼') : '↕'}
+                  </span>
+                </button>
+
+                <span className="text-neutral-800 hidden sm:inline">|</span>
+
+                <button
+                  type="button"
+                  onClick={() => toggleSort('rollNumber')}
+                  className={`flex items-center gap-1.5 hover:text-amber-400 uppercase tracking-widest transition-colors cursor-pointer focus:outline-none ${
+                    sortBy === 'rollNumber' ? 'text-amber-400 font-black' : 'text-neutral-450 font-bold'
+                  }`}
+                  title="Click to toggle registration ID sorting"
+                >
+                  <span>Reg ID Number</span>
+                  <span className="text-[11px] transition-transform duration-200">
+                    {sortBy === 'rollNumber' ? (sortOrder === 'asc' ? '▲' : '▼') : '↕'}
+                  </span>
+                </button>
+              </div>
+
+              <div className="flex items-center">
+                <button
+                  type="button"
+                  onClick={() => toggleSort('checkin')}
+                  className={`flex items-center gap-1.5 hover:text-amber-400 uppercase tracking-widest transition-colors cursor-pointer focus:outline-none ${
+                    sortBy === 'checkin' ? 'text-amber-400 font-black' : 'text-neutral-450 font-bold'
+                  }`}
+                  title="Click to toggle chronological check-in sorting"
+                >
+                  <span>Last Gate Check-In</span>
+                  <span className="text-[11px] transition-transform duration-200">
+                    {sortBy === 'checkin' ? (sortOrder === 'asc' ? '▲' : '▼') : '↕'}
+                  </span>
+                </button>
+              </div>
+            </div>
+
             {filteredStudents.map(student => {
               const debtInfo = studentDebtMap.get(student.id);
               const paidInfo = paidStudentMap.get(student.id);
@@ -3510,6 +3793,40 @@ export const ClassRegister: React.FC = React.memo(() => {
                       <span className="text-[10px] font-black px-2.5 py-0.5 bg-neutral-950 border border-neutral-800 text-amber-400 font-mono tracking-wider">
                         {student.rollNumber}
                       </span>
+                      {/* Daily Payment Status Badge */}
+                      {isAbsent ? (
+                        <span 
+                          title="Marked as absent for today"
+                          className="text-[10px] font-black px-2.5 py-0.5 bg-rose-950/80 border border-rose-800 text-rose-400 font-mono tracking-wider uppercase rounded-xs flex items-center gap-1.5 shrink-0"
+                        >
+                          <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                          Absent
+                        </span>
+                      ) : isPaid ? (
+                        <span 
+                          title="Fully paid / covered for today"
+                          className="text-[10px] font-black px-2.5 py-0.5 bg-emerald-950/80 border border-emerald-800 text-emerald-400 font-mono tracking-wider uppercase rounded-xs flex items-center gap-1.5 shrink-0"
+                        >
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                          Paid
+                        </span>
+                      ) : paidInfo ? (
+                        <span 
+                          title="Registered present, but payment for today is incomplete"
+                          className="text-[10px] font-black px-2.5 py-0.5 bg-amber-955/60 border border-amber-600/75 text-amber-400 font-mono tracking-wider uppercase rounded-xs flex items-center gap-1.5 shrink-0"
+                        >
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                          Partial
+                        </span>
+                      ) : (
+                        <span 
+                          title="Awaiting gate check-in or daily register marking"
+                          className="text-[10px] font-black px-2.5 py-0.5 bg-neutral-950 border border-neutral-800 text-neutral-400 font-mono tracking-wider uppercase rounded-xs flex items-center gap-1.5 shrink-0"
+                        >
+                          <span className="w-1.5 h-1.5 rounded-full bg-neutral-600" />
+                          Pending
+                        </span>
+                      )}
                       {isNextToPay && (
                         <span className="text-[9px] font-black px-2.5 py-0.5 bg-amber-450 border border-amber-500 text-neutral-950 font-mono tracking-widest uppercase animate-pulse shrink-0 flex items-center gap-1.5 shadow-[0_0_8px_rgba(251,191,36,0.25)] rounded-xs">
                           <span className="w-1.5 h-1.5 rounded-full bg-black animate-ping" />
@@ -3542,6 +3859,10 @@ export const ClassRegister: React.FC = React.memo(() => {
                       <span>GUARDIAN: <strong className="text-neutral-300 font-mono">{student.guardianPhone}</strong></span>
                       <span className="hidden sm:inline w-1 h-1 bg-neutral-700" />
                       <span>CATEGORY: <strong className="text-neutral-300 uppercase tracking-wider">{student.category}</strong></span>
+                      <span className="hidden sm:inline w-1 h-1 bg-neutral-700" />
+                      <span className="flex items-center gap-1">
+                        LAST CHECK-IN: <strong className="text-amber-400 font-mono">{formatLastCheckIn(studentLastCheckInMap.get(student.id) || 0)}</strong>
+                      </span>
                       
                       {(() => {
                         const classTeacher = users?.find(u => u.role === 'Teacher' && (u.assignedClass === student.class || u.assignedClasses?.includes(student.class)));
@@ -5178,6 +5499,18 @@ export const ClassRegister: React.FC = React.memo(() => {
                   </button>
                   <button
                     type="button"
+                    onClick={() => setHistoryModalTab('momo')}
+                    className={`flex-1 py-3 px-1 text-center uppercase tracking-wider font-extrabold border-b-2 flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                      historyModalTab === 'momo'
+                        ? 'border-amber-400 text-amber-400 bg-neutral-950/50'
+                        : 'border-transparent text-neutral-500 hover:text-neutral-300'
+                    }`}
+                  >
+                    <Smartphone size={14} className="shrink-0" />
+                    <span>Momo Payments</span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setHistoryModalTab('print')}
                     className={`flex-1 py-3 px-1 text-center uppercase tracking-wider font-extrabold border-b-2 flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                       historyModalTab === 'print'
@@ -5621,6 +5954,265 @@ export const ClassRegister: React.FC = React.memo(() => {
                                 </div>
                               );
                             })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {historyModalTab === 'momo' && (
+                    <div className="space-y-6 no-print">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+                        {/* Simulation Gateway Card */}
+                        <div className="bg-neutral-950 p-5 border border-neutral-850 rounded-sm space-y-4 shadow-md">
+                          <h4 className="text-[10px] font-mono uppercase font-black tracking-widest text-amber-500 border-b border-neutral-850 pb-2">
+                            📲 live checkout simulation station
+                          </h4>
+                          
+                          <div className="space-y-3 font-mono text-[11px]">
+                            <div>
+                              <label className="block text-[9px] text-neutral-550 uppercase font-black mb-1">
+                                Simulation Charge Amount
+                              </label>
+                              <div className="relative">
+                                <span className="absolute left-3 top-1/2 -translate-y-1/2 font-black text-neutral-500">
+                                  GHC
+                                </span>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  disabled={momoSimState !== 'idle' && momoSimState !== 'success' && momoSimState !== 'failed'}
+                                  value={momoAmountInput}
+                                  onChange={(e) => setMomoAmountInput(e.target.value)}
+                                  className="w-full bg-neutral-900 border border-neutral-800 rounded-xs pl-12 pr-4 py-2 text-white outline-none focus:border-amber-400 font-bold"
+                                  placeholder="0.00"
+                                />
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                <label className="block text-[9px] text-neutral-550 uppercase font-black mb-1">
+                                  Provider
+                                </label>
+                                <select
+                                  value={momoProvider}
+                                  disabled={momoSimState !== 'idle' && momoSimState !== 'success' && momoSimState !== 'failed'}
+                                  onChange={(e) => setMomoProvider(e.target.value)}
+                                  className="w-full bg-neutral-900 border border-neutral-800 rounded-xs px-2.5 py-2 text-white outline-none focus:border-amber-400 text-xs font-bold"
+                                >
+                                  <option value="MTN">MTN MoMo</option>
+                                  <option value="Telecel">Telecel Cash</option>
+                                  <option value="AirtelTigo">AirtelTigo</option>
+                                </select>
+                              </div>
+                              <div>
+                                <label className="block text-[9px] text-neutral-550 uppercase font-black mb-1">
+                                  Line Number
+                                </label>
+                                <input
+                                  type="text"
+                                  disabled={momoSimState !== 'idle' && momoSimState !== 'success' && momoSimState !== 'failed'}
+                                  value={momoPhone}
+                                  onChange={(e) => setMomoPhone(e.target.value)}
+                                  className="w-full bg-neutral-900 border border-neutral-800 rounded-xs px-3 py-2 text-white outline-none focus:border-amber-400 font-bold text-center"
+                                  placeholder="024XXXXXXX"
+                                />
+                              </div>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={runMomoSimulation}
+                              disabled={momoSimState !== 'idle' && momoSimState !== 'success' && momoSimState !== 'failed'}
+                              className="w-full bg-amber-400 hover:bg-amber-350 disabled:bg-neutral-850 disabled:text-neutral-600 text-neutral-950 py-3 text-[10px] font-black tracking-widest uppercase transition-all flex items-center justify-center gap-1.5"
+                            >
+                              <Smartphone size={13} className="stroke-[2.5]" />
+                              <span>
+                                {momoSimState === 'idle' || momoSimState === 'success' || momoSimState === 'failed'
+                                  ? "Simulate USSD PIN Checkout"
+                                  : "Simulation Running..."}
+                              </span>
+                            </button>
+                          </div>
+
+                          {/* Simulation Log Console */}
+                          {momoLogs.length > 0 && (
+                            <div className="space-y-1.5 pt-1">
+                              <span className="text-[8px] font-mono font-black uppercase text-neutral-600 tracking-wider">
+                                🖥️ system trace log output
+                              </span>
+                              <div className="bg-neutral-950 border-2 border-neutral-900 p-3 h-40 overflow-y-auto font-mono text-[9px] text-amber-400 leading-relaxed space-y-2 rounded-xs scrollbar-thin scrollbar-thumb-amber-400/20 select-text">
+                                {momoLogs.map((log, idx) => (
+                                  <div key={idx} className="border-b border-neutral-900/50 pb-1.5 last:border-0 last:pb-0">
+                                    {log}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Payment Link generator card */}
+                        <div className="bg-neutral-950 p-5 border border-neutral-850 rounded-sm space-y-4 shadow-md">
+                          <h4 className="text-[10px] font-mono uppercase font-black tracking-widest text-emerald-500 border-b border-neutral-850 pb-2">
+                            🔗 remote payment link generator
+                          </h4>
+
+                          <div className="space-y-4 text-xs">
+                            <p className="text-[10px] text-neutral-400 leading-relaxed font-bold font-sans uppercase">
+                              Generate a secure external checkout session URL which can be dispatched to the guardian for remote phone authorization.
+                            </p>
+
+                            {!generatedMomoLink ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const amt = parseFloat(momoAmountInput);
+                                  if (isNaN(amt) || amt <= 0) {
+                                    showToast("Please enter a valid amount.");
+                                    return;
+                                  }
+                                  const simulatedLink = `https://checkout.saakopay.com/pay/${historyStudent.id}?amount=${amt.toFixed(2)}&ref=MOMO_${Date.now().toString().slice(-6)}`;
+                                  setGeneratedMomoLink(simulatedLink);
+                                  showToast("Copiable payment link generated!");
+                                }}
+                                className="w-full bg-emerald-500 hover:bg-emerald-450 text-neutral-950 py-3 text-[10px] font-black tracking-widest uppercase transition-all flex items-center justify-center gap-1.5"
+                              >
+                                <Link size={13} className="stroke-[2.5]" />
+                                <span>Generate Payment Request Link</span>
+                              </button>
+                            ) : (
+                              <div className="space-y-4 font-mono">
+                                <div className="space-y-1">
+                                  <span className="text-[8px] font-mono font-black uppercase text-neutral-550 block">
+                                    Generated Payment URL
+                                  </span>
+                                  <div className="flex items-center gap-1.5 bg-neutral-900 border border-neutral-800 p-2.5 rounded-xs">
+                                    <input
+                                      type="text"
+                                      readOnly
+                                      value={generatedMomoLink}
+                                      className="bg-transparent text-[10px] text-neutral-300 font-bold select-all focus:outline-none w-full truncate"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (typeof navigator !== 'undefined' && navigator.clipboard) {
+                                          navigator.clipboard.writeText(generatedMomoLink);
+                                          showToast("Copied payment link!");
+                                        }
+                                      }}
+                                      className="p-1 text-amber-450 hover:text-white shrink-0"
+                                      title="Copy URL"
+                                    >
+                                      <Copy size={13} />
+                                    </button>
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-3.5 pt-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const msg = `SAAKO HOLY CHILD ACADEMY: Secure payment request generated for *${historyStudent.name}* (Class: *${historyStudent.class}*).\nOutstanding balance: *GHC ${momoAmountInput}*.\n\nAuthorize your Mobile Money transfer instantly here:\n👉 ${generatedMomoLink}`;
+                                      const encoded = encodeURIComponent(msg);
+                                      const phoneStr = momoPhone ? momoPhone.replace(/[^0-9]/g, '') : '';
+                                      // format with country code if needed
+                                      const formattedPhone = phoneStr.startsWith('0') ? '233' + phoneStr.slice(1) : phoneStr;
+                                      window.open(`https://wa.me/${formattedPhone}?text=${encoded}`, '_blank');
+                                    }}
+                                    className="bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 hover:border-emerald-500/40 py-2.5 text-[9px] font-black uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all"
+                                  >
+                                    <MessageSquare size={12} />
+                                    <span>Share WhatsApp</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setGeneratedMomoLink(null)}
+                                    className="bg-neutral-900 hover:bg-neutral-850 text-neutral-400 border border-neutral-800 py-2.5 text-[9px] font-black uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all"
+                                  >
+                                    <RefreshCw size={12} />
+                                    <span>Reset link</span>
+                                  </button>
+                                </div>
+
+                                {/* Nice graphic QR design */}
+                                <div className="border border-neutral-855 bg-neutral-900/40 p-3.5 rounded flex flex-col items-center justify-center space-y-2 select-none">
+                                  <span className="text-[8px] font-mono font-black uppercase text-neutral-500 tracking-wider">
+                                    Instant Scan-to-Pay QR Simulation
+                                  </span>
+                                  <div className="bg-white p-2.5 rounded border border-neutral-350 w-24 h-24 flex items-center justify-center shadow-sm relative">
+                                    {/* Inside QR code decoration */}
+                                    <QrCode size={80} className="text-neutral-950 stroke-[1.5]" />
+                                    <div className="absolute inset-0 m-auto w-6 h-6 bg-amber-400 border-2 border-white rounded-xs flex items-center justify-center shadow font-mono font-black text-[9px] text-neutral-950">
+                                      MoMo
+                                    </div>
+                                  </div>
+                                  <p className="text-[8.5px] text-neutral-500 font-bold uppercase tracking-tight text-center max-w-xs leading-normal">
+                                    Guardian can scan this QR dynamically on any camera handset to settle the dues.
+                                  </p>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Momo Specific Logs */}
+                      <div className="space-y-2 pt-2">
+                        <h4 className="text-[10px] font-black uppercase tracking-widest text-neutral-400 font-mono border-b border-neutral-850 pb-2">
+                          📋 mobile money transactions ledger
+                        </h4>
+                        
+                        {payments.filter(p => p.studentId === historyStudent.id && p.paymentMethod === 'Mobile Money').length === 0 ? (
+                          <div className="text-center py-6 bg-neutral-950 border border-neutral-850 text-neutral-500 uppercase tracking-wider text-[9.5px] font-bold">
+                            No Mobile Money payments logged yet for this pupil.
+                          </div>
+                        ) : (
+                          <div className="border border-neutral-850 divide-y divide-neutral-900 bg-neutral-950 max-h-44 overflow-y-auto pr-1">
+                            {payments
+                              .filter(p => p.studentId === historyStudent.id && p.paymentMethod === 'Mobile Money')
+                              .map((p) => {
+                                const dateParts = p.date.split('-');
+                                const dayLabel = dateParts.length === 3 ? `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}` : p.date;
+                                return (
+                                  <div key={p.id} className="flex justify-between items-center p-3 text-xs font-mono">
+                                    <div className="space-y-0.5">
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-white font-bold">{dayLabel}</span>
+                                        <span className="text-[9px] px-1.5 py-0.5 bg-yellow-950/40 border border-yellow-850/50 text-yellow-500 font-black uppercase rounded-xs">
+                                          {p.momoProvider || 'MoMo'}
+                                        </span>
+                                        <span className="text-[9px] px-1.5 py-0.5 bg-neutral-900 border border-neutral-800 text-emerald-400 font-black">
+                                          GHC {p.amount.toFixed(2)}
+                                        </span>
+                                      </div>
+                                      <p className="text-[8px] text-neutral-500 font-bold">
+                                        Ref: {p.momoTransactionId || 'N/A'} • Phone: {p.momoPhoneNumber || 'N/A'} • Auditor: {p.collectedBy}
+                                      </p>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-[8px] font-black uppercase px-2 py-0.5 bg-emerald-950/50 text-emerald-400 border border-emerald-900/40 font-sans tracking-widest">
+                                        {p.momoStatus || 'successful'}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setSelectedRecordForReceipt({
+                                            student: historyStudent,
+                                            payment: p
+                                          });
+                                        }}
+                                        className="p-1 text-neutral-400 hover:text-amber-400 transition-colors"
+                                        title="Print Momo Receipt"
+                                      >
+                                        <Printer size={13} />
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
                           </div>
                         )}
                       </div>
@@ -7278,6 +7870,9 @@ export const ClassRegister: React.FC = React.memo(() => {
                       <div className="text-sm font-black text-black uppercase font-bold">{receiptStudent.name}</div>
                       <div className="font-mono text-neutral-755 font-bold">Roll Ref: {receiptStudent.rollNumber || 'SHC-' + receiptStudent.id.substring(0, 5).toUpperCase()}</div>
                       <div className="font-bold">Cohort Grade: {receiptStudent.class} ({receiptStudent.category})</div>
+                      <div><strong>Gender:</strong> {receiptStudent.gender || 'Not Specified'}</div>
+                      <div><strong>Guardian Contact:</strong> {receiptStudent.guardianPhone || 'Not Specified'}</div>
+                      <div><strong>Billing Scheme:</strong> {receiptStudent.paymentType === 'Term' ? 'Term Fee Scheme' : 'Daily Gate Scheme'}</div>
                     </div>
 
                     <div className="border-l pl-8 border-neutral-200 font-mono space-y-1.5">
@@ -7524,6 +8119,9 @@ export const ClassRegister: React.FC = React.memo(() => {
                     <div className="text-sm font-black text-black uppercase font-bold">{student.name}</div>
                     <div className="font-mono text-neutral-755 font-bold">Roll Ref: {student.rollNumber || 'SHC-' + student.id.substring(0, 5).toUpperCase()}</div>
                     <div className="font-bold">Cohort Grade: {student.class} ({student.category})</div>
+                    <div><strong>Gender:</strong> {student.gender || 'Not Specified'}</div>
+                    <div><strong>Guardian Contact:</strong> {student.guardianPhone || 'Not Specified'}</div>
+                    <div><strong>Billing Scheme:</strong> {student.paymentType === 'Term' ? 'Term Fee Scheme' : 'Daily Gate Scheme'}</div>
                   </div>
 
                   <div className="border-l pl-8 border-neutral-200 font-mono space-y-1.5">

@@ -3,11 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
-import { useApp } from '../context/AppContext';
+import { useApp, getStudentB9ExpiryDate, getDiscountedTermFee } from '../context/AppContext';
 import { StudentClass, Student, UserRole } from '../types';
-import { Plus, UserPlus, Trash2, Edit2, ShieldAlert, Check, X, ToggleLeft, ToggleRight, Database, Server, RefreshCw, Copy, Share2, Users, BellRing, MessageSquareCode, UserCheck, Camera, Upload, Download, Search, QrCode, Printer, Contact, Award, DollarSign, Info, MessageSquare, Sliders } from 'lucide-react';
+import { Plus, UserPlus, Trash2, Edit2, ShieldAlert, Check, X, ToggleLeft, ToggleRight, Database, Server, RefreshCw, Copy, Share2, Users, BellRing, MessageSquareCode, UserCheck, Camera, Upload, Download, Search, QrCode, Printer, Contact, Award, DollarSign, Info, MessageSquare, Sliders, Bot, FileText, FileSignature, CalendarDays } from 'lucide-react';
 import { getClassCategory } from '../initialData';
 import { AdjustmentsTab } from './AdjustmentsTab';
 import { ExpendituresTab } from './ExpendituresTab';
@@ -15,6 +15,149 @@ import { WhatsAppLogsTab } from './WhatsAppLogsTab';
 import { VoiceSearchButton } from './VoiceSearchButton';
 import { SettingsPanel } from './SettingsPanel';
 import { IdCardsGeneratorTab } from './IdCardsGeneratorTab';
+import { AiAssistantTab } from './AiAssistantTab';
+import { EnrollmentSummaryWidget } from './EnrollmentSummaryWidget';
+import { AuditTrailTab } from './AuditTrailTab';
+
+interface SignaturePadProps {
+  title: string;
+  value: string;
+  onChange: (val: string) => void;
+}
+
+const SignaturePad: React.FC<SignaturePadProps> = ({ title, value, onChange }) => {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [isDrawing, setIsDrawing] = useState(false);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * 2;
+    canvas.height = rect.height * 2;
+    ctx.scale(2, 2);
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = '#000000';
+
+    if (value) {
+      const img = new Image();
+      img.src = value;
+      img.onload = () => {
+        ctx.clearRect(0, 0, rect.width, rect.height);
+        ctx.drawImage(img, 0, 0, rect.width, rect.height);
+      };
+    } else {
+      ctx.clearRect(0, 0, rect.width, rect.height);
+    }
+  }, [value]);
+
+  const getCoordinates = (e: any) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    
+    let clientX = 0;
+    let clientY = 0;
+    if (e.touches && e.touches.length > 0) {
+      clientX = e.touches[0].clientX;
+      clientY = e.touches[0].clientY;
+    } else {
+      clientX = e.clientX;
+      clientY = e.clientY;
+    }
+    
+    return {
+      x: clientX - rect.left,
+      y: clientY - rect.top
+    };
+  };
+
+  const startDrawing = (e: any) => {
+    e.preventDefault();
+    const coords = getCoordinates(e);
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.beginPath();
+    ctx.moveTo(coords.x, coords.y);
+    setIsDrawing(true);
+  };
+
+  const draw = (e: any) => {
+    if (!isDrawing) return;
+    e.preventDefault();
+    const coords = getCoordinates(e);
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.lineTo(coords.x, coords.y);
+    ctx.stroke();
+  };
+
+  const stopDrawing = () => {
+    if (!isDrawing) return;
+    setIsDrawing(false);
+    
+    const canvas = canvasRef.current;
+    if (canvas) {
+      const dataUrl = canvas.toDataURL();
+      onChange(dataUrl);
+    }
+  };
+
+  const clearCanvas = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    onChange('');
+  };
+
+  return (
+    <div className="bg-neutral-900 border border-neutral-800 p-3 rounded-sm space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-mono font-black text-amber-500 uppercase tracking-widest">{title}</span>
+        {value && (
+          <button 
+            type="button"
+            onClick={clearCanvas}
+            className="text-[9px] font-mono font-bold text-rose-400 hover:text-rose-300 uppercase tracking-wider px-1.5 py-0.5 bg-rose-500/10 border border-rose-500/20 hover:border-rose-500/40 rounded transition-colors cursor-pointer"
+          >
+            Clear
+          </button>
+        )}
+      </div>
+      
+      <div className="relative border border-dashed border-neutral-800 bg-white rounded-sm h-28 cursor-crosshair overflow-hidden touch-none">
+        <canvas 
+          ref={canvasRef}
+          onMouseDown={startDrawing}
+          onMouseMove={draw}
+          onMouseUp={stopDrawing}
+          onMouseLeave={stopDrawing}
+          onTouchStart={startDrawing}
+          onTouchMove={draw}
+          onTouchEnd={stopDrawing}
+          className="absolute inset-0 w-full h-full"
+        />
+        {!value && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none text-[10px] font-mono text-neutral-400 select-none">
+            Draw Signature Here (Pointer or Touch)
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
 
 export const AdminPanel: React.FC = React.memo(() => {
   const { 
@@ -47,6 +190,8 @@ export const AdminPanel: React.FC = React.memo(() => {
     resetData,
     purgeDeactivatedStudents,
     promoteAllStudents,
+    promotionBackups,
+    revertLastPromotion,
     backups,
     createBackup,
     restoreBackup,
@@ -76,9 +221,506 @@ export const AdminPanel: React.FC = React.memo(() => {
     return () => clearInterval(timer);
   }, []);
 
-  const [activeTab, setActiveTab] = useState<'students' | 'mfa' | 'gates' | 'database' | 'adjustments' | 'expenditures' | 'whatsapp' | 'settings' | 'idcards'>('students');
+  const [activeTab, setActiveTab] = useState<'students' | 'mfa' | 'gates' | 'database' | 'adjustments' | 'expenditures' | 'whatsapp' | 'settings' | 'idcards' | 'ai_assistant' | 'audit'>('students');
   const [studentFilter, setStudentFilter] = useState<'all' | 'active' | 'inactive'>('all');
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Appointment Letter & Renewal Modal states
+  const [appointmentModalUser, setAppointmentModalUser] = useState<any | null>(null);
+  const [appLetterDate, setAppLetterDate] = useState('');
+  const [appStartDate, setAppStartDate] = useState('');
+  const [appEndDate, setAppEndDate] = useState('');
+  const [appRenewalOpt, setAppRenewalOpt] = useState<'Automatic' | 'Manual Review' | 'Fixed Term' | 'Non-Renewable'>('Automatic');
+  const [appRenewalPeriod, setAppRenewalPeriod] = useState('1 Year');
+  const [appJobTitle, setAppJobTitle] = useState('');
+  const [appDepartment, setAppDepartment] = useState('');
+  const [appSalary, setAppSalary] = useState('');
+  const [appAllowance, setAppAllowance] = useState('0.00');
+  const [appSignatoryName, setAppSignatoryName] = useState('Madam Mary Appiah');
+  const [appSignatoryTitle, setAppSignatoryTitle] = useState('Board Chairperson & Registrar');
+  const [isRenewalTab, setIsRenewalTab] = useState(false); // active tab inside modal (Appointment vs Renewal Letter)
+  const [appStaffSignature, setAppStaffSignature] = useState<string>('');
+  const [appManagementSignature, setAppManagementSignature] = useState<string>('');
+
+  const openAppointmentModal = (u: any) => {
+    setAppointmentModalUser(u);
+    setAppLetterDate(new Date().toISOString().split('T')[0]);
+    setAppStartDate(u.appointmentDate || new Date().toISOString().split('T')[0]);
+    
+    if (u.contractEndDate) {
+      setAppEndDate(u.contractEndDate);
+    } else {
+      const oneYearLater = new Date();
+      oneYearLater.setFullYear(oneYearLater.getFullYear() + 1);
+      setAppEndDate(oneYearLater.toISOString().split('T')[0]);
+    }
+    
+    setAppRenewalOpt(u.renewalOption || 'Automatic');
+    setAppRenewalPeriod(u.renewalPeriod || '1 Year');
+    setAppJobTitle(u.role === 'Teacher' ? 'Classroom Educator' : u.role);
+    setAppDepartment(u.department || (u.role === 'Teacher' ? 'Academic Department' : 'Administrative Department'));
+    setAppSalary(u.stipendSalary?.toString() || '0.00');
+    setAppAllowance('0.00');
+    setAppStaffSignature(u.signatureUrl || '');
+    setAppManagementSignature(u.managementSignatureUrl || '');
+    setIsRenewalTab(false);
+  };
+
+  const handleSaveAppointment = () => {
+    if (!appointmentModalUser) return;
+    const res = updateStaff(
+      appointmentModalUser.id,
+      appointmentModalUser.name,
+      appointmentModalUser.email,
+      appointmentModalUser.role,
+      appointmentModalUser.assignedClass,
+      !!appointmentModalUser.mfaEnabled,
+      !!appointmentModalUser.passwordEnabled,
+      appointmentModalUser.password || '',
+      appointmentModalUser.role === 'Teacher' ? (appointmentModalUser.assignedClasses || (appointmentModalUser.assignedClass ? [appointmentModalUser.assignedClass] : [])) : undefined,
+      parseFloat(appSalary) || undefined,
+      appointmentModalUser.momoNumber,
+      appointmentModalUser.momoName,
+      appointmentModalUser.photoUrl,
+      appointmentModalUser.employeeId,
+      appDepartment,
+      appointmentModalUser.gender,
+      appointmentModalUser.employmentType,
+      !!appointmentModalUser.idCardDeactivated,
+      appStartDate,
+      appEndDate,
+      appRenewalOpt,
+      appRenewalPeriod,
+      appStaffSignature,
+      appManagementSignature
+    );
+
+    if (res.success) {
+      setAppointmentModalUser({
+        ...appointmentModalUser,
+        stipendSalary: parseFloat(appSalary),
+        department: appDepartment,
+        appointmentDate: appStartDate,
+        contractEndDate: appEndDate,
+        renewalOption: appRenewalOpt,
+        renewalPeriod: appRenewalPeriod,
+        signatureUrl: appStaffSignature,
+        managementSignatureUrl: appManagementSignature
+      });
+      showToast("Appointment terms successfully updated in system registers.");
+    } else {
+      showToast(res.error || "Failed to save appointment terms.");
+    }
+  };
+
+  const handleProcessRenewal = (monthsCount: number, stipendAdjustment: number, renewalClause: typeof appRenewalOpt) => {
+    if (!appointmentModalUser) return;
+    
+    const baseDate = appEndDate ? new Date(appEndDate) : new Date();
+    baseDate.setMonth(baseDate.getMonth() + monthsCount);
+    const newEndDate = baseDate.toISOString().split('T')[0];
+    
+    const newSalary = (parseFloat(appSalary) || 0) + stipendAdjustment;
+    const newRenewalPeriodStr = `${monthsCount >= 12 ? (monthsCount / 12).toFixed(0) + ' Year(s)' : monthsCount + ' Month(s)'}`;
+
+    const res = updateStaff(
+      appointmentModalUser.id,
+      appointmentModalUser.name,
+      appointmentModalUser.email,
+      appointmentModalUser.role,
+      appointmentModalUser.assignedClass,
+      !!appointmentModalUser.mfaEnabled,
+      !!appointmentModalUser.passwordEnabled,
+      appointmentModalUser.password || '',
+      appointmentModalUser.role === 'Teacher' ? (appointmentModalUser.assignedClasses || (appointmentModalUser.assignedClass ? [appointmentModalUser.assignedClass] : [])) : undefined,
+      newSalary || undefined,
+      appointmentModalUser.momoNumber,
+      appointmentModalUser.momoName,
+      appointmentModalUser.photoUrl,
+      appointmentModalUser.employeeId,
+      appDepartment,
+      appointmentModalUser.gender,
+      appointmentModalUser.employmentType,
+      !!appointmentModalUser.idCardDeactivated,
+      appStartDate,
+      newEndDate,
+      renewalClause,
+      newRenewalPeriodStr,
+      appStaffSignature,
+      appManagementSignature
+    );
+
+    if (res.success) {
+      const extensionDateFormatted = new Date(newEndDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+      setAppEndDate(newEndDate);
+      setAppSalary(newSalary.toString());
+      setAppRenewalOpt(renewalClause);
+      setAppRenewalPeriod(newRenewalPeriodStr);
+      setAppointmentModalUser({
+        ...appointmentModalUser,
+        stipendSalary: newSalary,
+        contractEndDate: newEndDate,
+        renewalOption: renewalClause,
+        renewalPeriod: newRenewalPeriodStr,
+        signatureUrl: appStaffSignature,
+        managementSignatureUrl: appManagementSignature
+      });
+      
+      playFeedbackSound('confirm');
+      showToast(`Appointment successfully renewed for ${appointmentModalUser.name} until ${extensionDateFormatted}!`);
+    } else {
+      showToast(res.error || "Failed to process renewal contract.");
+    }
+  };
+
+  const handlePrintAppointmentLetter = (isRenewalLetter = false) => {
+    if (!appointmentModalUser) return;
+
+    let printIframe = document.getElementById('letter-print-iframe') as HTMLIFrameElement;
+    if (!printIframe) {
+      printIframe = document.createElement('iframe');
+      printIframe.id = 'letter-print-iframe';
+      printIframe.setAttribute('style', 'position:fixed; right:0; bottom:0; width:0; height:0; border:0; pointer-events:none;');
+      document.body.appendChild(printIframe);
+    }
+
+    const iframeDoc = printIframe.contentWindow?.document || printIframe.contentDocument;
+    if (!iframeDoc) return;
+
+    const formattedLetterDate = new Date(appLetterDate || new Date()).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+    const formattedStartDate = new Date(appStartDate || new Date()).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+    const formattedEndDate = new Date(appEndDate || new Date()).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+
+    const schoolName = systemSettings?.schoolName || 'SAWLA COMPREHENSIVE ACADEMY';
+    const schoolSlogan = systemSettings?.schoolSlogan || systemSettings?.customMotto || 'Holiness is our key';
+    const schoolAddress = systemSettings?.schoolBoxAddress || 'P. O. Box ls 15, Sawla, Savannah Region, Ghana';
+    const schoolPhone = systemSettings?.schoolPhone || '+233 24 123 4567';
+    const schoolEmail = systemSettings?.schoolEmail || 'info@sawlacomprehensive.edu.gh';
+
+    let htmlContent = '';
+
+    if (!isRenewalLetter) {
+      htmlContent = `
+        <html>
+          <head>
+            <title>Letter of Appointment - ${appointmentModalUser.name}</title>
+            <style>
+              body {
+                font-family: 'Times New Roman', Times, serif, sans-serif;
+                margin: 40px;
+                line-height: 1.6;
+                color: #111;
+                font-size: 14px;
+              }
+              .letterhead {
+                text-align: center;
+                border-bottom: 3px double #000;
+                padding-bottom: 15px;
+                margin-bottom: 30px;
+              }
+              .school-name {
+                font-size: 26px;
+                font-weight: bold;
+                letter-spacing: 1px;
+                margin: 0;
+                text-transform: uppercase;
+              }
+              .school-slogan {
+                font-size: 12px;
+                font-style: italic;
+                margin: 3px 0 8px 0;
+                color: #444;
+              }
+              .school-contact {
+                font-size: 11px;
+                margin: 2px 0;
+                font-family: Arial, sans-serif;
+              }
+              .letter-date {
+                text-align: right;
+                margin-bottom: 25px;
+                font-weight: bold;
+              }
+              .recipient-info {
+                margin-bottom: 25px;
+              }
+              .recipient-name {
+                font-weight: bold;
+                font-size: 15px;
+              }
+              .letter-subject {
+                text-align: center;
+                font-weight: bold;
+                font-size: 16px;
+                text-decoration: underline;
+                text-transform: uppercase;
+                margin: 25px 0;
+              }
+              .letter-body {
+                text-align: justify;
+              }
+              .clause-title {
+                font-weight: bold;
+                margin-top: 15px;
+              }
+              .signature-section {
+                margin-top: 50px;
+                display: flex;
+                justify-content: space-between;
+              }
+              .signature-block {
+                width: 45%;
+              }
+              .signature-line {
+                border-top: 1px solid #000;
+                margin-top: 45px;
+                padding-top: 5px;
+                text-align: center;
+                font-size: 12px;
+              }
+              @media print {
+                body { margin: 20px; }
+              }
+            </style>
+          </head>
+          <body>
+            <div class="letterhead">
+              <div class="school-name">${schoolName}</div>
+              <div class="school-slogan">${schoolSlogan}</div>
+              <div class="school-contact">${schoolAddress} | Tel: ${schoolPhone} | Email: ${schoolEmail}</div>
+            </div>
+
+            <div class="letter-date">Date: ${formattedLetterDate}</div>
+
+            <div class="recipient-info">
+              To:<br/>
+              <span class="recipient-name">${appointmentModalUser.name}</span><br/>
+              ${appDepartment}<br/>
+              ${schoolName}<br/>
+              Sawla, Ghana
+            </div>
+
+            <div class="letter-subject">RE: LETTER OF APPOINTMENT AS ${appJobTitle.toUpperCase()}</div>
+
+            <div class="letter-body">
+              <p>Dear ${appointmentModalUser.name.split(' ')[0] || 'Sir/Madam'},</p>
+              
+              <p>On behalf of the Board of Directors and the Management of <strong>${schoolName}</strong>, I am pleased to offer you a formal appointment as <strong>${appJobTitle}</strong> in the ${appDepartment}, effective from <strong>${formattedStartDate}</strong>.</p>
+              
+              <p>This appointment is subject to the following core terms and conditions of employment:</p>
+
+              <div class="clause-title">1. Duties and Responsibilities</div>
+              <p>Your duties shall include, but are not limited to, the instruction of students, curriculum development, classroom management, student assessment verification, active checkpoint gate registry audits, and any other academic or administrative responsibilities as assigned by the Headmaster or School Board.</p>
+
+              <div class="clause-title">2. Salary and Remuneration</div>
+              <p>You will receive a basic monthly stipend of <strong>GHC ${parseFloat(appSalary).toFixed(2)}</strong>, payable on or before the last working day of each calendar month. This remuneration is subject to periodic reviews based on performance audits and school development metrics.</p>
+
+              <div class="clause-title">3. Contract Term and Renewal Options</div>
+              <p>This appointment is on a <strong>${appointmentModalUser.employmentType || 'Full-Time'}</strong> basis starting on <strong>${formattedStartDate}</strong> and scheduled to conclude on <strong>${formattedEndDate}</strong>. The contract includes the following renewal provision: <strong>${appRenewalOpt}</strong>. Under this clause, any extension will be subject to a <strong>${appRenewalPeriod}</strong> extension period upon mutual consent and performance audits.</p>
+
+              <div class="clause-title">4. Code of Conduct</div>
+              <p>You are expected to adhere to the highest standard of professional ethics, respect student confidentiality, uphold classroom attendance registries, and strictly comply with the school's regulations and child protection policies.</p>
+
+              <p>If you accept these terms of appointment, please sign and return the duplicate copy of this letter to the administrative office.</p>
+              
+              <p>We look forward to your valuable contribution to academic excellence at our institution.</p>
+              
+              <p>Yours faithfully,</p>
+            </div>
+
+            <div class="signature-section">
+              <div class="signature-block">
+                For School Management:<br/>
+                <div style="height: 50px; display: flex; align-items: flex-end; justify-content: center; margin-bottom: 5px;">
+                  ${appManagementSignature ? `<img src="${appManagementSignature}" style="max-height: 50px; max-width: 150px; object-fit: contain;" />` : ''}
+                </div>
+                <div class="signature-line">
+                  <strong>${appSignatoryName}</strong><br/>
+                  ${appSignatoryTitle}
+                </div>
+              </div>
+              
+              <div class="signature-block" style="text-align: right;">
+                Employee Acceptance:<br/>
+                <div style="height: 50px; display: flex; align-items: flex-end; justify-content: center; margin-bottom: 5px;">
+                  ${appStaffSignature ? `<img src="${appStaffSignature}" style="max-height: 50px; max-width: 150px; object-fit: contain;" />` : ''}
+                </div>
+                <div class="signature-line" style="text-align: center;">
+                  <strong>${appointmentModalUser.name}</strong><br/>
+                  Signature & Date
+                </div>
+              </div>
+            </div>
+          </body>
+        </html>
+      `;
+    } else {
+      htmlContent = `
+        <html>
+          <head>
+            <title>Letter of Contract Renewal - ${appointmentModalUser.name}</title>
+            <style>
+              body {
+                font-family: 'Times New Roman', Times, serif, sans-serif;
+                margin: 40px;
+                line-height: 1.6;
+                color: #111;
+                font-size: 14px;
+              }
+              .letterhead {
+                text-align: center;
+                border-bottom: 3px double #000;
+                padding-bottom: 15px;
+                margin-bottom: 30px;
+              }
+              .school-name {
+                font-size: 26px;
+                font-weight: bold;
+                letter-spacing: 1px;
+                margin: 0;
+                text-transform: uppercase;
+              }
+              .school-slogan {
+                font-size: 12px;
+                font-style: italic;
+                margin: 3px 0 8px 0;
+                color: #444;
+              }
+              .school-contact {
+                font-size: 11px;
+                margin: 2px 0;
+                font-family: Arial, sans-serif;
+              }
+              .letter-date {
+                text-align: right;
+                margin-bottom: 25px;
+                font-weight: bold;
+              }
+              .recipient-info {
+                margin-bottom: 25px;
+              }
+              .recipient-name {
+                font-weight: bold;
+                font-size: 15px;
+              }
+              .letter-subject {
+                text-align: center;
+                font-weight: bold;
+                font-size: 16px;
+                text-decoration: underline;
+                text-transform: uppercase;
+                margin: 25px 0;
+              }
+              .letter-body {
+                text-align: justify;
+              }
+              .clause-title {
+                font-weight: bold;
+                margin-top: 15px;
+              }
+              .signature-section {
+                margin-top: 50px;
+                display: flex;
+                justify-content: space-between;
+              }
+              .signature-block {
+                width: 45%;
+              }
+              .signature-line {
+                border-top: 1px solid #000;
+                margin-top: 45px;
+                padding-top: 5px;
+                text-align: center;
+                font-size: 12px;
+              }
+              @media print {
+                body { margin: 20px; }
+              }
+            </style>
+          </head>
+          <body>
+            <div class="letterhead">
+              <div class="school-name">${schoolName}</div>
+              <div class="school-slogan">${schoolSlogan}</div>
+              <div class="school-contact">${schoolAddress} | Tel: ${schoolPhone} | Email: ${schoolEmail}</div>
+            </div>
+
+            <div class="letter-date">Date: ${formattedLetterDate}</div>
+
+            <div class="recipient-info">
+              To:<br/>
+              <span class="recipient-name">${appointmentModalUser.name}</span><br/>
+              ${appDepartment}<br/>
+              ${schoolName}<br/>
+              Sawla, Ghana
+            </div>
+
+            <div class="letter-subject">RE: RENEWAL & EXTENSION OF APPOINTMENT CONTRACT</div>
+
+            <div class="letter-body">
+              <p>Dear ${appointmentModalUser.name.split(' ')[0] || 'Sir/Madam'},</p>
+              
+              <p>Following a comprehensive review of your service records, student registry metrics, and gate operations oversight, we are pleased to inform you that the Management Board of <strong>${schoolName}</strong> has approved the renewal of your employment contract.</p>
+              
+              <p>The terms and conditions of this renewal and extension are detailed below:</p>
+
+              <div class="clause-title">1. Period of Extension</div>
+              <p>Your appointment has been extended for a further period of <strong>${appRenewalPeriod}</strong>, commencing immediately upon the expiration of your previous term, and is now scheduled to conclude on <strong>${formattedEndDate}</strong>.</p>
+
+              <div class="clause-title">2. Adjusted Remuneration</div>
+              <p>Effective from the start of this extension, your basic monthly stipend is adjusted to <strong>GHC ${parseFloat(appSalary).toFixed(2)}</strong>. This is a reflection of your dedication to the growth of our institution. All other components of your financial contract, including registered MoMo payout details, remain active.</p>
+
+              <div class="clause-title">3. Future Renewal Parameters</div>
+              <p>This renewed contract holds the following renewal clause status: <strong>${appRenewalOpt}</strong>. A subsequent extension or review will be initiated towards the end of this current term, subject to performance metrics.</p>
+
+              <div class="clause-title">4. Terms and Continuity</div>
+              <p>All other administrative guidelines, teacher code of conduct parameters, and registry obligations as specified in your original Letter of Appointment remain in full force and effect during this extension period.</p>
+
+              <p>Please indicate your acceptance of this renewal contract and its terms by signing and returning the duplicate copy of this extension notice to the admin desk.</p>
+              
+              <p>Congratulations on this well-deserved renewal. We appreciate your continued partnership in guiding our scholars.</p>
+              
+              <p>Yours faithfully,</p>
+            </div>
+
+            <div class="signature-section">
+              <div class="signature-block">
+                For School Management:<br/>
+                <div style="height: 50px; display: flex; align-items: flex-end; justify-content: center; margin-bottom: 5px;">
+                  ${appManagementSignature ? `<img src="${appManagementSignature}" style="max-height: 50px; max-width: 150px; object-fit: contain;" />` : ''}
+                </div>
+                <div class="signature-line">
+                  <strong>${appSignatoryName}</strong><br/>
+                  ${appSignatoryTitle}
+                </div>
+              </div>
+              
+              <div class="signature-block" style="text-align: right;">
+                Employee Acceptance:<br/>
+                <div style="height: 50px; display: flex; align-items: flex-end; justify-content: center; margin-bottom: 5px;">
+                  ${appStaffSignature ? `<img src="${appStaffSignature}" style="max-height: 50px; max-width: 150px; object-fit: contain;" />` : ''}
+                </div>
+                <div class="signature-line" style="text-align: center;">
+                  <strong>${appointmentModalUser.name}</strong><br/>
+                  Signature & Date
+                </div>
+              </div>
+            </div>
+          </body>
+        </html>
+      `;
+    }
+
+    iframeDoc.open();
+    iframeDoc.write(htmlContent);
+    iframeDoc.close();
+
+    setTimeout(() => {
+      printIframe.contentWindow?.focus();
+      printIframe.contentWindow?.print();
+    }, 500);
+  };
+
   const [showLedgerSwitchModal, setShowLedgerSwitchModal] = useState(false);
   const [isSyncingTransition, setIsSyncingTransition] = useState(false);
   const [copiedAddress, setCopiedAddress] = useState(false);
@@ -766,10 +1408,15 @@ export const AdminPanel: React.FC = React.memo(() => {
 
   const [showPromotionModal, setShowPromotionModal] = useState(false);
   const [promotionConfirmedText, setPromotionConfirmedText] = useState('');
-  const [promotionTab, setPromotionTab] = useState<'bulk' | 'single'>('bulk');
+  const [promotionTab, setPromotionTab] = useState<'bulk' | 'reconcile' | 'single' | 'backups'>('bulk');
   const [selectedPromoStudentId, setSelectedPromoStudentId] = useState<string>('');
   const [inLinePromoStudentId, setInLinePromoStudentId] = useState<string>('');
   const [inLineRepeatClass, setInLineRepeatClass] = useState<StudentClass>('B1');
+  
+  // Reconciliation promotion planner states
+  const [reconcileClassFilter, setReconcileClassFilter] = useState<string>('All');
+  const [reconcileSearch, setReconcileSearch] = useState<string>('');
+  const [reconcileActions, setReconcileActions] = useState<Record<string, 'promote' | 'repeat' | 'withdraw'>>({});
 
   const getSafeOrigin = () => {
     try {
@@ -797,10 +1444,53 @@ export const AdminPanel: React.FC = React.memo(() => {
     
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase().trim();
-      list = list.filter(st => 
-        st.name.toLowerCase().includes(query) || 
-        st.id.toLowerCase().includes(query)
-      );
+      const normalizedQuery = query.replace(/[-_ ]/g, '');
+
+      // Pre-index payments for today for O(1) lookup inside the filter loop
+      const todayPaymentsMap = new Map<string, any>();
+      if (payments) {
+        payments.forEach(p => {
+          if (p.date === currentDate) {
+            todayPaymentsMap.set(p.studentId, p);
+          }
+        });
+      }
+
+      list = list.filter(st => {
+        // Name & Roll matches
+        const matchesNameOrRoll = 
+          st.name.toLowerCase().includes(query) || 
+          st.id.toLowerCase().includes(query) ||
+          (st.rollNumber || '').toLowerCase().includes(query);
+
+        // Class and Category matches
+        const normalizedClass = st.class.toLowerCase().replace(/[-_ ]/g, '');
+        const matchesClass = 
+          normalizedClass === normalizedQuery || 
+          st.class.toLowerCase().includes(query) ||
+          (st.category && st.category.toLowerCase().includes(query));
+
+        // Payment status check
+        const todayPay = todayPaymentsMap.get(st.id);
+        const isAbsent = !!todayPay && !!todayPay.isAbsent;
+        const isPaid = !!todayPay && !todayPay.isAbsent && todayPay.verified;
+        const isUnmarked = !todayPay;
+
+        let matchesStatus = false;
+        if (query === 'absent' || query === 'missing' || query === 'away') {
+          matchesStatus = isAbsent;
+        } else if (query === 'paid' || query === 'present' || query === 'checked' || query === 'checkin' || query === 'checked in' || query === 'checked-in') {
+          matchesStatus = isPaid;
+        } else if (query === 'unmarked' || query === 'pending' || query === 'not checked' || query === 'not marked' || query === 'unpaid' || query === 'not paid') {
+          matchesStatus = isUnmarked;
+        } else if (query === 'term' || query === 'term payer' || query === 'term payers') {
+          matchesStatus = st.paymentType === 'Term';
+        } else if (query === 'daily' || query === 'daily payer' || query === 'daily payers') {
+          matchesStatus = st.paymentType === 'Daily';
+        }
+
+        return matchesNameOrRoll || matchesClass || matchesStatus;
+      });
     }
     return list;
   }, [students, studentFilter, searchQuery]);
@@ -1320,7 +2010,57 @@ export const AdminPanel: React.FC = React.memo(() => {
   const [adminRegStipendSalary, setAdminRegStipendSalary] = useState('');
   const [adminRegMomoNumber, setAdminRegMomoNumber] = useState('');
   const [adminRegMomoName, setAdminRegMomoName] = useState('');
+  const [adminRegGender, setAdminRegGender] = useState<'Male' | 'Female'>('Male');
+  const [adminRegEmploymentType, setAdminRegEmploymentType] = useState<'Full-Time' | 'Part-Time' | 'Contract' | 'Volunteer'>('Full-Time');
+  const [adminRegAppointmentDate, setAdminRegAppointmentDate] = useState('');
+  const [adminRegContractEndDate, setAdminRegContractEndDate] = useState('');
+  const [adminRegRenewalOption, setAdminRegRenewalOption] = useState<'Automatic' | 'Manual Review' | 'Fixed Term' | 'Non-Renewable'>('Automatic');
+  const [adminRegRenewalPeriod, setAdminRegRenewalPeriod] = useState('1 Year');
   const [editStaffObj, setEditStaffObj] = useState<any | null>(null);
+
+  const teacherStats = useMemo(() => {
+    const teachers = users.filter(u => u.role === 'Teacher');
+    
+    // Categorized by getClassCategory
+    const stats = {
+      'Pre-school': { total: 0, male: 0, female: 0, fullTime: 0, partTime: 0 },
+      'Primary': { total: 0, male: 0, female: 0, fullTime: 0, partTime: 0 },
+      'JHS': { total: 0, male: 0, female: 0, fullTime: 0, partTime: 0 },
+      'Unassigned/Core': { total: 0, male: 0, female: 0, fullTime: 0, partTime: 0 },
+      overall: {
+        total: users.length,
+        teachersCount: teachers.length,
+        maleTeachers: teachers.filter(t => t.gender === 'Male').length,
+        femaleTeachers: teachers.filter(t => t.gender === 'Female').length,
+        genderUnspecified: teachers.filter(t => !t.gender).length,
+        fullTime: teachers.filter(t => t.employmentType === 'Full-Time' || !t.employmentType).length,
+        partTime: teachers.filter(t => t.employmentType === 'Part-Time').length,
+        contract: teachers.filter(t => t.employmentType === 'Contract').length,
+        volunteer: teachers.filter(t => t.employmentType === 'Volunteer').length,
+      }
+    };
+
+    teachers.forEach(t => {
+      const classes = t.assignedClasses || (t.assignedClass ? [t.assignedClass] : []);
+      let category: 'Pre-school' | 'Primary' | 'JHS' | 'Unassigned/Core' = 'Unassigned/Core';
+      if (classes.length > 0) {
+        const cat = getClassCategory(classes[0]);
+        if (cat === 'Pre-school') category = 'Pre-school';
+        else if (cat === 'Primary') category = 'Primary';
+        else if (cat === 'JHS') category = 'JHS';
+      }
+
+      stats[category].total += 1;
+      if (t.gender === 'Male') stats[category].male += 1;
+      else if (t.gender === 'Female') stats[category].female += 1;
+      
+      const type = t.employmentType || 'Full-Time';
+      if (type === 'Full-Time') stats[category].fullTime += 1;
+      else if (type === 'Part-Time') stats[category].partTime += 1;
+    });
+
+    return stats;
+  }, [users]);
 
   const handleAdminRegisterStaff = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1337,7 +2077,17 @@ export const AdminPanel: React.FC = React.memo(() => {
       adminRegRole === 'Teacher' ? adminRegClasses : undefined,
       adminRegStipendSalary ? parseFloat(adminRegStipendSalary) : undefined,
       adminRegMomoNumber.trim() || undefined,
-      adminRegMomoName.trim() || undefined
+      adminRegMomoName.trim() || undefined,
+      undefined, // photoUrl
+      undefined, // employeeId
+      undefined, // department
+      adminRegGender,
+      adminRegEmploymentType,
+      undefined, // idCardDeactivated
+      adminRegAppointmentDate || undefined,
+      adminRegContractEndDate || undefined,
+      adminRegRenewalOption || undefined,
+      adminRegRenewalPeriod || undefined
     );
 
     if (result.success) {
@@ -1350,6 +2100,12 @@ export const AdminPanel: React.FC = React.memo(() => {
       setAdminRegStipendSalary('');
       setAdminRegMomoNumber('');
       setAdminRegMomoName('');
+      setAdminRegGender('Male');
+      setAdminRegEmploymentType('Full-Time');
+      setAdminRegAppointmentDate('');
+      setAdminRegContractEndDate('');
+      setAdminRegRenewalOption('Automatic');
+      setAdminRegRenewalPeriod('1 Year');
       showToast('Staff register updated with new entry.');
     } else {
       showToast(result.error || 'Check administrator database permissions & connection.');
@@ -1372,7 +2128,17 @@ export const AdminPanel: React.FC = React.memo(() => {
       editStaffObj.role === 'Teacher' ? (editStaffObj.assignedClasses || (editStaffObj.assignedClass ? [editStaffObj.assignedClass] : [])) : undefined,
       editStaffObj.stipendSalary ? parseFloat(editStaffObj.stipendSalary.toString()) : undefined,
       editStaffObj.momoNumber?.trim() || undefined,
-      editStaffObj.momoName?.trim() || undefined
+      editStaffObj.momoName?.trim() || undefined,
+      undefined, // photoUrl
+      undefined, // employeeId
+      undefined, // department
+      editStaffObj.gender || 'Male',
+      editStaffObj.employmentType || 'Full-Time',
+      !!editStaffObj.idCardDeactivated,
+      editStaffObj.appointmentDate,
+      editStaffObj.contractEndDate,
+      editStaffObj.renewalOption,
+      editStaffObj.renewalPeriod
     );
 
     if (result.success) {
@@ -2152,6 +2918,29 @@ export const AdminPanel: React.FC = React.memo(() => {
             Generate ID Cards
           </button>
           <button
+            id="admin-tab-aiassistant-btn"
+            onClick={() => setActiveTab('ai_assistant')}
+            className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
+              activeTab === 'ai_assistant'
+                ? 'bg-amber-400 text-black'
+                : 'text-neutral-500 hover:text-white'
+            }`}
+          >
+            <Bot size={13} />
+            AI Assistant
+          </button>
+          <button
+            onClick={() => setActiveTab('audit')}
+            className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
+              activeTab === 'audit'
+                ? 'bg-amber-400 text-black'
+                : 'text-neutral-500 hover:text-white'
+            }`}
+          >
+            <FileText size={13} />
+            Audit Trail
+          </button>
+          <button
             onClick={() => setActiveTab('settings')}
             className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
               activeTab === 'settings'
@@ -2374,6 +3163,11 @@ export const AdminPanel: React.FC = React.memo(() => {
               </div>
             </div>
           )}
+
+          {/* Collapsible Enrolment Summary details */}
+          <div className="mb-2">
+            <EnrollmentSummaryWidget students={students || []} />
+          </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Column 1: Forms & CSV Imports */}
@@ -3192,7 +3986,7 @@ export const AdminPanel: React.FC = React.memo(() => {
               <input
                 id="admin-student-search"
                 type="text"
-                placeholder="Search student by name or ID..."
+                placeholder="Search by name, ID, class, or status (paid, absent, unmarked)..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full bg-transparent border-0 p-0 text-xs text-white placeholder-neutral-650 focus:outline-none focus:ring-0 font-mono font-bold uppercase tracking-wider"
@@ -3231,130 +4025,292 @@ export const AdminPanel: React.FC = React.memo(() => {
                   📂 No students matching filters found or directory is empty.
                 </div>
               ) : (
-                filteredStudentsForList.map(st => (
-                <div key={st.id} className="p-6 flex justify-between items-center hover:bg-neutral-800/10">
-                  <div className="flex items-center gap-4">
-                    {/* Student Avatar Widget */}
-                    <div className="shrink-0 w-11 h-11 relative">
-                      {st.photoUrl ? (
-                        <img 
-                          src={st.photoUrl} 
-                          alt={st.name} 
-                          className="w-11 h-11 rounded-full object-cover border-2 border-neutral-800"
-                          referrerPolicy="no-referrer"
-                        />
-                      ) : (
-                        <div className="w-11 h-11 rounded-full bg-neutral-950 border-2 border-neutral-850 flex items-center justify-center text-xs font-black text-amber-400 font-mono tracking-tighter uppercase">
-                          {st.name.slice(0, 2).toUpperCase()}
+                filteredStudentsForList.map(st => {
+                  const discountInfo = getDiscountedTermFee(st, payments, activeTerm, currentDate, systemSettings);
+                  const studentFee = discountInfo.termFee;
+                  const legacyDebt = st.legacyDebt || 0;
+                  const totalTarget = studentFee + legacyDebt;
+                  const studentPayments = payments.filter(p => p.studentId === st.id && !p.isAbsent);
+                  const totalPaid = studentPayments.reduce((sum, p) => sum + p.amount, 0);
+                  const percentDone = totalTarget > 0 ? Math.min(100, (totalPaid / totalTarget) * 100) : 0;
+                  const balanceDue = Math.max(0, totalTarget - totalPaid);
+
+                  return (
+                    <div key={st.id} className="p-6 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:bg-neutral-800/10">
+                      <div className="flex flex-col sm:flex-row sm:items-center gap-4 flex-1">
+                        {/* Student Avatar Widget */}
+                        <div className="shrink-0 w-11 h-11 relative">
+                          {st.photoUrl ? (
+                            <img 
+                              src={st.photoUrl} 
+                              alt={st.name} 
+                              className="w-11 h-11 rounded-full object-cover border-2 border-neutral-800"
+                              referrerPolicy="no-referrer"
+                            />
+                          ) : (
+                            <div className="w-11 h-11 rounded-full bg-neutral-950 border-2 border-neutral-850 flex items-center justify-center text-xs font-black text-amber-400 font-mono tracking-tighter uppercase">
+                              {st.name.slice(0, 2).toUpperCase()}
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </div>
-                    
-                    <div className="space-y-1.5">
-                      <p 
-                        onClick={() => setHistoryModalStudent(st)}
-                        className={`text-base font-black text-white hover:text-amber-400 cursor-pointer transition-colors uppercase tracking-tight decoration-amber-400 hover:underline flex items-center gap-1.5 ${!st.active ? 'line-through text-neutral-500' : ''}`}
-                        title="Click to view full registration history, financial ledger & pass credentials"
-                      >
-                        {st.name}
-                        <span className="text-neutral-500 hover:text-amber-400 text-[10px] lowercase font-mono font-normal no-underline">(view history)</span>
-                      </p>
-                      <div className="flex gap-2.5 items-center text-[10px] text-neutral-400 font-mono font-bold uppercase tracking-wider">
-                        <span className="bg-neutral-955 border border-neutral-800 px-2.5 py-0.5 text-amber-400 font-black">{st.class}</span>
-                        {st.gender && (
-                          <>
+                        
+                        <div className="space-y-2 flex-1 min-w-0">
+                          <p 
+                            onClick={() => setHistoryModalStudent(st)}
+                            className={`text-base font-black text-white hover:text-amber-400 cursor-pointer transition-colors uppercase tracking-tight decoration-amber-400 hover:underline flex items-center gap-1.5 ${!st.active ? 'line-through text-neutral-500' : ''}`}
+                            title="Click to view full registration history, financial ledger & pass credentials"
+                          >
+                            {st.name}
+                            <span className="text-neutral-500 hover:text-amber-400 text-[10px] lowercase font-mono font-normal no-underline">(view history)</span>
+                          </p>
+                          <div className="flex flex-wrap gap-2.5 items-center text-[10px] text-neutral-400 font-mono font-bold uppercase tracking-wider">
+                            <span className="bg-neutral-955 border border-neutral-800 px-2.5 py-0.5 text-amber-400 font-black">{st.class}</span>
+                            {st.gender && (
+                              <>
+                                <span>•</span>
+                                <span className="bg-neutral-955 border border-neutral-800 px-2 py-0.5 text-neutral-300 font-extrabold flex items-center gap-0.5">
+                                  {st.gender === 'Male' ? '👦 M' : '👧 F'}
+                                </span>
+                              </>
+                            )}
                             <span>•</span>
-                            <span className="bg-neutral-955 border border-neutral-800 px-2 py-0.5 text-neutral-300 font-extrabold flex items-center gap-0.5">
-                              {st.gender === 'Male' ? '👦 M' : '👧 F'}
-                            </span>
-                          </>
-                        )}
-                        <span>•</span>
-                        <span>Category: {st.category}</span>
-                        <span>•</span>
-                        <span>ID: {st.rollNumber}</span>
-                        {st.discount !== undefined && st.discount > 0 && (
-                          <>
+                            <span>Category: {st.category}</span>
                             <span>•</span>
-                            <span className="bg-amber-955 border border-amber-500/35 px-2 py-0.5 text-amber-400 font-black">
-                              DISCOUNT: GHC {st.discount.toFixed(2)}/DAY
-                            </span>
-                          </>
-                        )}
+                            <span>ID: {st.rollNumber}</span>
+                            {st.discount !== undefined && st.discount > 0 && (
+                              <>
+                                <span>•</span>
+                                <span className="bg-amber-955 border border-amber-500/35 px-2 py-0.5 text-amber-400 font-black">
+                                  DISCOUNT: GHC {st.discount.toFixed(2)}/DAY
+                                </span>
+                              </>
+                            )}
+                          </div>
+
+                          {/* Visual Fee-Payment Progress Bar */}
+                          <div className="pt-2 max-w-md w-full sm:w-[320px] md:w-[360px]">
+                            <div className="flex items-center justify-between text-[9px] font-mono uppercase tracking-wider mb-1">
+                              <span className="text-neutral-500 font-black">
+                                {st.paymentType === 'Term' ? 'Term Fee Scheme' : 'Daily Gate Scheme'}
+                              </span>
+                              <span className={`font-black ${percentDone >= 100 ? 'text-emerald-400' : percentDone > 50 ? 'text-amber-400' : 'text-rose-400'}`}>
+                                GHC {totalPaid.toFixed(2)} / GHC {totalTarget.toFixed(2)} ({percentDone.toFixed(0)}%)
+                              </span>
+                            </div>
+                            <div className="h-2 w-full bg-neutral-950 border border-neutral-850 p-[1px] rounded-none">
+                              <div 
+                                className={`h-full transition-all duration-500 ${
+                                  percentDone >= 100 
+                                    ? 'bg-emerald-500' 
+                                    : percentDone > 50 
+                                      ? 'bg-amber-400' 
+                                      : 'bg-rose-500'
+                                }`}
+                                style={{ width: `${percentDone}%` }}
+                              />
+                            </div>
+                            {balanceDue > 0 ? (
+                              <div className="text-[8.5px] text-neutral-500 font-mono mt-1 flex items-center gap-1.5">
+                                <span>Balance Due:</span>
+                                <span className="font-bold text-neutral-300">GHC {balanceDue.toFixed(2)}</span>
+                              </div>
+                            ) : (
+                              <div className="text-[8.5px] text-emerald-500 font-mono mt-1 font-black uppercase flex items-center gap-1.5">
+                                <span>✓ Fully Cleared &amp; Settled</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 self-end md:self-center">
+                        {/* ID Card trigger */}
+                        <button
+                          type="button"
+                          onClick={() => setSelectedIdCardStudent(st)}
+                          title="Generate & Print Student ID Card with QR Code"
+                          className="p-2 border-2 border-neutral-800 hover:border-amber-400 hover:text-amber-400 bg-neutral-950 text-neutral-400 transition-colors cursor-pointer flex items-center justify-center gap-1 font-mono text-[9px] font-black uppercase tracking-wider"
+                        >
+                          <Printer size={13} className="stroke-[2.5]" />
+                          <span className="hidden sm:inline">Print ID</span>
+                        </button>
+
+                        {/* Active toggle */}
+                        <button
+                          onClick={() => handleToggleStudentActive(st)}
+                          title={st.active ? 'Deactivate from checkout register' : 'Reactivate into register'}
+                          className={`p-2 border-2 transition-colors cursor-pointer ${
+                            st.active 
+                              ? 'border-neutral-800 text-neutral-400 hover:text-white hover:border-neutral-600 bg-neutral-950' 
+                              : 'border-red-800 text-red-500 bg-red-950/20'
+                          }`}
+                        >
+                          {st.active ? <Check size={14} className="stroke-[3]" /> : <X size={14} className="stroke-[3]" />}
+                        </button>
+
+                        {/* Edit trigger */}
+                        <button
+                          onClick={() => handleStartEdit(st)}
+                          className="p-2 border-2 border-neutral-800 hover:border-neutral-600 bg-neutral-950 text-neutral-400 hover:text-white transition-colors cursor-pointer"
+                        >
+                          <Edit2 size={13} />
+                        </button>
+
+                        {/* Delete trigger */}
+                        <button
+                          onClick={() => {
+                            if (currentUser?.role !== 'Administrator') {
+                              alert('Access Denied: Only Administrators are permitted to delete student records completely from the system.');
+                              return;
+                            }
+                            setDeleteConf({
+                              isOpen: true,
+                              type: 'student',
+                              targetId: st.id,
+                              targetName: st.name,
+                              userInput: '',
+                              onConfirm: () => {
+                                deleteStudent(st.id);
+                                showToast('Pupil record purged.');
+                              }
+                            });
+                          }}
+                          className={`p-2 border-2 transition-colors cursor-pointer ${
+                            currentUser?.role === 'Administrator'
+                              ? 'border-red-900 bg-neutral-950 text-red-500 hover:bg-red-950/30'
+                              : 'border-neutral-855 bg-neutral-950 text-neutral-600 cursor-not-allowed opacity-50'
+                          }`}
+                          title={currentUser?.role !== 'Administrator' ? 'Administrator Only (Access Denied)' : 'Delete Student / Purge'}
+                        >
+                          <Trash2 size={13} />
+                        </button>
                       </div>
                     </div>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    {/* ID Card trigger */}
-                    <button
-                      type="button"
-                      onClick={() => setSelectedIdCardStudent(st)}
-                      title="Generate & Print Student ID Card with QR Code"
-                      className="p-2 border-2 border-neutral-800 hover:border-amber-400 hover:text-amber-400 bg-neutral-950 text-neutral-400 transition-colors cursor-pointer flex items-center justify-center gap-1 font-mono text-[9px] font-black uppercase tracking-wider"
-                    >
-                      <Printer size={13} className="stroke-[2.5]" />
-                      <span className="hidden sm:inline">Print ID</span>
-                    </button>
-
-                    {/* Active toggle */}
-                    <button
-                      onClick={() => handleToggleStudentActive(st)}
-                      title={st.active ? 'Deactivate from checkout register' : 'Reactivate into register'}
-                      className={`p-2 border-2 transition-colors cursor-pointer ${
-                        st.active 
-                          ? 'border-neutral-800 text-neutral-400 hover:text-white hover:border-neutral-600 bg-neutral-950' 
-                          : 'border-red-800 text-red-500 bg-red-950/20'
-                      }`}
-                    >
-                      {st.active ? <Check size={14} className="stroke-[3]" /> : <X size={14} className="stroke-[3]" />}
-                    </button>
-
-                    {/* Edit trigger */}
-                    <button
-                      onClick={() => handleStartEdit(st)}
-                      className="p-2 border-2 border-neutral-800 hover:border-neutral-600 bg-neutral-950 text-neutral-400 hover:text-white transition-colors cursor-pointer"
-                    >
-                      <Edit2 size={13} />
-                    </button>
-
-                    {/* Delete trigger */}
-                    <button
-                      onClick={() => {
-                        if (currentUser?.role !== 'Administrator') {
-                          alert('Access Denied: Only Administrators are permitted to delete student records completely from the system.');
-                          return;
-                        }
-                        setDeleteConf({
-                          isOpen: true,
-                          type: 'student',
-                          targetId: st.id,
-                          targetName: st.name,
-                          userInput: '',
-                          onConfirm: () => {
-                            deleteStudent(st.id);
-                            showToast('Pupil record purged.');
-                          }
-                        });
-                      }}
-                      className={`p-2 border-2 transition-colors cursor-pointer ${
-                        currentUser?.role === 'Administrator'
-                          ? 'border-red-900 bg-neutral-950 text-red-500 hover:bg-red-950/30'
-                          : 'border-neutral-855 bg-neutral-950 text-neutral-600 cursor-not-allowed opacity-50'
-                      }`}
-                      title={currentUser?.role !== 'Administrator' ? 'Administrator Only (Access Denied)' : 'Delete Student / Purge'}
-                    >
-                      <Trash2 size={13} />
-                    </button>
-                  </div>
-                </div>
-              )))}
+                  );
+                })
+              )}
             </div>
           </div>
         </div>
       </div>
       ) : activeTab === 'mfa' ? (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="space-y-6">
+          {/* Staff & Teacher Statistics Summary Banner */}
+          <div className="bg-neutral-900 border-4 border-neutral-800 p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-neutral-800 pb-3">
+              <div>
+                <h4 className="text-sm font-black uppercase font-mono tracking-wider flex items-center gap-2 text-amber-400">
+                  <Users size={16} /> Staff & Teacher Analysis Dashboard
+                </h4>
+                <p className="text-[10px] text-neutral-400">Demographic distribution, categories, and employment classification summary</p>
+              </div>
+              <div className="flex gap-4 text-xs font-mono">
+                <div className="bg-neutral-950 px-3 py-1.5 border border-neutral-850 rounded">
+                  <span className="text-neutral-500 font-bold uppercase text-[9px] block">Total Staff</span>
+                  <span className="text-base font-black text-white">{teacherStats.overall.total}</span>
+                </div>
+                <div className="bg-neutral-950 px-3 py-1.5 border border-neutral-850 rounded">
+                  <span className="text-neutral-500 font-bold uppercase text-[9px] block">Active Teachers</span>
+                  <span className="text-base font-black text-amber-400">{teacherStats.overall.teachersCount}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              {/* Pre-school Card */}
+              <div className="bg-neutral-950 p-4 border border-neutral-800 rounded-lg space-y-3 font-sans">
+                <div className="flex items-center justify-between border-b border-neutral-900 pb-2">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-rose-400 font-mono">🧸 Pre-school</span>
+                  <span className="text-sm font-black text-white">{teacherStats['Pre-school'].total} Teachers</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-[10px] font-mono">
+                  <div className="bg-neutral-900/40 p-2 rounded border border-neutral-850">
+                    <span className="text-neutral-500 block">Male</span>
+                    <span className="text-xs font-bold text-white">{teacherStats['Pre-school'].male}</span>
+                  </div>
+                  <div className="bg-neutral-900/40 p-2 rounded border border-neutral-850">
+                    <span className="text-neutral-500 block">Female</span>
+                    <span className="text-xs font-bold text-white">{teacherStats['Pre-school'].female}</span>
+                  </div>
+                </div>
+                <div className="text-[9px] text-neutral-400 font-mono">
+                  Full-Time: {teacherStats['Pre-school'].fullTime} | Part-Time: {teacherStats['Pre-school'].partTime}
+                </div>
+              </div>
+
+              {/* Primary Card */}
+              <div className="bg-neutral-950 p-4 border border-neutral-800 rounded-lg space-y-3 font-sans">
+                <div className="flex items-center justify-between border-b border-neutral-900 pb-2">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-emerald-400 font-mono">✏️ Primary</span>
+                  <span className="text-sm font-black text-white">{teacherStats['Primary'].total} Teachers</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-[10px] font-mono">
+                  <div className="bg-neutral-900/40 p-2 rounded border border-neutral-850">
+                    <span className="text-neutral-500 block">Male</span>
+                    <span className="text-xs font-bold text-white">{teacherStats['Primary'].male}</span>
+                  </div>
+                  <div className="bg-neutral-900/40 p-2 rounded border border-neutral-850">
+                    <span className="text-neutral-500 block">Female</span>
+                    <span className="text-xs font-bold text-white">{teacherStats['Primary'].female}</span>
+                  </div>
+                </div>
+                <div className="text-[9px] text-neutral-400 font-mono">
+                  Full-Time: {teacherStats['Primary'].fullTime} | Part-Time: {teacherStats['Primary'].partTime}
+                </div>
+              </div>
+
+              {/* JHS Card */}
+              <div className="bg-neutral-950 p-4 border border-neutral-800 rounded-lg space-y-3 font-sans">
+                <div className="flex items-center justify-between border-b border-neutral-900 pb-2">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-cyan-400 font-mono">🔬 JHS</span>
+                  <span className="text-sm font-black text-white">{teacherStats['JHS'].total} Teachers</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-[10px] font-mono">
+                  <div className="bg-neutral-900/40 p-2 rounded border border-neutral-850">
+                    <span className="text-neutral-500 block">Male</span>
+                    <span className="text-xs font-bold text-white">{teacherStats['JHS'].male}</span>
+                  </div>
+                  <div className="bg-neutral-900/40 p-2 rounded border border-neutral-850">
+                    <span className="text-neutral-500 block">Female</span>
+                    <span className="text-xs font-bold text-white">{teacherStats['JHS'].female}</span>
+                  </div>
+                </div>
+                <div className="text-[9px] text-neutral-400 font-mono">
+                  Full-Time: {teacherStats['JHS'].fullTime} | Part-Time: {teacherStats['JHS'].partTime}
+                </div>
+              </div>
+
+              {/* Employment Breakdown Card */}
+              <div className="bg-neutral-950 p-4 border border-neutral-800 rounded-lg space-y-2 font-sans">
+                <div className="border-b border-neutral-900 pb-1.5 font-sans">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-amber-400 font-mono">💼 Employment Types</span>
+                </div>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-[10px] font-mono">
+                  <div className="flex justify-between">
+                    <span className="text-neutral-500">Full:</span>
+                    <span className="font-bold text-white">{teacherStats.overall.fullTime}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-neutral-500">Part:</span>
+                    <span className="font-bold text-white">{teacherStats.overall.partTime}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-neutral-500">Cont:</span>
+                    <span className="font-bold text-white">{teacherStats.overall.contract}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-neutral-500">Vol:</span>
+                    <span className="font-bold text-white">{teacherStats.overall.volunteer}</span>
+                  </div>
+                </div>
+                <div className="text-[8px] text-neutral-500 font-sans uppercase tracking-wider pt-1 border-t border-neutral-900/60">
+                  Total Genders: {teacherStats.overall.maleTeachers}M | {teacherStats.overall.femaleTeachers}F
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Staff Registration or Editing Card on Left */}
           <div className="bg-neutral-900 border-4 border-neutral-800 p-8 h-fit space-y-5">
             {editStaffObj ? (
@@ -3402,7 +4358,7 @@ export const AdminPanel: React.FC = React.memo(() => {
                     />
                   </div>
 
-                  <div className="space-y-4">
+                  <div className="space-y-4 font-sans">
                     <div className="grid grid-cols-2 gap-3">
                       <div className={editStaffObj.role === 'Teacher' ? 'col-span-2 sm:col-span-1' : 'col-span-2'}>
                         <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
@@ -3430,6 +4386,38 @@ export const AdminPanel: React.FC = React.memo(() => {
                           </div>
                         </div>
                       )}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3 bg-neutral-950/40 p-3 border border-neutral-850 rounded">
+                      <div>
+                        <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                          Gender Analysis
+                        </label>
+                        <select
+                          value={editStaffObj.gender || 'Male'}
+                          onChange={(e) => setEditStaffObj({ ...editStaffObj, gender: e.target.value as 'Male' | 'Female' })}
+                          className="w-full bg-neutral-900 border-2 border-neutral-800 py-2.5 px-3 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 cursor-pointer"
+                        >
+                          <option value="Male">Male</option>
+                          <option value="Female">Female</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                          Employment Type
+                        </label>
+                        <select
+                          value={editStaffObj.employmentType || 'Full-Time'}
+                          onChange={(e) => setEditStaffObj({ ...editStaffObj, employmentType: e.target.value as any })}
+                          className="w-full bg-neutral-900 border-2 border-neutral-800 py-2.5 px-3 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 cursor-pointer"
+                        >
+                          <option value="Full-Time">Full-Time</option>
+                          <option value="Part-Time">Part-Time</option>
+                          <option value="Contract">Contract</option>
+                          <option value="Volunteer">Volunteer</option>
+                        </select>
+                      </div>
                     </div>
 
                     {editStaffObj.role === 'Teacher' && (
@@ -3505,6 +4493,64 @@ export const AdminPanel: React.FC = React.memo(() => {
                             value={editStaffObj.momoName || ''}
                             onChange={(e) => setEditStaffObj({ ...editStaffObj, momoName: e.target.value })}
                             placeholder="e.g. Mary Appiah"
+                            className="w-full bg-neutral-900 border-2 border-neutral-800 py-2.5 px-3.5 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Appointment & Contract Parameters */}
+                    <div className="bg-neutral-950/80 p-5 border-2 border-neutral-800 rounded space-y-4">
+                      <div className="flex items-center gap-2 pb-2 border-b border-neutral-850">
+                        <span className="text-xs font-black uppercase tracking-widest text-amber-400 font-mono">📅 Appointment & Contract Terms</span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                        <div>
+                          <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                            Appointment Date
+                          </label>
+                          <input
+                            type="date"
+                            value={editStaffObj.appointmentDate || ''}
+                            onChange={(e) => setEditStaffObj({ ...editStaffObj, appointmentDate: e.target.value })}
+                            className="w-full bg-neutral-900 border-2 border-neutral-800 py-2 px-3 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                            Contract End Date
+                          </label>
+                          <input
+                            type="date"
+                            value={editStaffObj.contractEndDate || ''}
+                            onChange={(e) => setEditStaffObj({ ...editStaffObj, contractEndDate: e.target.value })}
+                            className="w-full bg-neutral-900 border-2 border-neutral-800 py-2 px-3 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                            Renewal Provision
+                          </label>
+                          <select
+                            value={editStaffObj.renewalOption || 'Automatic'}
+                            onChange={(e: any) => setEditStaffObj({ ...editStaffObj, renewalOption: e.target.value })}
+                            className="w-full bg-neutral-900 border-2 border-neutral-800 py-2.5 px-3.5 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400"
+                          >
+                            <option value="Automatic">Automatic</option>
+                            <option value="Manual Review">Manual Review</option>
+                            <option value="Fixed Term">Fixed Term</option>
+                            <option value="Non-Renewable">Non-Renewable</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                            Standard Span
+                          </label>
+                          <input
+                            type="text"
+                            value={editStaffObj.renewalPeriod || '1 Year'}
+                            onChange={(e) => setEditStaffObj({ ...editStaffObj, renewalPeriod: e.target.value })}
+                            placeholder="e.g. 1 Year"
                             className="w-full bg-neutral-900 border-2 border-neutral-800 py-2.5 px-3.5 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600"
                           />
                         </div>
@@ -3639,6 +4685,38 @@ export const AdminPanel: React.FC = React.memo(() => {
                       )}
                     </div>
 
+                    <div className="grid grid-cols-2 gap-3 bg-neutral-950/40 p-3 border border-neutral-850 rounded">
+                      <div>
+                        <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                          Gender Analysis
+                        </label>
+                        <select
+                          value={adminRegGender}
+                          onChange={(e) => setAdminRegGender(e.target.value as 'Male' | 'Female')}
+                          className="w-full bg-neutral-900 border-2 border-neutral-800 py-2.5 px-3 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 cursor-pointer"
+                        >
+                          <option value="Male">Male</option>
+                          <option value="Female">Female</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                          Employment Type
+                        </label>
+                        <select
+                          value={adminRegEmploymentType}
+                          onChange={(e) => setAdminRegEmploymentType(e.target.value as any)}
+                          className="w-full bg-neutral-900 border-2 border-neutral-800 py-2.5 px-3 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 cursor-pointer"
+                        >
+                          <option value="Full-Time">Full-Time</option>
+                          <option value="Part-Time">Part-Time</option>
+                          <option value="Contract">Contract</option>
+                          <option value="Volunteer">Volunteer</option>
+                        </select>
+                      </div>
+                    </div>
+
                     {adminRegRole === 'Teacher' && (
                       <div className="space-y-2">
                         <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest font-mono">
@@ -3707,6 +4785,64 @@ export const AdminPanel: React.FC = React.memo(() => {
                             value={adminRegMomoName}
                             onChange={(e) => setAdminRegMomoName(e.target.value)}
                             placeholder="e.g. Mary Appiah"
+                            className="w-full bg-neutral-900 border-2 border-neutral-800 py-2.5 px-3.5 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Appointment & Contract Parameters */}
+                    <div className="bg-neutral-950/80 p-5 border-2 border-neutral-800 rounded space-y-4">
+                      <div className="flex items-center gap-2 pb-2 border-b border-neutral-850">
+                        <span className="text-xs font-black uppercase tracking-widest text-amber-400 font-mono">📅 Appointment & Contract Terms</span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                        <div>
+                          <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                            Appointment Date
+                          </label>
+                          <input
+                            type="date"
+                            value={adminRegAppointmentDate}
+                            onChange={(e) => setAdminRegAppointmentDate(e.target.value)}
+                            className="w-full bg-neutral-900 border-2 border-neutral-800 py-2 px-3 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                            Contract End Date
+                          </label>
+                          <input
+                            type="date"
+                            value={adminRegContractEndDate}
+                            onChange={(e) => setAdminRegContractEndDate(e.target.value)}
+                            className="w-full bg-neutral-900 border-2 border-neutral-800 py-2 px-3 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                            Renewal Provision
+                          </label>
+                          <select
+                            value={adminRegRenewalOption}
+                            onChange={(e: any) => setAdminRegRenewalOption(e.target.value)}
+                            className="w-full bg-neutral-900 border-2 border-neutral-800 py-2.5 px-3.5 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400"
+                          >
+                            <option value="Automatic">Automatic</option>
+                            <option value="Manual Review">Manual Review</option>
+                            <option value="Fixed Term">Fixed Term</option>
+                            <option value="Non-Renewable">Non-Renewable</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                            Standard Span
+                          </label>
+                          <input
+                            type="text"
+                            value={adminRegRenewalPeriod}
+                            onChange={(e) => setAdminRegRenewalPeriod(e.target.value)}
+                            placeholder="e.g. 1 Year"
                             className="w-full bg-neutral-900 border-2 border-neutral-800 py-2.5 px-3.5 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600"
                           />
                         </div>
@@ -3821,8 +4957,18 @@ export const AdminPanel: React.FC = React.memo(() => {
                         </div>
                       )}
 
-                      {((u.stipendSalary !== undefined && u.stipendSalary > 0) || u.momoNumber) && (
+                      {((u.stipendSalary !== undefined && u.stipendSalary > 0) || u.momoNumber || u.gender || u.employmentType) && (
                         <div className="mt-1.5 flex flex-wrap gap-2.5 items-center text-[10px] uppercase font-mono tracking-wider">
+                          {u.gender && (
+                            <span className="bg-neutral-900 border border-neutral-800 text-neutral-300 px-2.5 py-0.5 rounded font-extrabold font-mono">
+                              {u.gender === 'Male' ? '♂ Male' : '♀ Female'}
+                            </span>
+                          )}
+                          {u.employmentType && (
+                            <span className="bg-neutral-900 border border-neutral-800 text-amber-400 px-2.5 py-0.5 rounded font-extrabold font-mono">
+                              💼 {u.employmentType}
+                            </span>
+                          )}
                           {u.stipendSalary !== undefined && u.stipendSalary > 0 && (
                             <span className="bg-emerald-950/40 text-emerald-400 border border-emerald-900/30 px-2.5 py-0.5 rounded font-bold">
                               💵 Stipend: GHC {u.stipendSalary.toFixed(2)}
@@ -3838,6 +4984,16 @@ export const AdminPanel: React.FC = React.memo(() => {
                     </div>
 
                     <div className="flex flex-wrap items-center gap-4">
+                      {/* Appointment Letter & Contract Renewal Button */}
+                      <button
+                        onClick={() => openAppointmentModal(u)}
+                        title={`Generate Appointment Letter or Renew Contract for ${u.name}`}
+                        className="p-2 border-2 border-neutral-800 hover:border-amber-500 bg-neutral-950 text-neutral-400 hover:text-amber-400 transition-colors cursor-pointer flex items-center gap-1.5 text-xs font-mono font-bold"
+                      >
+                        <FileText size={13} />
+                        <span>Letter & Renewal</span>
+                      </button>
+
                       {/* Edit */}
                       <button
                         onClick={() => setEditStaffObj({ ...u })}
@@ -3944,6 +5100,7 @@ export const AdminPanel: React.FC = React.memo(() => {
               })}
             </div>
           </div>
+        </div>
         </div>
       ) : activeTab === 'gates' ? (
         <div className="space-y-6">
@@ -4731,10 +5888,14 @@ export const AdminPanel: React.FC = React.memo(() => {
         <AdjustmentsTab />
       ) : activeTab === 'whatsapp' ? (
         <WhatsAppLogsTab />
+      ) : activeTab === 'audit' ? (
+        <AuditTrailTab />
       ) : activeTab === 'settings' ? (
         <SettingsPanel />
       ) : activeTab === 'idcards' ? (
         <IdCardsGeneratorTab />
+      ) : activeTab === 'ai_assistant' ? (
+        <AiAssistantTab />
       ) : (
         <ExpendituresTab />
       )}
@@ -5061,6 +6222,13 @@ export const AdminPanel: React.FC = React.memo(() => {
       {selectedIdCardStudent && (() => {
         const student = selectedIdCardStudent;
         const isDarkTheme = idCardTheme === 'dark';
+        const studentExpiryDate = getStudentB9ExpiryDate(student.class, currentDate, activeTerm);
+        const isExpired = studentExpiryDate < currentDate;
+        const current = currentDate ? new Date(currentDate) : new Date();
+        const expiry = new Date(studentExpiryDate);
+        const diffTime = expiry.getTime() - current.getTime();
+        const daysRemaining = Math.max(0, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
+        const isNearingExpiry = daysRemaining > 0 && daysRemaining <= 14;
 
         const handleDirectPrint = () => {
           let printIframe = document.getElementById('idcard-print-iframe') as HTMLIFrameElement;
@@ -5461,8 +6629,8 @@ export const AdminPanel: React.FC = React.memo(() => {
             <div class="logo-text">SHCA-SAWLA</div>
           </div>
           <div>
-            <span class="${expiryInfo.isExpired ? 'expired-pass-badge' : 'active-pass-badge'}">
-              ${expiryInfo.isExpired ? 'Expired' : 'Active Pass'}
+            <span class="${isExpired ? 'expired-pass-badge' : 'active-pass-badge'}">
+              ${isExpired ? 'Expired' : 'Active Pass'}
             </span>
           </div>
         </div>
@@ -5506,7 +6674,7 @@ export const AdminPanel: React.FC = React.memo(() => {
 
         <div class="footer">
           <div class="footer-left">
-            SYSTEM ACCREDITED <span class="footer-expiry">EXP: ${expiryInfo.expiryDate}</span>
+            SYSTEM ACCREDITED <span class="footer-expiry">EXP: ${studentExpiryDate}</span>
           </div>
           <div class="term-label">${expiryInfo.termName.toUpperCase()}</div>
         </div>
@@ -5538,7 +6706,7 @@ export const AdminPanel: React.FC = React.memo(() => {
           </div>
 
           <div class="status-banner-back">
-            Validation Active &bull; Valid thru Term Closure ({expiryInfo.expiryDate})
+            Validation Active &bull; Valid thru Term Closure (${studentExpiryDate})
           </div>
         </div>
 
@@ -5764,7 +6932,7 @@ export const AdminPanel: React.FC = React.memo(() => {
                       <span className={`text-[5.5px] border px-1 py-0.2 rounded-sm font-black tracking-tighter ${
                         idCardTheme === 'dark' ? 'bg-neutral-900 border-neutral-800 text-neutral-401' : 'bg-neutral-200 border-neutral-300 text-neutral-705'
                       }`}>
-                        EXP: {expiryInfo.expiryDate}
+                        EXP: {studentExpiryDate}
                       </span>
                     </span>
                     <span className="text-amber-600 font-extrabold">{expiryInfo.termName.toUpperCase()}</span>
@@ -5813,23 +6981,23 @@ export const AdminPanel: React.FC = React.memo(() => {
                       </div>
                     </div>
 
-                    {expiryInfo.isExpired ? (
+                    {isExpired ? (
                       <div className="bg-red-950/80 border border-red-900/55 rounded px-2 py-1 text-center font-mono text-[5.8px] text-red-400 font-black uppercase tracking-wider animate-pulse flex items-center justify-center gap-1.5 shrink-0">
                         <span>⚠️ SHCA BADGE EXPIRED</span>
                         <span>&bull;</span>
                         <span>CONTACT ACCREDITED OFFICERS</span>
                       </div>
-                    ) : expiryInfo.isNearingExpiry ? (
+                    ) : isNearingExpiry ? (
                       <div className="bg-amber-955/80 border border-amber-900/55 rounded px-2 py-1 text-center font-mono text-[5.8px] text-amber-400 font-black uppercase tracking-wider animate-pulse flex items-center justify-center gap-1.5 shrink-0">
                         <span>⚠️ RENEWAL DUE</span>
                         <span>&bull;</span>
-                        <span>{expiryInfo.daysRemaining} school days remaining</span>
+                        <span>{daysRemaining} school days remaining</span>
                       </div>
                     ) : (
                       <div className={`px-2 py-0.5 border rounded text-center text-[5.5px] font-extrabold font-mono tracking-tight uppercase shrink-0 ${
                         idCardTheme === 'dark' ? 'bg-neutral-950 border-neutral-900 text-neutral-450' : 'bg-neutral-100 border-neutral-250 text-neutral-500'
                       }`}>
-                        Validation Active &amp; Valid thru Term Closure ({expiryInfo.expiryDate})
+                        Validation Active &amp; Valid thru Term Closure ({studentExpiryDate})
                       </div>
                     )}
                   </div>
@@ -6272,14 +7440,17 @@ export const AdminPanel: React.FC = React.memo(() => {
       {/* Academic Cohort Promotion Modal Overlay */}
       {showPromotionModal && (
         <div className="fixed inset-0 z-50 bg-neutral-950/90 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
-          <div className="relative w-full max-w-2xl bg-neutral-900 border-4 border-amber-500 p-6 md:p-8 space-y-6 shadow-[8px_8px_0px_0px_rgba(245,158,11,0.15)] text-white">
+          <div className={`relative w-full transition-all duration-300 ${promotionTab === 'reconcile' ? 'max-w-4xl' : 'max-w-2xl'} bg-neutral-900 border-4 border-amber-500 p-6 md:p-8 space-y-6 shadow-[8px_8px_0px_0px_rgba(245,158,11,0.15)] text-white`}>
             <div className="flex justify-between items-start border-b border-neutral-800 pb-4">
               <div className="flex items-center gap-3">
                 <Award size={22} className="text-amber-400" />
                 <div>
                   <h3 className="text-sm font-black uppercase tracking-widest font-mono">Academic Year Promotion Desk</h3>
                   <p className="text-[10px] text-neutral-400 uppercase font-mono font-bold mt-0.5">
-                    {promotionTab === 'bulk' ? 'Bulk Grade Cohort Management' : 'Single Student Promotion & Repetition'}
+                    {promotionTab === 'bulk' ? 'Bulk Grade Cohort Management' : 
+                     promotionTab === 'reconcile' ? 'Interactive Reconciliation Planner' : 
+                     promotionTab === 'single' ? 'Single Student Promotion & Repetition' : 
+                     'Roster Promotion Backups & Rollbacks'}
                   </p>
                 </div>
               </div>
@@ -6296,11 +7467,11 @@ export const AdminPanel: React.FC = React.memo(() => {
             </div>
 
             {/* Navigation Tabs */}
-            <div className="flex border-b border-neutral-800 gap-1">
+            <div className="flex flex-wrap border-b border-neutral-800 gap-1">
               <button
                 type="button"
                 onClick={() => setPromotionTab('bulk')}
-                className={`flex-1 py-2 px-4 text-xs font-mono font-black uppercase tracking-wider border-b-2 transition-all ${
+                className={`flex-1 py-2 px-3 text-[10px] md:text-xs font-mono font-black uppercase tracking-wider border-b-2 transition-all ${
                   promotionTab === 'bulk'
                     ? 'border-amber-500 text-amber-400 bg-amber-500/5'
                     : 'border-transparent text-neutral-400 hover:text-white'
@@ -6310,14 +7481,44 @@ export const AdminPanel: React.FC = React.memo(() => {
               </button>
               <button
                 type="button"
+                onClick={() => {
+                  setPromotionTab('reconcile');
+                  // Initialize reconcileActions with standard transitions for all active students by default
+                  const defaultActions: Record<string, 'promote' | 'repeat' | 'withdraw'> = {};
+                  students.filter(s => s.active).forEach(s => {
+                    defaultActions[s.id] = 'promote';
+                  });
+                  setReconcileActions(defaultActions);
+                }}
+                className={`flex-1 py-2 px-3 text-[10px] md:text-xs font-mono font-black uppercase tracking-wider border-b-2 transition-all ${
+                  promotionTab === 'reconcile'
+                    ? 'border-amber-500 text-amber-400 bg-amber-500/5'
+                    : 'border-transparent text-neutral-400 hover:text-white'
+                }`}
+              >
+                ⚖️ Roster Planner
+              </button>
+              <button
+                type="button"
                 onClick={() => setPromotionTab('single')}
-                className={`flex-1 py-2 px-4 text-xs font-mono font-black uppercase tracking-wider border-b-2 transition-all ${
+                className={`flex-1 py-2 px-3 text-[10px] md:text-xs font-mono font-black uppercase tracking-wider border-b-2 transition-all ${
                   promotionTab === 'single'
                     ? 'border-amber-500 text-amber-400 bg-amber-500/5'
                     : 'border-transparent text-neutral-400 hover:text-white'
                 }`}
               >
                 👤 Single Student
+              </button>
+              <button
+                type="button"
+                onClick={() => setPromotionTab('backups')}
+                className={`flex-1 py-2 px-3 text-[10px] md:text-xs font-mono font-black uppercase tracking-wider border-b-2 transition-all ${
+                  promotionTab === 'backups'
+                    ? 'border-amber-500 text-amber-400 bg-amber-500/5'
+                    : 'border-transparent text-neutral-400 hover:text-white'
+                }`}
+              >
+                ⏱️ History & Rollbacks
               </button>
             </div>
 
@@ -6390,6 +7591,322 @@ export const AdminPanel: React.FC = React.memo(() => {
                     className="w-1/3 py-3 px-4 bg-neutral-950 hover:bg-neutral-850 text-neutral-400 hover:text-white font-mono uppercase text-xs tracking-wider transition-colors border border-neutral-850"
                   >
                     Abort
+                  </button>
+                </div>
+              </>
+            ) : promotionTab === 'reconcile' ? (
+              <>
+                <div className="space-y-4 font-sans text-xs">
+                  <p className="text-neutral-300 leading-relaxed font-semibold">
+                    The Reconciliation Planner lets you customize decisions on a child-by-child level before running annual promotions. Prevent roster drift by marking repeating or withdrawn students!
+                  </p>
+
+                  {/* Stats Grid */}
+                  {(() => {
+                    let promote = 0;
+                    let repeat = 0;
+                    let withdraw = 0;
+                    let graduate = 0;
+                    const activeStudents = students.filter(s => s.active);
+                    
+                    const CLASS_PROMOTION_MAP: Record<StudentClass, { nextClass: StudentClass | null; category: 'Pre-school' | 'Primary' | 'JHS'; completes: boolean }> = {
+                      'Nursery': { nextClass: 'KG1', category: 'Pre-school', completes: false },
+                      'KG1':     { nextClass: 'KG2', category: 'Pre-school', completes: false },
+                      'KG2':     { nextClass: 'B1',  category: 'Primary',    completes: false },
+                      'B1':      { nextClass: 'B2',  category: 'Primary',    completes: false },
+                      'B2':      { nextClass: 'B3',  category: 'Primary',    completes: false },
+                      'B3':      { nextClass: 'B4',  category: 'Primary',    completes: false },
+                      'B4':      { nextClass: 'B5',  category: 'Primary',    completes: false },
+                      'B5':      { nextClass: 'B6',  category: 'Primary',    completes: false },
+                      'B6':      { nextClass: 'B7',  category: 'JHS',        completes: false },
+                      'B7':      { nextClass: 'B8',  category: 'JHS',        completes: false },
+                      'B8':      { nextClass: 'B9',  category: 'JHS',        completes: false },
+                      'B9':      { nextClass: null,  category: 'JHS',        completes: true }
+                    };
+
+                    activeStudents.forEach(student => {
+                      const action = reconcileActions[student.id] || 'promote';
+                      if (action === 'repeat') {
+                        repeat++;
+                      } else if (action === 'withdraw') {
+                        withdraw++;
+                      } else {
+                        const standardNext = CLASS_PROMOTION_MAP[student.class];
+                        if (standardNext?.completes) {
+                          graduate++;
+                        } else {
+                          promote++;
+                        }
+                      }
+                    });
+
+                    return (
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 bg-neutral-950 p-4 border border-neutral-850 rounded-sm">
+                        <div className="space-y-1">
+                          <span className="text-[9px] font-mono font-black text-neutral-500 uppercase tracking-widest block font-bold">👤 Active Roster</span>
+                          <span className="text-sm font-black text-white font-mono">{activeStudents.length} Students</span>
+                        </div>
+                        <div className="space-y-1 border-l border-neutral-900 pl-3">
+                          <span className="text-[9px] font-mono font-black text-emerald-500 uppercase tracking-widest block font-bold">🚀 Promoting</span>
+                          <span className="text-sm font-black text-emerald-400 font-mono">{promote} Pupils</span>
+                        </div>
+                        <div className="space-y-1 border-l border-neutral-900 pl-3">
+                          <span className="text-[9px] font-mono font-black text-amber-500 uppercase tracking-widest block font-bold">🔄 Repeating</span>
+                          <span className="text-sm font-black text-amber-400 font-mono">{repeat} Pupils</span>
+                        </div>
+                        <div className="space-y-1 border-l border-neutral-900 pl-3">
+                          <span className="text-[9px] font-mono font-black text-red-500 uppercase tracking-widest block font-bold">🎓 Leave/Grad</span>
+                          <span className="text-sm font-black text-red-400 font-mono">{withdraw + graduate} Pupils</span>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Filter controls */}
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <div className="flex-1 space-y-1">
+                      <label className="text-[9px] uppercase font-mono font-black text-neutral-450 tracking-wider block font-bold">Filter Current Grade</label>
+                      <select
+                        value={reconcileClassFilter}
+                        onChange={(e) => setReconcileClassFilter(e.target.value)}
+                        className="w-full bg-neutral-950 border border-neutral-850 focus:border-amber-400 text-white font-mono text-xs p-2 focus:outline-none"
+                      >
+                        <option value="All">All Grades (Full School)</option>
+                        {['Nursery', 'KG1', 'KG2', 'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9'].map(cls => (
+                          <option key={cls} value={cls}>{cls}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="flex-1 space-y-1">
+                      <label className="text-[9px] uppercase font-mono font-black text-neutral-450 tracking-wider block font-bold">Search Student Name / RFID</label>
+                      <input
+                        type="text"
+                        value={reconcileSearch}
+                        onChange={(e) => setReconcileSearch(e.target.value)}
+                        placeholder="Search student..."
+                        className="w-full bg-neutral-950 border border-neutral-850 focus:border-amber-400 text-white font-mono text-xs p-2 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Student list table/scroll panel */}
+                  {(() => {
+                    const activeStudents = students.filter(s => s.active);
+                    const filteredActiveStudents = activeStudents.filter(student => {
+                      const matchesClass = reconcileClassFilter === 'All' || student.class === reconcileClassFilter;
+                      const matchesSearch = student.name.toLowerCase().includes(reconcileSearch.toLowerCase()) || 
+                                            (student.rollNumber && student.rollNumber.toLowerCase().includes(reconcileSearch.toLowerCase()));
+                      return matchesClass && matchesSearch;
+                    });
+
+                    const CLASS_PROMOTION_MAP: Record<StudentClass, { nextClass: StudentClass | null; category: 'Pre-school' | 'Primary' | 'JHS'; completes: boolean }> = {
+                      'Nursery': { nextClass: 'KG1', category: 'Pre-school', completes: false },
+                      'KG1':     { nextClass: 'KG2', category: 'Pre-school', completes: false },
+                      'KG2':     { nextClass: 'B1',  category: 'Primary',    completes: false },
+                      'B1':      { nextClass: 'B2',  category: 'Primary',    completes: false },
+                      'B2':      { nextClass: 'B3',  category: 'Primary',    completes: false },
+                      'B3':      { nextClass: 'B4',  category: 'Primary',    completes: false },
+                      'B4':      { nextClass: 'B5',  category: 'Primary',    completes: false },
+                      'B5':      { nextClass: 'B6',  category: 'Primary',    completes: false },
+                      'B6':      { nextClass: 'B7',  category: 'JHS',        completes: false },
+                      'B7':      { nextClass: 'B8',  category: 'JHS',        completes: false },
+                      'B8':      { nextClass: 'B9',  category: 'JHS',        completes: false },
+                      'B9':      { nextClass: null,  category: 'JHS',        completes: true }
+                    };
+
+                    if (filteredActiveStudents.length === 0) {
+                      return (
+                        <div className="bg-neutral-950/40 border border-neutral-850 border-dashed rounded-sm p-8 text-center text-neutral-500 font-mono text-[10px]">
+                          No students matching your search/filters were found.
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="max-h-72 overflow-y-auto border border-neutral-800 bg-neutral-950 divide-y divide-neutral-900 rounded-sm pr-1">
+                        {filteredActiveStudents.map(student => {
+                          const standardNext = CLASS_PROMOTION_MAP[student.class];
+                          const currentAction = reconcileActions[student.id] || 'promote';
+                          
+                          let nextDest = '';
+                          if (currentAction === 'repeat') {
+                            nextDest = `${student.class} (Repeat)`;
+                          } else if (currentAction === 'withdraw') {
+                            nextDest = 'Left / Withdrawn';
+                          } else {
+                            nextDest = standardNext?.completes ? 'Graduated' : standardNext?.nextClass || 'N/A';
+                          }
+
+                          return (
+                            <div key={student.id} className="flex flex-col sm:flex-row justify-between items-start sm:items-center p-3 gap-2">
+                              <div>
+                                <div className="font-semibold text-white uppercase text-[11px]">{student.name}</div>
+                                <div className="text-[9px] font-mono text-neutral-450">
+                                  Current Class: <span className="text-white">{student.class}</span> &bull; ID: {student.id.substring(0,6)}
+                                </div>
+                              </div>
+                              
+                              <div className="flex flex-wrap items-center gap-2">
+                                <div className="text-[10px] font-mono text-neutral-300 mr-2 bg-neutral-900 px-2 py-0.5 border border-neutral-800">
+                                  Next Grade: <span className={currentAction === 'repeat' ? 'text-amber-400 font-bold' : currentAction === 'withdraw' ? 'text-red-400 font-bold' : 'text-emerald-400 font-bold'}>{nextDest}</span>
+                                </div>
+                                
+                                <div className="flex bg-neutral-900 border border-neutral-800 rounded-sm overflow-hidden p-0.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => setReconcileActions(prev => ({ ...prev, [student.id]: 'promote' }))}
+                                    className={`px-2 py-1 font-mono text-[9px] uppercase font-black tracking-wider transition-colors border-none cursor-pointer ${
+                                      currentAction === 'promote' 
+                                        ? 'bg-emerald-500 text-black font-bold' 
+                                        : 'bg-transparent text-neutral-450 hover:text-white'
+                                    }`}
+                                  >
+                                    Promote
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setReconcileActions(prev => ({ ...prev, [student.id]: 'repeat' }))}
+                                    className={`px-2 py-1 font-mono text-[9px] uppercase font-black tracking-wider transition-colors border-none cursor-pointer ${
+                                      currentAction === 'repeat' 
+                                        ? 'bg-amber-500 text-black font-bold' 
+                                        : 'bg-transparent text-neutral-450 hover:text-white'
+                                    }`}
+                                  >
+                                    Repeat
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setReconcileActions(prev => ({ ...prev, [student.id]: 'withdraw' }))}
+                                    className={`px-2 py-1 font-mono text-[9px] uppercase font-black tracking-wider transition-colors border-none cursor-pointer ${
+                                      currentAction === 'withdraw' 
+                                        ? 'bg-red-500 text-white font-bold' 
+                                        : 'bg-transparent text-neutral-450 hover:text-white'
+                                    }`}
+                                  >
+                                    Withdraw
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+
+                  {/* Confirmation text */}
+                  <div className="bg-amber-955/15 border border-amber-500/20 p-4 font-mono text-[10px] text-amber-500 uppercase font-black tracking-widest leading-relaxed font-bold">
+                    ⚠️ WARNING: EXECUTING PROMOTIONS TRANSITIONS ENTIRE ROSTERS BEYOND BACKUPS. EXAM BILLINGS AND DAILY ATTENDANCE RULES WILL CORRESPOND TO THESE CUSTOM GRADE BINDINGS IMMEDIATELY.
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-[10px] uppercase font-mono font-black text-neutral-450 tracking-wider block font-bold">Authorize Reconciliation Execution</label>
+                    <p className="text-[10px] text-neutral-400 font-semibold mb-1">Type <strong className="text-white font-mono">PROMOTE PLAN</strong> below to verify and execute Savior database updates:</p>
+                    <input
+                      type="text"
+                      value={promotionConfirmedText}
+                      onChange={(e) => setPromotionConfirmedText(e.target.value)}
+                      placeholder="Type PROMOTE PLAN here..."
+                      className="w-full bg-neutral-950 border-2 border-neutral-800 focus:border-amber-400 text-white font-mono uppercase text-xs p-3 font-black focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="border-t border-neutral-800 pt-4 flex gap-3">
+                  <button
+                    type="button"
+                    disabled={promotionConfirmedText !== 'PROMOTE PLAN'}
+                    onClick={() => {
+                      promoteAllStudents(reconcileActions);
+                      showToast("Successfully executed custom reconciliation promotion! snapshot backup stored.");
+                      setShowPromotionModal(false);
+                      setPromotionConfirmedText('');
+                      setReconcileActions({});
+                    }}
+                    className={`flex-1 py-3 px-4 font-black uppercase text-xs tracking-widest transition-all cursor-pointer flex items-center justify-center gap-2 border-none ${
+                      promotionConfirmedText === 'PROMOTE PLAN'
+                        ? 'bg-amber-500 hover:bg-amber-400 text-black shadow-[4px_4px_0px_0px_#10b981]'
+                        : 'bg-neutral-950 text-neutral-600 border border-neutral-850 cursor-not-allowed opacity-50'
+                    }`}
+                  >
+                    ⚡ Execute Reconciliation Promotion
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowPromotionModal(false);
+                      setPromotionConfirmedText('');
+                    }}
+                    className="w-1/3 py-3 px-4 bg-neutral-950 hover:bg-neutral-850 text-neutral-400 hover:text-white font-mono uppercase text-xs tracking-wider transition-colors border border-neutral-850"
+                  >
+                    Abort
+                  </button>
+                </div>
+              </>
+            ) : promotionTab === 'backups' ? (
+              <>
+                <div className="space-y-4 font-sans text-xs">
+                  <p className="text-neutral-300 leading-relaxed font-semibold">
+                    Every time school-wide promotions are triggered, a snapshot backup is automatically stored. If you notice "roster drift" or errors, you can restore previous roster states here.
+                  </p>
+
+                  {promotionBackups.length === 0 ? (
+                    <div className="bg-neutral-950/40 border border-neutral-850 border-dashed rounded-sm p-8 text-center text-neutral-500 font-mono text-[10px] leading-relaxed">
+                      No past snapshots found in local secure storage.
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+                      {promotionBackups.map((backup) => (
+                        <div key={backup.id} className="bg-neutral-950 border border-neutral-850 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-sm">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-amber-400 font-mono font-black uppercase text-[9px] tracking-wider bg-amber-500/10 px-1.5 py-0.5 border border-amber-500/20 rounded-sm">
+                                Snapshot Backup
+                              </span>
+                              <span className="text-[10px] font-mono text-neutral-400">
+                                {new Date(backup.timestamp).toLocaleString()}
+                              </span>
+                            </div>
+                            <p className="text-xs text-white font-bold mt-2 uppercase">{backup.description}</p>
+                            <div className="text-[10px] font-mono text-neutral-500 mt-1">
+                              Records: <span className="text-neutral-300 font-bold">{backup.studentCount} pupils</span> &bull; ID: {backup.id}
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (window.confirm(`Are you absolutely sure you want to ROLLBACK the school roster to this snapshot from ${new Date(backup.timestamp).toLocaleString()}?\n\nThis will overwrite all current student grade assignments with the snapshot state.`)) {
+                                const success = revertLastPromotion(backup.id);
+                                if (success) {
+                                  showToast("Successfully rolled back school roster to the selected backup state!");
+                                  setShowPromotionModal(false);
+                                } else {
+                                  showToast("Failed to restore the selected roster backup.");
+                                }
+                              }
+                            }}
+                            className="py-2 px-3 bg-red-600 hover:bg-red-500 text-white font-mono font-black uppercase text-[10px] tracking-wider border-none rounded-sm transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+                          >
+                            <RefreshCw size={12} />
+                            <span>Restore Snapshot</span>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="border-t border-neutral-800 pt-4 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowPromotionModal(false);
+                    }}
+                    className="w-1/3 py-3 px-4 bg-neutral-950 hover:bg-neutral-850 text-neutral-400 hover:text-white font-mono uppercase text-xs tracking-wider transition-colors border border-neutral-850"
+                  >
+                    Close snap desk
                   </button>
                 </div>
               </>
@@ -6592,6 +8109,520 @@ export const AdminPanel: React.FC = React.memo(() => {
                   </button>
                 </div>
               </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Staff Appointment & Renewal System Modal */}
+      {appointmentModalUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-fade-in animate-duration-200 overflow-y-auto">
+          <div className="bg-neutral-950 border-4 border-amber-500 max-w-5xl w-full p-6 space-y-6 shadow-[10px_10px_0px_0px_rgba(245,158,11,0.25)] relative my-8">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b-2 border-neutral-850 pb-4">
+              <div className="flex items-center gap-3">
+                <FileSignature className="text-amber-500" size={24} />
+                <div>
+                  <h3 className="text-sm font-black uppercase tracking-wider text-amber-400 font-mono">Staff Appointment & Renewal System</h3>
+                  <p className="text-xs text-neutral-400 font-sans mt-0.5">
+                    Configure terms, generate official appointment letters, and process formal contract extensions for <strong className="text-white font-mono">{appointmentModalUser.name}</strong> ({appointmentModalUser.role})
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setAppointmentModalUser(null)}
+                className="p-1 text-neutral-400 hover:text-white border border-neutral-800 hover:border-neutral-600 transition-colors cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Tabs */}
+            <div className="flex border-b border-neutral-800">
+              <button
+                onClick={() => setIsRenewalTab(false)}
+                className={`flex-1 py-2.5 px-4 font-mono text-xs font-black uppercase tracking-wider border-b-2 transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                  !isRenewalTab
+                    ? 'border-amber-500 text-amber-400 bg-amber-500/5'
+                    : 'border-transparent text-neutral-400 hover:text-white'
+                }`}
+              >
+                <FileText size={14} />
+                Letter of Appointment
+              </button>
+              <button
+                onClick={() => setIsRenewalTab(true)}
+                className={`flex-1 py-2.5 px-4 font-mono text-xs font-black uppercase tracking-wider border-b-2 transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                  isRenewalTab
+                    ? 'border-amber-500 text-amber-400 bg-amber-500/5'
+                    : 'border-transparent text-neutral-400 hover:text-white'
+                }`}
+              >
+                <CalendarDays size={14} />
+                Contract Renewal & Extensions
+              </button>
+            </div>
+
+            {/* Content Tabs */}
+            {!isRenewalTab ? (
+              /* Tab 1: Letter of Appointment */
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                {/* Form Inputs (Left) */}
+                <div className="lg:col-span-5 space-y-4 max-h-[580px] overflow-y-auto pr-2">
+                  <div className="bg-neutral-900/40 p-4 border border-neutral-850 space-y-4">
+                    <span className="text-[10px] font-mono font-black text-amber-500 uppercase tracking-widest block border-b border-neutral-800 pb-1.5">Employment Details</span>
+                    
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[10px] font-mono font-black text-neutral-400 uppercase block mb-1">Letter Date</label>
+                        <input
+                          type="date"
+                          value={appLetterDate}
+                          onChange={(e) => setAppLetterDate(e.target.value)}
+                          className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-500 text-white font-mono text-xs p-2 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-mono font-black text-neutral-400 uppercase block mb-1">Effective Start Date</label>
+                        <input
+                          type="date"
+                          value={appStartDate}
+                          onChange={(e) => setAppStartDate(e.target.value)}
+                          className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-500 text-white font-mono text-xs p-2 focus:outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[10px] font-mono font-black text-neutral-400 uppercase block mb-1">Contract End Date</label>
+                        <input
+                          type="date"
+                          value={appEndDate}
+                          onChange={(e) => setAppEndDate(e.target.value)}
+                          className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-500 text-white font-mono text-xs p-2 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-mono font-black text-neutral-400 uppercase block mb-1">Department</label>
+                        <input
+                          type="text"
+                          value={appDepartment}
+                          onChange={(e) => setAppDepartment(e.target.value)}
+                          className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-500 text-white font-mono text-xs p-2 focus:outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[10px] font-mono font-black text-neutral-400 uppercase block mb-1">Monthly Stipend (GHC)</label>
+                        <input
+                          type="number"
+                          value={appSalary}
+                          onChange={(e) => setAppSalary(e.target.value)}
+                          placeholder="0.00"
+                          className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-500 text-white font-mono text-xs p-2 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-mono font-black text-neutral-400 uppercase block mb-1">Job Title / Designation</label>
+                        <input
+                          type="text"
+                          value={appJobTitle}
+                          onChange={(e) => setAppJobTitle(e.target.value)}
+                          className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-500 text-white font-mono text-xs p-2 focus:outline-none"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-neutral-900/40 p-4 border border-neutral-850 space-y-4">
+                    <span className="text-[10px] font-mono font-black text-amber-500 uppercase tracking-widest block border-b border-neutral-800 pb-1.5">Renewal Provision Parameters</span>
+                    
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[10px] font-mono font-black text-neutral-400 uppercase block mb-1">Renewal Clause</label>
+                        <select
+                          value={appRenewalOpt}
+                          onChange={(e: any) => setAppRenewalOpt(e.target.value)}
+                          className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-500 text-white font-mono text-xs p-2 focus:outline-none"
+                        >
+                          <option value="Automatic">Automatic</option>
+                          <option value="Manual Review">Manual Review</option>
+                          <option value="Fixed Term">Fixed Term</option>
+                          <option value="Non-Renewable">Non-Renewable</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-mono font-black text-neutral-400 uppercase block mb-1">Standard Period</label>
+                        <input
+                          type="text"
+                          value={appRenewalPeriod}
+                          onChange={(e) => setAppRenewalPeriod(e.target.value)}
+                          placeholder="e.g. 1 Year"
+                          className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-500 text-white font-mono text-xs p-2 focus:outline-none"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-neutral-900/40 p-4 border border-neutral-850 space-y-4">
+                    <span className="text-[10px] font-mono font-black text-amber-500 uppercase tracking-widest block border-b border-neutral-800 pb-1.5">Signatory Authority</span>
+                    
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[10px] font-mono font-black text-neutral-400 uppercase block mb-1">Signatory Officer Name</label>
+                        <input
+                          type="text"
+                          value={appSignatoryName}
+                          onChange={(e) => setAppSignatoryName(e.target.value)}
+                          className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-500 text-white font-mono text-xs p-2 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-mono font-black text-neutral-400 uppercase block mb-1">Designated Officer Title</label>
+                        <input
+                          type="text"
+                          value={appSignatoryTitle}
+                          onChange={(e) => setAppSignatoryTitle(e.target.value)}
+                          className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-500 text-white font-mono text-xs p-2 focus:outline-none"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Digital Signature Capture */}
+                  <div className="bg-neutral-900/40 p-4 border border-neutral-850 space-y-4">
+                    <div className="border-b border-neutral-800 pb-1.5 flex items-center justify-between">
+                      <span className="text-[10px] font-mono font-black text-amber-500 uppercase tracking-widest block">Digital Signature Capture</span>
+                      <span className="text-[9px] font-mono text-neutral-500 font-bold uppercase">Ink-on-Screen</span>
+                    </div>
+                    <div className="grid grid-cols-1 gap-3">
+                      <SignaturePad 
+                        title="Authorized Signatory (Management)" 
+                        value={appManagementSignature} 
+                        onChange={setAppManagementSignature} 
+                      />
+                      <SignaturePad 
+                        title="Employee Acceptance Signature" 
+                        value={appStaffSignature} 
+                        onChange={setAppStaffSignature} 
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={handleSaveAppointment}
+                      className="flex-1 py-3 px-4 bg-amber-500 hover:bg-amber-400 text-black font-mono font-black uppercase text-xs tracking-wider border-none rounded-sm transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      <Check size={14} />
+                      Save System Registers
+                    </button>
+                  </div>
+                </div>
+
+                {/* Print & Preview Panel (Right) */}
+                <div className="lg:col-span-7 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-mono font-black text-neutral-400 uppercase tracking-wider block">Live Formal Letter Preview</span>
+                    <button
+                      type="button"
+                      onClick={() => handlePrintAppointmentLetter(false)}
+                      className="py-1.5 px-3 bg-neutral-900 hover:bg-neutral-850 border border-neutral-800 hover:border-amber-500 text-amber-400 font-mono text-[10px] font-bold uppercase tracking-wider transition-colors flex items-center gap-1.5 rounded-sm cursor-pointer"
+                    >
+                      <Printer size={12} />
+                      Print Appointment Letter
+                    </button>
+                  </div>
+
+                  {/* Letter Blueprint Visual Board */}
+                  <div className="border border-neutral-800 bg-white p-6 text-neutral-900 rounded-sm shadow-inner min-h-[460px] overflow-y-auto max-h-[480px] font-serif text-xs leading-relaxed select-none">
+                    <div className="text-center border-b border-neutral-300 pb-3 mb-4">
+                      <h4 className="text-sm font-bold uppercase font-sans tracking-wide m-0">{systemSettings?.schoolName || 'SAWLA COMPREHENSIVE ACADEMY'}</h4>
+                      <p className="text-[9px] italic text-neutral-600 m-0">{systemSettings?.schoolSlogan || systemSettings?.customMotto || 'Holiness is our key'}</p>
+                      <p className="text-[8px] font-sans text-neutral-500 m-0">{systemSettings?.schoolBoxAddress || 'P. O. Box ls 15, Sawla, Savannah Region, Ghana'}</p>
+                    </div>
+
+                    <div className="text-right font-sans font-bold text-[9px] mb-4">
+                      Date: {new Date(appLetterDate || new Date()).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
+                    </div>
+
+                    <div className="mb-4 text-[10px]">
+                      To:<br/>
+                      <strong className="text-[11px]">{appointmentModalUser.name}</strong><br/>
+                      {appDepartment}<br/>
+                      {systemSettings?.schoolName || 'SAWLA COMPREHENSIVE ACADEMY'}
+                    </div>
+
+                    <div className="text-center font-bold underline my-3 text-[10px] uppercase">
+                      RE: LETTER OF APPOINTMENT AS {appJobTitle || 'STAFF MEMBER'}
+                    </div>
+
+                    <div className="text-justify space-y-2 text-[10px]">
+                      <p>Dear {appointmentModalUser.name.split(' ')[0] || 'Sir/Madam'},</p>
+                      <p>On behalf of the School Management, I am pleased to offer you a formal appointment as <strong>{appJobTitle || 'Staff Member'}</strong> in the <strong>{appDepartment || 'Academic Department'}</strong>, effective from <strong>{new Date(appStartDate || new Date()).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</strong>.</p>
+                      <p>You will receive a basic monthly stipend of <strong>GHC {parseFloat(appSalary || '0').toFixed(2)}</strong>. This appointment runs until <strong>{new Date(appEndDate || new Date()).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</strong>, under our standard <strong>{appRenewalOpt}</strong> renewal options clause.</p>
+                      <p>Your duties shall include student instruction, assessment bookkeeping audits, gate safety assignments, and upholding our professional code of ethics.</p>
+                      <p>Please return a signed copy of this letter to acknowledge your acceptance.</p>
+                    </div>
+
+                    <div className="mt-8 flex justify-between items-end text-[9px] pt-4 border-t border-dashed border-neutral-200">
+                      <div>
+                        For School Management:<br/>
+                        {appManagementSignature ? (
+                          <div className="h-10 flex items-center justify-start my-1 bg-amber-50/10 rounded border border-neutral-100 p-0.5">
+                            <img src={appManagementSignature} alt="Authorized Signatory" className="max-h-10 object-contain max-w-[120px]" />
+                          </div>
+                        ) : (
+                          <div className="h-5" />
+                        )}
+                        <strong>{appSignatoryName}</strong><br/>
+                        <span className="text-neutral-500">{appSignatoryTitle}</span>
+                      </div>
+                      <div className="text-right flex flex-col items-end">
+                        <span className="block">Employee Acceptance:</span>
+                        {appStaffSignature ? (
+                          <div className="h-10 flex items-center justify-end my-1 bg-amber-50/10 rounded border border-neutral-100 p-0.5">
+                            <img src={appStaffSignature} alt="Employee Acceptance" className="max-h-10 object-contain max-w-[120px]" />
+                          </div>
+                        ) : (
+                          <div className="h-5" />
+                        )}
+                        <strong>{appointmentModalUser.name}</strong><br/>
+                        <span className="text-neutral-500">Signature & Date</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              /* Tab 2: Contract Renewal & Extensions */
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                {/* Contract Extensions Planner Form (Left) */}
+                <div className="lg:col-span-5 space-y-4">
+                  <div className="bg-neutral-900/40 p-4 border border-neutral-850 space-y-3">
+                    <span className="text-[10px] font-mono font-black text-amber-500 uppercase tracking-widest block border-b border-neutral-800 pb-1.5">Current Contract Registration</span>
+                    
+                    <div className="grid grid-cols-2 gap-4 text-xs">
+                      <div>
+                        <span className="text-[9px] uppercase font-mono font-bold text-neutral-400 block">Scheduled Expiry</span>
+                        <strong className="text-amber-400 font-mono text-xs">
+                          {appointmentModalUser.contractEndDate 
+                            ? new Date(appointmentModalUser.contractEndDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
+                            : 'Not Registered'
+                          }
+                        </strong>
+                      </div>
+                      <div>
+                        <span className="text-[9px] uppercase font-mono font-bold text-neutral-400 block">Current Stipend</span>
+                        <strong className="text-emerald-400 font-mono text-xs">GHC {parseFloat(appSalary).toFixed(2)}</strong>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4 text-xs pt-1 border-t border-neutral-900">
+                      <div>
+                        <span className="text-[9px] uppercase font-mono font-bold text-neutral-400 block">Renewal Clause</span>
+                        <span className="text-neutral-200 font-semibold">{appRenewalOpt}</span>
+                      </div>
+                      <div>
+                        <span className="text-[9px] uppercase font-mono font-bold text-neutral-400 block">Renewal Span</span>
+                        <span className="text-neutral-200 font-semibold">{appRenewalPeriod}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-neutral-900/40 p-4 border border-neutral-850 space-y-4">
+                    <span className="text-[10px] font-mono font-black text-amber-500 uppercase tracking-widest block border-b border-neutral-800 pb-1.5">Quick Renewal Presets</span>
+                    
+                    <div className="grid grid-cols-3 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleProcessRenewal(6, 0, appRenewalOpt)}
+                        className="py-3 px-2 bg-neutral-950 hover:bg-neutral-900 text-neutral-300 hover:text-amber-400 border border-neutral-800 hover:border-amber-500 rounded font-mono text-[10px] font-bold text-center cursor-pointer transition-colors"
+                      >
+                        ⏱️ +6 Months<br/>
+                        <span className="text-[8px] text-neutral-500">Keep Stipend</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleProcessRenewal(12, 100, appRenewalOpt)}
+                        className="py-3 px-2 bg-neutral-950 hover:bg-neutral-900 text-neutral-300 hover:text-amber-400 border border-neutral-800 hover:border-amber-500 rounded font-mono text-[10px] font-bold text-center cursor-pointer transition-colors"
+                      >
+                        🎓 +1 Year<br/>
+                        <span className="text-[8px] text-emerald-400">+GHC 100.00</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleProcessRenewal(24, 250, appRenewalOpt)}
+                        className="py-3 px-2 bg-neutral-950 hover:bg-neutral-900 text-neutral-300 hover:text-amber-400 border border-neutral-800 hover:border-amber-500 rounded font-mono text-[10px] font-bold text-center cursor-pointer transition-colors"
+                      >
+                        ⚡ +2 Years<br/>
+                        <span className="text-[8px] text-emerald-400">+GHC 250.00</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="bg-neutral-900/40 p-4 border border-neutral-850 space-y-4">
+                    <span className="text-[10px] font-mono font-black text-amber-500 uppercase tracking-widest block border-b border-neutral-800 pb-1.5">Custom Contract Extensions</span>
+                    
+                    {(() => {
+                      const CustomRenewalForm = () => {
+                        const [months, setMonths] = useState('12');
+                        const [adjustment, setAdjustment] = useState('50');
+                        const [clause, setClause] = useState<any>(appRenewalOpt);
+
+                        return (
+                          <div className="space-y-3">
+                            <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                <label className="text-[10px] font-mono font-black text-neutral-400 uppercase block mb-1">Extension Span (Months)</label>
+                                <input
+                                  type="number"
+                                  value={months}
+                                  onChange={(e) => setMonths(e.target.value)}
+                                  className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-500 text-white font-mono text-xs p-2 focus:outline-none"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-mono font-black text-neutral-400 uppercase block mb-1">Stipend Increase (GHC)</label>
+                                <input
+                                  type="number"
+                                  value={adjustment}
+                                  onChange={(e) => setAdjustment(e.target.value)}
+                                  className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-500 text-white font-mono text-xs p-2 focus:outline-none"
+                                />
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                <label className="text-[10px] font-mono font-black text-neutral-400 uppercase block mb-1">Future Clause</label>
+                                <select
+                                  value={clause}
+                                  onChange={(e: any) => setClause(e.target.value)}
+                                  className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-500 text-white font-mono text-xs p-2 focus:outline-none"
+                                >
+                                  <option value="Automatic">Automatic</option>
+                                  <option value="Manual Review">Manual Review</option>
+                                  <option value="Fixed Term">Fixed Term</option>
+                                  <option value="Non-Renewable">Non-Renewable</option>
+                                </select>
+                              </div>
+                              <div className="flex items-end">
+                                <button
+                                  type="button"
+                                  onClick={() => handleProcessRenewal(parseInt(months) || 0, parseFloat(adjustment) || 0, clause)}
+                                  className="w-full py-2 px-3 bg-emerald-500 hover:bg-emerald-400 text-black font-mono font-black uppercase text-xs tracking-wider border-none rounded-sm transition-colors cursor-pointer"
+                                >
+                                  🔄 Authorize Renewal
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      };
+                      return <CustomRenewalForm />;
+                    })()}
+                  </div>
+
+                  {/* Digital Signature Capture */}
+                  <div className="bg-neutral-900/40 p-4 border border-neutral-850 space-y-4">
+                    <div className="border-b border-neutral-800 pb-1.5 flex items-center justify-between">
+                      <span className="text-[10px] font-mono font-black text-amber-500 uppercase tracking-widest block">Digital Signature Capture</span>
+                      <span className="text-[9px] font-mono text-neutral-500 font-bold uppercase">Ink-on-Screen</span>
+                    </div>
+                    <div className="grid grid-cols-1 gap-3">
+                      <SignaturePad 
+                        title="Authorized Signatory (Management)" 
+                        value={appManagementSignature} 
+                        onChange={setAppManagementSignature} 
+                      />
+                      <SignaturePad 
+                        title="Employee Acceptance Signature" 
+                        value={appStaffSignature} 
+                        onChange={setAppStaffSignature} 
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Print & Preview Renewal Notice (Right) */}
+                <div className="lg:col-span-7 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-mono font-black text-neutral-400 uppercase tracking-wider block">Extension Letter Blueprint</span>
+                    <button
+                      type="button"
+                      onClick={() => handlePrintAppointmentLetter(true)}
+                      className="py-1.5 px-3 bg-neutral-900 hover:bg-neutral-850 border border-neutral-800 hover:border-amber-500 text-amber-400 font-mono text-[10px] font-bold uppercase tracking-wider transition-colors flex items-center gap-1.5 rounded-sm cursor-pointer"
+                    >
+                      <Printer size={12} />
+                      Print Contract Extension Notice
+                    </button>
+                  </div>
+
+                  {/* Letter Blueprint Visual Board */}
+                  <div className="border border-neutral-800 bg-white p-6 text-neutral-900 rounded-sm shadow-inner min-h-[460px] overflow-y-auto max-h-[480px] font-serif text-xs leading-relaxed select-none">
+                    <div className="text-center border-b border-neutral-300 pb-3 mb-4">
+                      <h4 className="text-sm font-bold uppercase font-sans tracking-wide m-0">{systemSettings?.schoolName || 'SAWLA COMPREHENSIVE ACADEMY'}</h4>
+                      <p className="text-[9px] italic text-neutral-600 m-0">{systemSettings?.schoolSlogan || systemSettings?.customMotto || 'Holiness is our key'}</p>
+                      <p className="text-[8px] font-sans text-neutral-500 m-0">{systemSettings?.schoolBoxAddress || 'P. O. Box ls 15, Sawla, Savannah Region, Ghana'}</p>
+                    </div>
+
+                    <div className="text-right font-sans font-bold text-[9px] mb-4">
+                      Date: {new Date(appLetterDate || new Date()).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
+                    </div>
+
+                    <div className="mb-4 text-[10px]">
+                      To:<br/>
+                      <strong className="text-[11px]">{appointmentModalUser.name}</strong><br/>
+                      {appDepartment || 'Academic Registry'}<br/>
+                      {systemSettings?.schoolName || 'SAWLA COMPREHENSIVE ACADEMY'}
+                    </div>
+
+                    <div className="text-center font-bold underline my-3 text-[10px] uppercase">
+                      RE: RENEWAL & EXTENSION OF APPOINTMENT CONTRACT
+                    </div>
+
+                    <div className="text-justify space-y-2 text-[10px]">
+                      <p>Dear {appointmentModalUser.name.split(' ')[0] || 'Sir/Madam'},</p>
+                      <p>Following a review of your academic and administrative service registers, we are pleased to inform you that your employment contract with <strong>{systemSettings?.schoolName || 'SAWLA COMPREHENSIVE ACADEMY'}</strong> has been formally renewed.</p>
+                      <p>Your contract has been extended for a renewal period of <strong>{appRenewalPeriod}</strong>, and is now scheduled to conclude on <strong>{new Date(appEndDate || new Date()).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</strong>.</p>
+                      <p>In appreciation of your service, your adjusted basic monthly stipend is set to <strong>GHC {parseFloat(appSalary || '0').toFixed(2)}</strong>. All other terms and conditions specified in your original letter of appointment remain in full force.</p>
+                      <p>Please indicate your acceptance by signing and returning this duplicate letter.</p>
+                    </div>
+
+                    <div className="mt-8 flex justify-between items-end text-[9px] pt-4 border-t border-dashed border-neutral-200">
+                      <div>
+                        For School Management:<br/>
+                        {appManagementSignature ? (
+                          <div className="h-10 flex items-center justify-start my-1 bg-amber-50/10 rounded border border-neutral-100 p-0.5">
+                            <img src={appManagementSignature} alt="Authorized Signatory" className="max-h-10 object-contain max-w-[120px]" />
+                          </div>
+                        ) : (
+                          <div className="h-5" />
+                        )}
+                        <strong>{appSignatoryName}</strong><br/>
+                        <span className="text-neutral-500">{appSignatoryTitle}</span>
+                      </div>
+                      <div className="text-right flex flex-col items-end">
+                        <span className="block">Employee Acceptance:</span>
+                        {appStaffSignature ? (
+                          <div className="h-10 flex items-center justify-end my-1 bg-amber-50/10 rounded border border-neutral-100 p-0.5">
+                            <img src={appStaffSignature} alt="Employee Acceptance" className="max-h-10 object-contain max-w-[120px]" />
+                          </div>
+                        ) : (
+                          <div className="h-5" />
+                        )}
+                        <strong>{appointmentModalUser.name}</strong><br/>
+                        <span className="text-neutral-500">Signature & Date</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             )}
           </div>
         </div>

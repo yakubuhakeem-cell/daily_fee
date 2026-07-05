@@ -4,7 +4,7 @@
  */
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { Student, PaymentRecord, UserAccount, UserRole, StudentClass, SchoolCategory, Term, PendingEdit, BackupRecord, Expense, ExpenseCategory, PaymentMethod, WorkerSalary, SystemSettings, BudgetTarget } from '../types';
+import { Student, PaymentRecord, UserAccount, UserRole, StudentClass, SchoolCategory, Term, PendingEdit, BackupRecord, Expense, ExpenseCategory, PaymentMethod, WorkerSalary, SystemSettings, BudgetTarget, ExamsPayment, ExamsExpense, ExamsSettings, AuditLog } from '../types';
 import { INITIAL_USERS, INITIAL_STUDENTS, generateSeedPayments, getClassCategory } from '../initialData';
 import { db as rawDb } from '../lib/firebase';
 import { generateSchoolDays } from '../utils/termUtils';
@@ -102,8 +102,11 @@ interface AppContextType {
   updateStudent: (student: Student) => void;
   deleteStudent: (studentId: string) => void;
   purgeDeactivatedStudents: () => void;
-  promoteAllStudents: () => void;
+  promoteAllStudents: (customActions?: Record<string, 'promote' | 'repeat' | 'graduate' | 'withdraw'>) => void;
+  promotionBackups: any[];
+  revertLastPromotion: (backupId?: string) => boolean;
   recordPayment: (studentId: string, verified?: boolean, customAmount?: number, customNotes?: string, allowDuplicate?: boolean) => void;
+  recordMomoPayment: (studentId: string, amount: number, transactionId: string, provider: string, phoneNumber: string, status: 'pending' | 'successful' | 'failed' | 'refunded', notes?: string, customDate?: string) => void;
   recordPresentZeroPay: (studentId: string) => void;
   recordAbsent: (studentId: string) => void;
   recordAdvancePayment: (studentId: string, amount: number, verified?: boolean) => void;
@@ -115,8 +118,8 @@ interface AppContextType {
   clearDailyPaymentsForClass: (classId: StudentClass, date: string) => void;
   deleteStudentPayments: (studentId: string) => void;
   adjustPayment: (paymentId: string, updatedAmount: number, updatedIsAbsent: boolean, notes: string, reason: string) => void;
-  registerStaff: (name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled?: boolean, passwordEnabled?: boolean, password?: string, assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string) => { success: boolean; error?: string };
-  updateStaff: (userId: string, name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled?: boolean, passwordEnabled?: boolean, password?: string, assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string) => { success: boolean; error?: string };
+  registerStaff: (name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled?: boolean, passwordEnabled?: boolean, password?: string, assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string, photoUrl?: string, employeeId?: string, department?: string, gender?: 'Male' | 'Female', employmentType?: 'Full-Time' | 'Part-Time' | 'Contract' | 'Volunteer', appointmentDate?: string, contractEndDate?: string, renewalOption?: 'Automatic' | 'Manual Review' | 'Fixed Term' | 'Non-Renewable', renewalPeriod?: string) => { success: boolean; error?: string };
+  updateStaff: (userId: string, name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled?: boolean, passwordEnabled?: boolean, password?: string, assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string, photoUrl?: string, employeeId?: string, department?: string, gender?: 'Male' | 'Female', employmentType?: 'Full-Time' | 'Part-Time' | 'Contract' | 'Volunteer', idCardDeactivated?: boolean, appointmentDate?: string, contractEndDate?: string, renewalOption?: 'Automatic' | 'Manual Review' | 'Fixed Term' | 'Non-Renewable', renewalPeriod?: string, signatureUrl?: string, managementSignatureUrl?: string) => { success: boolean; error?: string };
   deleteStaff: (userId: string) => { success: boolean; error?: string };
   toggleStaffActive: (userId: string) => { success: boolean; error?: string };
   getDailyStats: (date: string) => DailyStats;
@@ -180,6 +183,9 @@ interface AppContextType {
   whatsappLogs: any[];
   sendautomatedWhatsApp: (phone: string, message: string, studentId?: string, studentName?: string, type?: string) => Promise<{ success: boolean; log?: any; error?: string }>;
   fetchWhatsappLogs: () => Promise<void>;
+  auditLogs: AuditLog[];
+  fetchAuditLogs: () => Promise<void>;
+  logActivity: (action: string, category: 'students' | 'payments' | 'expenses' | 'settings' | 'security' | 'other', details: string, studentId?: string, studentName?: string, amount?: number) => Promise<void>;
   systemSettings: SystemSettings;
   updateSystemSettings: (newSettings: Partial<SystemSettings>) => Promise<boolean>;
   autoSendCheckInAlert: boolean;
@@ -190,6 +196,14 @@ interface AppContextType {
   addBudgetTarget: (itemName: string, targetAmount: number, savedPercentage: number, description?: string, category?: string) => Promise<void>;
   updateBudgetTarget: (target: BudgetTarget) => Promise<void>;
   deleteBudgetTarget: (targetId: string) => Promise<void>;
+  examsPayments: ExamsPayment[];
+  examsExpenses: ExamsExpense[];
+  examsSettings: ExamsSettings | null;
+  addExamsPayment: (studentId: string, amountPaid: number, paymentMethod: PaymentMethod, notes?: string, datePaid?: string) => Promise<void>;
+  deleteExamsPayment: (paymentId: string) => Promise<void>;
+  addExamsExpense: (providerName: string, targetClass: StudentClass | 'All-Preschool' | 'All-Primary' | 'All-JHS' | 'Entire-School', billingPerChild: number, studentCount: number, totalAmount: number, amountPaid: number, status: 'Paid' | 'Unpaid' | 'Partially Paid', notes?: string, date?: string) => Promise<void>;
+  deleteExamsExpense: (expenseId: string) => Promise<void>;
+  updateExamsSettings: (settings: ExamsSettings) => Promise<void>;
 }
 
 export interface DailyStats {
@@ -228,19 +242,179 @@ export interface PendingAlert {
   guardianPhone: string;
 }
 
+export function getSchoolWeekForDate(dateStr: string, startDateStr: string): number {
+  if (!dateStr || !startDateStr) return 1;
+  try {
+    const d = new Date(dateStr);
+    const start = new Date(startDateStr);
+    
+    // Find the Monday of the start date's week
+    const startDay = start.getDay();
+    const startMonday = new Date(start);
+    startMonday.setDate(start.getDate() - (startDay === 0 ? 6 : startDay - 1));
+    startMonday.setHours(0,0,0,0);
+    
+    // Find the Monday of the date's week
+    const dDay = d.getDay();
+    const dMonday = new Date(d);
+    dMonday.setDate(d.getDate() - (dDay === 0 ? 6 : dDay - 1));
+    dMonday.setHours(0,0,0,0);
+    
+    // Calculate difference in weeks
+    const diffMs = dMonday.getTime() - startMonday.getTime();
+    const diffWeeks = Math.round(diffMs / (7 * 24 * 60 * 60 * 1000));
+    
+    return Math.max(1, diffWeeks + 1); // 1-indexed, at least 1
+  } catch (e) {
+    return 1;
+  }
+}
+
+export function getStudentB9ExpiryDate(
+  studentClass: string,
+  currentDateStr: string,
+  activeTerm?: any
+): string {
+  const getYearsToCompleteB9 = (cls: string): number => {
+    const normalized = cls.toUpperCase().trim();
+    switch (normalized) {
+      case 'NURSERY': return 11;
+      case 'KG1': return 10;
+      case 'KG2': return 9;
+      case 'B1': return 8;
+      case 'B2': return 7;
+      case 'B3': return 6;
+      case 'B4': return 5;
+      case 'B5': return 4;
+      case 'B6': return 3;
+      case 'B7': return 2;
+      case 'B8': return 1;
+      case 'B9': return 0;
+      default: return 0;
+    }
+  };
+
+  try {
+    const d = currentDateStr ? new Date(currentDateStr) : new Date();
+    if (isNaN(d.getTime())) {
+      return "2026-08-31";
+    }
+    const currentYear = d.getFullYear();
+    const currentMonth = d.getMonth(); // 0-indexed, 8 is September
+    let baseCompletionYear = currentYear;
+    
+    // Sept starts the new academic year
+    if (currentMonth >= 8) {
+      baseCompletionYear = currentYear + 1;
+    }
+    
+    const completionYear = baseCompletionYear + getYearsToCompleteB9(studentClass);
+    return `${completionYear}-08-31`;
+  } catch (e) {
+    return "2026-08-31";
+  }
+}
+
+export function getStudentBaselineTermFee(
+  studentClass: StudentClass,
+  systemSettings?: SystemSettings
+): number {
+  const category = getClassCategory(studentClass);
+  if (category === 'Pre-school') {
+    return systemSettings?.baselineTermFeePreSchool ?? systemSettings?.baselineTermFee ?? 250.00;
+  }
+  if (category === 'Primary') {
+    return systemSettings?.baselineTermFeePrimary ?? systemSettings?.baselineTermFee ?? 350.00;
+  }
+  if (category === 'JHS') {
+    return systemSettings?.baselineTermFeeJhs ?? systemSettings?.baselineTermFee ?? 450.00;
+  }
+  return systemSettings?.baselineTermFee ?? 350.00;
+}
+
+export function getDiscountedTermFee(
+  student: Student,
+  payments: PaymentRecord[],
+  activeTerm: Term | null,
+  currentDate: string,
+  systemSettings?: SystemSettings
+) {
+  const baseTermFee = getStudentBaselineTermFee(student.class, systemSettings);
+  const originalFee = student.termFee || baseTermFee;
+  
+  if (
+    !activeTerm ||
+    !systemSettings?.termDiscountEnabled ||
+    !systemSettings?.termDiscountWeek ||
+    !systemSettings?.termDiscountPercentage
+  ) {
+    return {
+      termFee: originalFee,
+      originalFee,
+      discountAmount: 0,
+      isApplied: false,
+      isEligibleButUnpaid: false
+    };
+  }
+  
+  const targetWeek = systemSettings.termDiscountWeek;
+  const discountPercent = systemSettings.termDiscountPercentage;
+  const discountAmount = originalFee * (discountPercent / 100);
+  
+  // Check if they have a non-absent payment in targetWeek of the active term
+  const studentPayments = payments.filter(p => p.studentId === student.id && !p.isAbsent);
+  const hasPaymentInWeek = studentPayments.some(p => {
+    const paymentWeek = getSchoolWeekForDate(p.date, activeTerm.startDate);
+    return paymentWeek === targetWeek;
+  });
+  
+  // Check if current date is within or before the target week
+  const currentWeek = getSchoolWeekForDate(currentDate, activeTerm.startDate);
+  const eligibleToPayNow = currentWeek <= targetWeek;
+  
+  if (hasPaymentInWeek) {
+    return {
+      termFee: Math.max(0, originalFee - discountAmount),
+      originalFee,
+      discountAmount,
+      isApplied: true,
+      isEligibleButUnpaid: false
+    };
+  } else if (eligibleToPayNow) {
+    return {
+      termFee: Math.max(0, originalFee - discountAmount),
+      originalFee,
+      discountAmount,
+      isApplied: false,
+      isEligibleButUnpaid: true
+    };
+  }
+  
+  return {
+    termFee: originalFee,
+    originalFee,
+    discountAmount: 0,
+    isApplied: false,
+    isEligibleButUnpaid: false
+  };
+}
+
 export function calculateStudentFinancialState(
   student: Student,
   payments: PaymentRecord[],
   activeTerm: Term | null,
   currentDate: string,
-  baselineDailyFee?: number
+  baselineDailyFee?: number,
+  systemSettings?: SystemSettings
 ) {
   const baseDailyFee = baselineDailyFee ?? 5.00;
   if (student.paymentType === 'Term') {
-    const termFee = student.termFee || 350;
+    const discountInfo = getDiscountedTermFee(student, payments, activeTerm, currentDate, systemSettings);
+    const termFee = discountInfo.termFee;
     const legacyDebt = student.legacyDebt || 0;
-    const totalTarget = termFee + legacyDebt;
     const studentPayments = payments.filter(p => p.studentId === student.id);
+    const totalLateFees = studentPayments.reduce((sum, p) => sum + (p.lateFeeApplied || 0), 0);
+    const totalTarget = termFee + legacyDebt + totalLateFees;
     const totalPaid = studentPayments
       .filter(p => !p.isAbsent)
       .reduce((sum, p) => sum + p.amount, 0);
@@ -254,7 +428,8 @@ export function calculateStudentFinancialState(
       pastUnpaidDays: [] as string[],
       isPaidToday: isCheckedInToday,
       totalDebt: runningBalance < 0 ? Math.abs(runningBalance) : 0,
-      prepaidDaysCount: 0
+      prepaidDaysCount: 0,
+      discountInfo
     };
   }
 
@@ -288,7 +463,8 @@ export function calculateStudentFinancialState(
     .filter(p => !p.isAbsent)
     .reduce((sum, p) => sum + p.amount, 0);
 
-  const totalRequired = billableDays.length * dailyRate;
+  const totalLateFees = studentPayments.reduce((sum, p) => sum + (p.lateFeeApplied || 0), 0);
+  const totalRequired = billableDays.length * dailyRate + totalLateFees;
   const runningBalance = totalPaid - totalRequired;
 
   // Calculate which specific days are unpaid/covered chronologically using the sequential pool
@@ -297,8 +473,12 @@ export function calculateStudentFinancialState(
   const coveredDaysList: string[] = [];
 
   billableDays.forEach(dStr => {
-    if (runningPaid + 0.005 >= dailyRate) {
-      runningPaid -= dailyRate;
+    const paymentForDay = studentPayments.find(p => p.date === dStr && !p.id.endsWith('_debt'));
+    const dayLateFee = paymentForDay?.lateFeeApplied || 0;
+    const dayRequired = dailyRate + dayLateFee;
+
+    if (runningPaid + 0.005 >= dayRequired) {
+      runningPaid -= dayRequired;
       coveredDaysList.push(dStr);
     } else {
       runningPaid = 0;
@@ -353,7 +533,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [salaries, setSalaries] = useState<WorkerSalary[]>([]);
   const [whatsappLogs, setWhatsappLogs] = useState<any[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [budgetTargets, setBudgetTargets] = useState<BudgetTarget[]>([]);
+  const [examsPayments, setExamsPayments] = useState<ExamsPayment[]>([]);
+  const [examsExpenses, setExamsExpenses] = useState<ExamsExpense[]>([]);
+  const [examsSettings, setExamsSettings] = useState<ExamsSettings | null>(null);
+  const [promotionBackups, setPromotionBackups] = useState<any[]>([]);
 
   const DEFAULT_SETTINGS: SystemSettings = {
     schoolName: "SAAKO HOLY CHILD ACADEMY",
@@ -361,12 +546,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     schoolLogoUrl: "",
     baselineDailyFee: 5.00,
     baselineTermFee: 350.00,
+    baselineTermFeePreSchool: 250.00,
+    baselineTermFeePrimary: 350.00,
+    baselineTermFeeJhs: 450.00,
     currencyCode: "GHC",
     customMotto: "Holiness Is Our Key",
     customLocation: "Sawla",
     autoSendCheckInAlert: false,
     autoSendArrearsAlert: false,
-    primaryColor: "#fbbf24"
+    primaryColor: "#fbbf24",
+    debtThresholdLimit: 50,
+    debtThresholdDays: 5,
+    debtAlertTemplate: "Alert: Your ward {name} has accumulated a high school debt of {currency} {debt}. Please settle this balance promptly to ensure compliance with check-in procedures.",
+    debtAlertMethod: 'whatsapp',
+    lateFeeEnabled: false,
+    lateFeeCutoffTime: "08:30",
+    lateFeePercentage: 10
   };
 
   const [systemSettings, setSystemSettingsState] = useState<SystemSettings>(() => {
@@ -385,6 +580,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = { ...systemSettings, ...newSettings };
     setSystemSettingsState(updated);
     localStorage.setItem('s_system_settings', JSON.stringify(updated));
+
+    const changes: string[] = [];
+    if (newSettings.baselineDailyFee !== undefined && newSettings.baselineDailyFee !== systemSettings.baselineDailyFee) {
+      changes.push(`baseline daily fee to GHC ${newSettings.baselineDailyFee}`);
+    }
+    if (newSettings.baselineTermFee !== undefined && newSettings.baselineTermFee !== systemSettings.baselineTermFee) {
+      changes.push(`baseline term fee to GHC ${newSettings.baselineTermFee}`);
+    }
+    if (newSettings.schoolName !== undefined && newSettings.schoolName !== systemSettings.schoolName) {
+      changes.push(`school name to "${newSettings.schoolName}"`);
+    }
+    if (newSettings.adminWhatsAppPhone !== undefined && newSettings.adminWhatsAppPhone !== systemSettings.adminWhatsAppPhone) {
+      changes.push(`WhatsApp gateway phone to ${newSettings.adminWhatsAppPhone}`);
+    }
+    
+    const details = changes.length > 0 
+      ? `Updated system configurations: changed ${changes.join(', ')}` 
+      : 'Modified general system settings';
+    
+    logActivity('FEE_SETTINGS_UPDATED', 'settings', details);
 
     try {
       const success = await db.saveSystemSettings(updated);
@@ -885,14 +1100,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       
       try {
         // Run lookups in parallel to minimize wait times (cut 24s sequence down to 8s)
-        const [dbUsers, dbStudents, dbPayments, dbTerms, dbExpenses, dbSalaries, dbBudgetTargets] = await Promise.all([
+        const [dbUsers, dbStudents, dbPayments, dbTerms, dbExpenses, dbSalaries, dbBudgetTargets, dbExamsPayments, dbExamsExpenses, dbExamsSettings] = await Promise.all([
           db.getUsers(),
           db.getStudents(),
           db.getPayments(),
           db.getTerms(),
           db.getExpenses(),
           db.getSalaries(),
-          db.getBudgetTargets()
+          db.getBudgetTargets(),
+          db.getExamsPayments(),
+          db.getExamsExpenses(),
+          db.getExamsSettings()
         ]);
 
         if (dbUsers === null || dbStudents === null || dbPayments === null || dbTerms === null || dbExpenses === null || dbSalaries === null || dbBudgetTargets === null) {
@@ -976,6 +1194,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setExpenses(dbExpenses);
         setSalaries(dbSalaries);
         setBudgetTargets(dbBudgetTargets);
+        setExamsPayments(dbExamsPayments || []);
+        setExamsExpenses(dbExamsExpenses || []);
+        if (dbExamsSettings) {
+          setExamsSettings(dbExamsSettings);
+        } else {
+          // If no settings exist on cloud, initialize with defaults
+          const defaultSettings = {
+            classFees: {
+              'Nursery': { feeCharged: 20, companyBilling: 12 },
+              'KG1': { feeCharged: 20, companyBilling: 12 },
+              'KG2': { feeCharged: 20, companyBilling: 12 },
+              'B1': { feeCharged: 30, companyBilling: 18 },
+              'B2': { feeCharged: 30, companyBilling: 18 },
+              'B3': { feeCharged: 30, companyBilling: 18 },
+              'B4': { feeCharged: 30, companyBilling: 18 },
+              'B5': { feeCharged: 30, companyBilling: 18 },
+              'B6': { feeCharged: 30, companyBilling: 18 },
+              'B7': { feeCharged: 45, companyBilling: 25 },
+              'B8': { feeCharged: 45, companyBilling: 25 },
+              'B9': { feeCharged: 45, companyBilling: 25 }
+            }
+          };
+          setExamsSettings(defaultSettings);
+          db.saveExamsSettings(defaultSettings);
+        }
 
         // Sync local copies as high speed cache
         localStorage.setItem('s_users', JSON.stringify(dbUsers));
@@ -984,6 +1227,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         localStorage.setItem('s_expenses', JSON.stringify(dbExpenses));
         localStorage.setItem('s_salaries', JSON.stringify(dbSalaries));
         localStorage.setItem('s_budget_targets', JSON.stringify(dbBudgetTargets));
+        localStorage.setItem('s_exams_payments', JSON.stringify(dbExamsPayments || []));
+        localStorage.setItem('s_exams_expenses', JSON.stringify(dbExamsExpenses || []));
+        if (dbExamsSettings) {
+          localStorage.setItem('s_exams_settings', JSON.stringify(dbExamsSettings));
+        }
         
         // Sync terms in active cloud mode
         if (dbTerms && dbTerms.length > 0) {
@@ -1175,6 +1423,71 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setBudgetTargets([]);
         localStorage.setItem('s_budget_targets', JSON.stringify([]));
       }
+
+      // Exams database healing
+      try {
+        const localExamsPayments = localStorage.getItem('s_exams_payments');
+        if (localExamsPayments) {
+          setExamsPayments(JSON.parse(localExamsPayments));
+        } else {
+          setExamsPayments([]);
+          localStorage.setItem('s_exams_payments', JSON.stringify([]));
+        }
+      } catch (e) {
+        setExamsPayments([]);
+      }
+
+      try {
+        const localExamsExpenses = localStorage.getItem('s_exams_expenses');
+        if (localExamsExpenses) {
+          setExamsExpenses(JSON.parse(localExamsExpenses));
+        } else {
+          setExamsExpenses([]);
+          localStorage.setItem('s_exams_expenses', JSON.stringify([]));
+        }
+      } catch (e) {
+        setExamsExpenses([]);
+      }
+
+      try {
+        const localExamsSettings = localStorage.getItem('s_exams_settings');
+        if (localExamsSettings) {
+          setExamsSettings(JSON.parse(localExamsSettings));
+        } else {
+          const defaultSettings = {
+            classFees: {
+              'Nursery': { feeCharged: 20, companyBilling: 12 },
+              'KG1': { feeCharged: 20, companyBilling: 12 },
+              'KG2': { feeCharged: 20, companyBilling: 12 },
+              'B1': { feeCharged: 30, companyBilling: 18 },
+              'B2': { feeCharged: 30, companyBilling: 18 },
+              'B3': { feeCharged: 30, companyBilling: 18 },
+              'B4': { feeCharged: 30, companyBilling: 18 },
+              'B5': { feeCharged: 30, companyBilling: 18 },
+              'B6': { feeCharged: 30, companyBilling: 18 },
+              'B7': { feeCharged: 45, companyBilling: 25 },
+              'B8': { feeCharged: 45, companyBilling: 25 },
+              'B9': { feeCharged: 45, companyBilling: 25 }
+            }
+          };
+          setExamsSettings(defaultSettings);
+          localStorage.setItem('s_exams_settings', JSON.stringify(defaultSettings));
+        }
+      } catch (e) {
+        setExamsSettings(null);
+      }
+
+      try {
+        const localPromoBackups = localStorage.getItem('s_promotion_backups');
+        if (localPromoBackups) {
+          setPromotionBackups(JSON.parse(localPromoBackups));
+        } else {
+          setPromotionBackups([]);
+          localStorage.setItem('s_promotion_backups', JSON.stringify([]));
+        }
+      } catch (e) {
+        setPromotionBackups([]);
+      }
     };
 
   // Sync to local backups
@@ -1260,7 +1573,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const registerStaff = (name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled = false, passwordEnabled = false, password = '', assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string) => {
+  const registerStaff = (name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled = false, passwordEnabled = false, password = '', assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string, photoUrl?: string, employeeId?: string, department?: string, gender?: 'Male' | 'Female', employmentType?: 'Full-Time' | 'Part-Time' | 'Contract' | 'Volunteer', appointmentDate?: string, contractEndDate?: string, renewalOption?: 'Automatic' | 'Manual Review' | 'Fixed Term' | 'Non-Renewable', renewalPeriod?: string) => {
     const trimmedEmail = email.toLowerCase().trim();
     if (users.some(u => u.email.toLowerCase() === trimmedEmail)) {
       return { success: false, error: 'A staff member with this email is already registered.' };
@@ -1282,7 +1595,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       password: passwordEnabled ? password : undefined,
       stipendSalary,
       momoNumber,
-      momoName
+      momoName,
+      photoUrl,
+      employeeId,
+      department,
+      gender,
+      employmentType,
+      appointmentDate,
+      contractEndDate,
+      renewalOption,
+      renewalPeriod
     };
 
     const nextUsers = [...users, newUser];
@@ -1296,7 +1618,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
-  const updateStaff = (userId: string, name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled = false, passwordEnabled = false, password = '', assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string) => {
+  const updateStaff = (userId: string, name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled = false, passwordEnabled = false, password = '', assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string, photoUrl?: string, employeeId?: string, department?: string, gender?: 'Male' | 'Female', employmentType?: 'Full-Time' | 'Part-Time' | 'Contract' | 'Volunteer', idCardDeactivated?: boolean, appointmentDate?: string, contractEndDate?: string, renewalOption?: 'Automatic' | 'Manual Review' | 'Fixed Term' | 'Non-Renewable', renewalPeriod?: string, signatureUrl?: string, managementSignatureUrl?: string) => {
     const trimmedEmail = email.toLowerCase().trim();
     if (users.some(u => u.email.toLowerCase() === trimmedEmail && u.id !== userId)) {
       return { success: false, error: 'A staff member with this email is already registered.' };
@@ -1320,7 +1642,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           password: passwordEnabled ? password : u.password,
           stipendSalary,
           momoNumber,
-          momoName
+          momoName,
+          photoUrl: photoUrl !== undefined ? photoUrl : u.photoUrl,
+          employeeId: employeeId !== undefined ? employeeId : u.employeeId,
+          department: department !== undefined ? department : u.department,
+          gender: gender !== undefined ? gender : u.gender,
+          employmentType: employmentType !== undefined ? employmentType : u.employmentType,
+          idCardDeactivated: idCardDeactivated !== undefined ? idCardDeactivated : u.idCardDeactivated,
+          appointmentDate: appointmentDate !== undefined ? appointmentDate : u.appointmentDate,
+          contractEndDate: contractEndDate !== undefined ? contractEndDate : u.contractEndDate,
+          renewalOption: renewalOption !== undefined ? renewalOption : u.renewalOption,
+          renewalPeriod: renewalPeriod !== undefined ? renewalPeriod : u.renewalPeriod,
+          signatureUrl: signatureUrl !== undefined ? signatureUrl : u.signatureUrl,
+          managementSignatureUrl: managementSignatureUrl !== undefined ? managementSignatureUrl : u.managementSignatureUrl
         };
         return updatedUser;
       }
@@ -1427,6 +1761,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } else {
       recordLocallyPendingEdit('student', 'create', `Admitted new pupil: "${name}" (${className})`);
     }
+    logActivity('STUDENT_ENROLLED', 'students', `Enrolled pupil "${name}" in class ${className}`, newStudent.id, name);
   };
 
   const updateStudent = (updatedStudent: Student) => {
@@ -1438,6 +1773,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } else {
       recordLocallyPendingEdit('student', 'update', `Updated record for pupil: "${updatedStudent.name}"`);
     }
+    logActivity('STUDENT_UPDATED', 'students', `Updated pupil info for "${updatedStudent.name}" (${updatedStudent.class})`, updatedStudent.id, updatedStudent.name);
   };
 
   const deleteStudent = (studentId: string) => {
@@ -1457,6 +1793,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (storageMode !== 'cloud') {
       recordLocallyPendingEdit('student', 'delete', `Removed pupil: "${targetStudent?.name || 'Unknown'}" from active register`);
     }
+    logActivity('STUDENT_DELETED', 'students', `Permanently deleted pupil record for "${targetStudent?.name || 'Unknown'}"`, studentId, targetStudent?.name);
   };
 
   const purgeDeactivatedStudents = () => {
@@ -1537,7 +1874,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (alreadySentArrears) return;
 
     const baseDailyFee = systemSettings?.baselineDailyFee ?? 5.00;
-    const debtInfo = calculateStudentFinancialState(student, payments, activeTerm, currentDate, baseDailyFee);
+    const debtInfo = calculateStudentFinancialState(student, payments, activeTerm, currentDate, baseDailyFee, systemSettings);
 
     if (!debtInfo || debtInfo.totalDebt <= 0) return;
 
@@ -1577,6 +1914,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }, 250);
   };
 
+  const applyLateFeeIfApplicable = (student: Student, record: PaymentRecord): PaymentRecord => {
+    if (!systemSettings?.lateFeeEnabled || !systemSettings?.lateFeeCutoffTime || !systemSettings?.lateFeePercentage) {
+      return record;
+    }
+    if (record.date !== currentDate || record.isAbsent) {
+      return record;
+    }
+    if (record.lateFeeApplied !== undefined) {
+      return record;
+    }
+
+    const cutoffStr = systemSettings.lateFeeCutoffTime;
+    const [cutoffHour, cutoffMinute] = cutoffStr.split(':').map(Number);
+    const now = new Date();
+    const currentHour = now.getHours();
+    const currentMinute = now.getMinutes();
+
+    const isLate = currentHour > cutoffHour || (currentHour === cutoffHour && currentMinute > cutoffMinute);
+    if (isLate) {
+      const baseDailyFee = systemSettings.baselineDailyFee ?? 5.00;
+      const discountAmount = student.discount || 0;
+      const dailyRate = Math.max(0.01, baseDailyFee - discountAmount);
+      const penalty = dailyRate * (systemSettings.lateFeePercentage / 100);
+      const penaltyFixed = Number(penalty.toFixed(2));
+      return {
+        ...record,
+        lateFeeApplied: penaltyFixed,
+        notes: record.notes
+          ? `${record.notes} (Late Registration Penalty GHC ${penaltyFixed.toFixed(2)} applied)`
+          : `Late Registration Penalty GHC ${penaltyFixed.toFixed(2)} applied`
+      };
+    }
+    return record;
+  };
+
   const recordPayment = (studentId: string, verified = true, customAmount?: number, customNotes?: string, allowDuplicate = false) => {
     const student = students.find(s => s.id === studentId);
     if (!student) return;
@@ -1589,7 +1961,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 0. Handle Term Payers differently
     if (student.paymentType === 'Term') {
-      const existingIndex = allowDuplicate ? -1 : payments.findIndex(p => p.studentId === studentId && p.date === currentDate && !p.id.endsWith('_debt'));
+      const isCustomFinancial = customAmount !== undefined && customAmount > 0;
+      const existingIndex = (allowDuplicate || isCustomFinancial) 
+        ? -1 
+        : payments.findIndex(p => p.studentId === studentId && p.date === currentDate && p.amount === 0 && !p.id.endsWith('_debt'));
+      
       let nextPayments = [...payments];
       let recordToSave: PaymentRecord;
       
@@ -1609,10 +1985,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           notes: resolvedNotes,
           timestamp: new Date().toISOString()
         };
+        recordToSave = applyLateFeeIfApplicable(student, recordToSave);
         nextPayments[existingIndex] = recordToSave;
       } else {
         recordToSave = {
-          id: allowDuplicate ? `p_${studentId}_${currentDate}_dup_${Date.now()}` : `p_${studentId}_${currentDate}`,
+          id: (allowDuplicate || isCustomFinancial) 
+            ? `p_${studentId}_term_pay_${Date.now()}_${Math.random().toString(36).substring(2, 7)}` 
+            : `p_${studentId}_${currentDate}`,
           studentId: student.id,
           studentName: student.name,
           class: student.class,
@@ -1625,6 +2004,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           isAbsent: false,
           notes: resolvedNotes
         };
+        recordToSave = applyLateFeeIfApplicable(student, recordToSave);
         nextPayments.push(recordToSave);
       }
       setPayments(nextPayments);
@@ -1634,6 +2014,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } else {
         recordLocallyPendingEdit('payment', 'create', `Logged term flat payment of GHC ${resolvedAmount.toFixed(2)} for pupil: "${student.name}"`);
       }
+      logActivity('PAYMENT_RECORDED', 'payments', `Recorded term flat payment of GHC ${resolvedAmount.toFixed(2)} for pupil "${student.name}"`, student.id, student.name, resolvedAmount);
       playFeedbackSound('success');
       checkAndSendCheckInAlert(studentId);
       checkAndSendArrearsAlert(studentId);
@@ -1807,6 +2188,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             notes: `Remainder gate fee processed after clearing old arrears ${coverDesc}`,
             timestamp: new Date().toISOString()
           };
+          recordToSave = applyLateFeeIfApplicable(student, recordToSave);
           nextPayments[existingIndex] = recordToSave;
         } else {
           recordToSave = {
@@ -1823,6 +2205,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             isAbsent: false,
             notes: `Remainder gate fee processed after clearing old arrears ${coverDesc}`
           };
+          recordToSave = applyLateFeeIfApplicable(student, recordToSave);
           nextPayments.push(recordToSave);
         }
         recordsToSync.push(recordToSave);
@@ -1879,6 +2262,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } else if (recordsToSync.length > 0) {
         recordLocallyPendingEdit('payment', 'create', `Logged GHC ${finalAmount.toFixed(2)} payment covering arrears and/or standard fee for pupil: "${student.name}"`);
       }
+      logActivity('PAYMENT_RECORDED', 'payments', `Recorded arrears settlement of GHC ${finalAmount.toFixed(2)} for pupil "${student.name}"`, student.id, student.name, finalAmount);
       playFeedbackSound('success');
       checkAndSendCheckInAlert(studentId);
       checkAndSendArrearsAlert(studentId);
@@ -1897,6 +2281,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           notes: customNotes !== undefined ? customNotes : (customAmount !== undefined ? `Custom amount GHC ${finalAmount.toFixed(2)} processed` : (discountAmount > 0 ? `Applied dynamic discount of GHC ${discountAmount.toFixed(2)}` : undefined)),
           timestamp: new Date().toISOString()
         };
+        recordToSave = applyLateFeeIfApplicable(student, recordToSave);
         nextPayments[existingIndex] = recordToSave;
       } else {
         recordToSave = {
@@ -1913,6 +2298,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           isAbsent: false,
           notes: customNotes !== undefined ? customNotes : (customAmount !== undefined ? `Custom amount GHC ${finalAmount.toFixed(2)} processed` : (discountAmount > 0 ? `Applied dynamic discount of GHC ${discountAmount.toFixed(2)}` : undefined))
         };
+        recordToSave = applyLateFeeIfApplicable(student, recordToSave);
         nextPayments.push(recordToSave);
       }
 
@@ -1923,9 +2309,61 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } else {
         recordLocallyPendingEdit('payment', 'create', `Logged GHC ${finalAmount.toFixed(2)} payment for pupil: "${student.name}"${discountAmount > 0 && customAmount === undefined ? ` (GHC ${discountAmount.toFixed(2)} Discount applied)` : ''}`);
       }
+      logActivity('PAYMENT_RECORDED', 'payments', `Recorded fee payment of GHC ${finalAmount.toFixed(2)} for pupil "${student.name}"`, student.id, student.name, finalAmount);
       playFeedbackSound('success');
       checkAndSendCheckInAlert(studentId);
       checkAndSendArrearsAlert(studentId);
+    }
+  };
+
+  const recordMomoPayment = (
+    studentId: string,
+    amount: number,
+    transactionId: string,
+    provider: string,
+    phoneNumber: string,
+    status: 'pending' | 'successful' | 'failed' | 'refunded',
+    notes?: string,
+    customDate?: string
+  ) => {
+    const student = students.find(s => s.id === studentId);
+    if (!student) return;
+
+    const dateToUse = customDate || currentDate;
+
+    const recordToSave: PaymentRecord = {
+      id: `p_${studentId}_${dateToUse}_momo_${Date.now()}`,
+      studentId: student.id,
+      studentName: student.name,
+      class: student.class,
+      category: student.category,
+      amount,
+      date: dateToUse,
+      timestamp: new Date().toISOString(),
+      collectedBy: currentUser ? currentUser.name : 'System Host',
+      verified: status === 'successful',
+      isAbsent: false,
+      notes: notes || `MOMO Pay: GHC ${amount.toFixed(2)} [Ref: ${transactionId}]`,
+      paymentMethod: 'Mobile Money',
+      momoTransactionId: transactionId,
+      momoStatus: status,
+      momoProvider: provider,
+      momoPhoneNumber: phoneNumber
+    };
+
+    const nextPayments = [...payments, recordToSave];
+    setPayments(nextPayments);
+    saveState(users, students, nextPayments);
+
+    if (db.isActive() && storageMode === 'cloud') {
+      db.savePayment(recordToSave);
+    } else {
+      recordLocallyPendingEdit('payment', 'create', `Simulated Mobile Money Payment of GHC ${amount.toFixed(2)} for ${student.name}`);
+    }
+
+    if (status === 'successful') {
+      playFeedbackSound('success');
+      checkAndSendCheckInAlert(studentId);
     }
   };
 
@@ -2173,6 +2611,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           verified,
           timestamp: new Date().toISOString()
         };
+        record = applyLateFeeIfApplicable(student, record);
         nextPayments[idx] = record;
       } else {
         record = {
@@ -2188,6 +2627,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           verified,
           notes: discountAmount > 0 ? `Applied dynamic discount of GHC ${discountAmount.toFixed(2)}` : undefined
         };
+        record = applyLateFeeIfApplicable(student, record);
         nextPayments.push(record);
       }
       recordsToSync.push(record);
@@ -2229,6 +2669,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           : (nextPayments[existingIndex].notes ? `${nextPayments[existingIndex].notes} | Present or ¢0` : 'Present or ¢0'),
         timestamp: new Date().toISOString()
       };
+      recordToSave = applyLateFeeIfApplicable(student, recordToSave);
       nextPayments[existingIndex] = recordToSave;
     } else {
       recordToSave = {
@@ -2245,6 +2686,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isAbsent: false,
         notes: 'Present or ¢0'
       };
+      recordToSave = applyLateFeeIfApplicable(student, recordToSave);
       nextPayments.push(recordToSave);
     }
 
@@ -2481,6 +2923,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       db.savePayment(recordToSync);
     } else if (recordToSync) {
       recordLocallyPendingEdit('payment', 'update', `Adjusted past payment for pupil: "${(recordToSync as PaymentRecord).studentName}"`);
+    }
+
+    if (recordToSync) {
+      const rec = recordToSync as PaymentRecord;
+      logActivity(
+        'PAYMENT_ADJUSTED',
+        'payments',
+        `Adjusted past payment for pupil "${rec.studentName}" on ${rec.date} from GHC ${rec.amount} to GHC ${updatedAmount}. Reason: ${reason}`,
+        rec.studentId,
+        rec.studentName,
+        updatedAmount
+      );
     }
   };
 
@@ -2895,7 +3349,23 @@ School Administration Financial Audit System (MFA Secure)
     }
   };
 
-  const promoteAllStudents = () => {
+  const promoteAllStudents = (customActions?: Record<string, 'promote' | 'repeat' | 'graduate' | 'withdraw'>) => {
+    // 1. Create and save a roster backup before making any modification
+    const backupId = `promo-bk-${Date.now()}`;
+    const newBackup = {
+      id: backupId,
+      timestamp: new Date().toISOString(),
+      studentCount: students.length,
+      studentsJson: JSON.stringify(students),
+      description: customActions 
+        ? `Custom Reconciliation Promotion (${Object.keys(customActions).length} student overrides)` 
+        : "Standard Bulk Cohort Promotion"
+    };
+    const updatedBackups = [newBackup, ...promotionBackups].slice(0, 10);
+    setPromotionBackups(updatedBackups);
+    localStorage.setItem('s_promotion_backups', JSON.stringify(updatedBackups));
+
+    // 2. Compute promotions
     const CLASS_PROMOTION_MAP: Record<StudentClass, { nextClass: StudentClass | null; category: SchoolCategory; completes: boolean }> = {
       'Nursery': { nextClass: 'KG1', category: 'Pre-school', completes: false },
       'KG1':     { nextClass: 'KG2', category: 'Pre-school', completes: false },
@@ -2912,7 +3382,32 @@ School Administration Financial Audit System (MFA Secure)
     };
 
     const updatedStudents = students.map(student => {
+      // If student is already inactive, keep as-is
       if (!student.active) return student;
+
+      // Check if there is an explicit user action override for this student
+      if (customActions && student.id in customActions) {
+        const action = customActions[student.id];
+        if (action === 'repeat') {
+          // Stay in current class, remain active
+          return student;
+        }
+        if (action === 'withdraw') {
+          // Set to inactive
+          return {
+            ...student,
+            active: false
+          };
+        }
+        if (action === 'graduate') {
+          // Set to inactive (completed)
+          return {
+            ...student,
+            active: false
+          };
+        }
+        // If action is standard 'promote', proceed to CLASS_PROMOTION_MAP rules
+      }
 
       const mapEntry = CLASS_PROMOTION_MAP[student.class];
       if (!mapEntry) return student;
@@ -2944,6 +3439,41 @@ School Administration Financial Audit System (MFA Secure)
       });
     } else {
       recordLocallyPendingEdit('student', 'update', `Promoted cohorts school-wide to the next academic year`);
+    }
+  };
+
+  const revertLastPromotion = (backupId?: string): boolean => {
+    const targetBackupId = backupId || promotionBackups[0]?.id;
+    if (!targetBackupId) return false;
+
+    const backup = promotionBackups.find(b => b.id === targetBackupId);
+    if (!backup) return false;
+
+    try {
+      const revertedStudents = JSON.parse(backup.studentsJson);
+      if (!Array.isArray(revertedStudents)) return false;
+
+      // Set students list to backup state
+      setStudents(revertedStudents);
+      saveState(users, revertedStudents, payments);
+
+      // Filter out this backup from the list
+      const updatedBackups = promotionBackups.filter(b => b.id !== targetBackupId);
+      setPromotionBackups(updatedBackups);
+      localStorage.setItem('s_promotion_backups', JSON.stringify(updatedBackups));
+
+      if (db.isActive() && storageMode === 'cloud') {
+        db.saveStudentsBulk(revertedStudents).catch(err => {
+          console.error("Failed to restore bulk student list to cloud:", err);
+        });
+      } else {
+        recordLocallyPendingEdit('student', 'update', `Reverted student cohorts from backup (${backup.timestamp})`);
+      }
+
+      return true;
+    } catch (e) {
+      console.error("Failed to parse promotion backup JSON:", e);
+      return false;
     }
   };
 
@@ -3035,6 +3565,125 @@ School Administration Financial Audit System (MFA Secure)
     }
   };
 
+  const addExamsPayment = async (
+    studentId: string,
+    amountPaid: number,
+    paymentMethod: PaymentMethod,
+    notes?: string,
+    datePaid?: string
+  ) => {
+    const student = students.find(s => s.id === studentId);
+    if (!student) {
+      throw new Error(`Student with ID ${studentId} not found in roster.`);
+    }
+
+    const newPayment: ExamsPayment = {
+      id: `ex-pay-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
+      studentId: student.id,
+      studentName: student.name,
+      class: student.class,
+      category: student.category,
+      amountPaid,
+      datePaid: datePaid || currentDate,
+      collectedBy: currentUser?.name || 'Administrator',
+      termId: activeTerm?.id || 'term_default',
+      paymentMethod,
+      notes,
+      timestamp: new Date().toISOString()
+    };
+
+    const updated = [newPayment, ...examsPayments];
+    setExamsPayments(updated);
+    localStorage.setItem('s_exams_payments', JSON.stringify(updated));
+
+    if (db.isActive() && storageMode === 'cloud') {
+      try {
+        await db.saveExamsPayment(newPayment);
+      } catch (err) {
+        console.error("Failed to save exams payment to cloud:", err);
+      }
+    }
+  };
+
+  const deleteExamsPayment = async (paymentId: string) => {
+    const updated = examsPayments.filter(p => p.id !== paymentId);
+    setExamsPayments(updated);
+    localStorage.setItem('s_exams_payments', JSON.stringify(updated));
+
+    if (db.isActive() && storageMode === 'cloud') {
+      try {
+        await db.deleteExamsPayment(paymentId);
+      } catch (err) {
+        console.error("Failed to delete exams payment from cloud:", err);
+      }
+    }
+  };
+
+  const addExamsExpense = async (
+    providerName: string,
+    targetClass: StudentClass | 'All-Preschool' | 'All-Primary' | 'All-JHS' | 'Entire-School',
+    billingPerChild: number,
+    studentCount: number,
+    totalAmount: number,
+    amountPaid: number,
+    status: 'Paid' | 'Unpaid' | 'Partially Paid',
+    notes?: string,
+    date?: string
+  ) => {
+    const newExpense: ExamsExpense = {
+      id: `ex-exp-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
+      providerName,
+      date: date || currentDate,
+      targetClass,
+      billingPerChild,
+      studentCount,
+      totalAmount,
+      amountPaid,
+      status,
+      notes,
+      timestamp: new Date().toISOString()
+    };
+
+    const updated = [newExpense, ...examsExpenses];
+    setExamsExpenses(updated);
+    localStorage.setItem('s_exams_expenses', JSON.stringify(updated));
+
+    if (db.isActive() && storageMode === 'cloud') {
+      try {
+        await db.saveExamsExpense(newExpense);
+      } catch (err) {
+        console.error("Failed to save exams expense to cloud:", err);
+      }
+    }
+  };
+
+  const deleteExamsExpense = async (expenseId: string) => {
+    const updated = examsExpenses.filter(e => e.id !== expenseId);
+    setExamsExpenses(updated);
+    localStorage.setItem('s_exams_expenses', JSON.stringify(updated));
+
+    if (db.isActive() && storageMode === 'cloud') {
+      try {
+        await db.deleteExamsExpense(expenseId);
+      } catch (err) {
+        console.error("Failed to delete exams expense from cloud:", err);
+      }
+    }
+  };
+
+  const updateExamsSettings = async (settings: ExamsSettings) => {
+    setExamsSettings(settings);
+    localStorage.setItem('s_exams_settings', JSON.stringify(settings));
+
+    if (db.isActive() && storageMode === 'cloud') {
+      try {
+        await db.saveExamsSettings(settings);
+      } catch (err) {
+        console.error("Failed to save exams settings to cloud:", err);
+      }
+    }
+  };
+
   const addSalary = (
     workerName: string,
     role: string,
@@ -3122,6 +3771,52 @@ School Administration Financial Audit System (MFA Secure)
     }
   };
 
+  const fetchAuditLogs = async () => {
+    try {
+      const res = await fetch('/api/audit-logs');
+      if (res.ok) {
+        const data = await res.json();
+        setAuditLogs(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch Audit logs state:', err);
+    }
+  };
+
+  const logActivity = async (
+    action: string,
+    category: 'students' | 'payments' | 'expenses' | 'settings' | 'security' | 'other',
+    details: string,
+    studentId?: string,
+    studentName?: string,
+    amount?: number
+  ) => {
+    try {
+      const res = await fetch('/api/audit-logs', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          action,
+          category,
+          operatorName: currentUser ? currentUser.name : 'System Automation',
+          operatorRole: currentUser ? currentUser.role : 'System',
+          details,
+          studentId,
+          studentName,
+          amount
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        await fetchAuditLogs();
+      }
+    } catch (err) {
+      console.error('Failed to log activity via API:', err);
+    }
+  };
+
   const sendautomatedWhatsApp = async (
     phone: string,
     message: string,
@@ -3155,9 +3850,10 @@ School Administration Financial Audit System (MFA Secure)
     }
   };
 
-  // Initially fetch whatsapp logs on storage mode shifts or startup
+  // Initially fetch whatsapp logs and audit logs on storage mode shifts or startup
   useEffect(() => {
     fetchWhatsappLogs();
+    fetchAuditLogs();
   }, [storageMode]);
 
   // Monitor budget progressive targets & trigger automated WhatsApp alerts for thresholds 50%, 75%, 100%
@@ -3261,7 +3957,10 @@ School Administration Financial Audit System (MFA Secure)
       deleteStudent,
       purgeDeactivatedStudents,
       promoteAllStudents,
+      promotionBackups,
+      revertLastPromotion,
       recordPayment,
+      recordMomoPayment,
       recordPresentZeroPay,
       recordAbsent,
       recordAdvancePayment,
@@ -3317,6 +4016,9 @@ School Administration Financial Audit System (MFA Secure)
       whatsappLogs,
       sendautomatedWhatsApp,
       fetchWhatsappLogs,
+      auditLogs,
+      fetchAuditLogs,
+      logActivity,
       systemSettings,
       updateSystemSettings,
       autoSendCheckInAlert: systemSettings?.autoSendCheckInAlert ?? false,
@@ -3330,7 +4032,15 @@ School Administration Financial Audit System (MFA Secure)
       budgetTargets,
       addBudgetTarget,
       updateBudgetTarget,
-      deleteBudgetTarget
+      deleteBudgetTarget,
+      examsPayments,
+      examsExpenses,
+      examsSettings,
+      addExamsPayment,
+      deleteExamsPayment,
+      addExamsExpense,
+      deleteExamsExpense,
+      updateExamsSettings
     }}>
       {children}
     </AppContext.Provider>

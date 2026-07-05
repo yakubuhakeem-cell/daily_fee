@@ -32,6 +32,14 @@ export const LoginMFA: React.FC = () => {
   const [regPassword, setRegPassword] = useState('');
   const [regSuccessMsg, setRegSuccessMsg] = useState<string | null>(null);
 
+  React.useEffect(() => {
+    const isLocked = sessionStorage.getItem('s_session_locked_by_idle');
+    if (isLocked === 'true') {
+      setError('Your session has been locked and automatically logged out due to 15 minutes of inactivity to protect student and school financial data.');
+      sessionStorage.removeItem('s_session_locked_by_idle');
+    }
+  }, []);
+
   const handleRegisterSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);

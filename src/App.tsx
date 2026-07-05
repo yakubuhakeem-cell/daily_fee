@@ -7,6 +7,7 @@ import React, { useState } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { LoginMFA } from './components/LoginMFA';
 import { SchoolLogo } from './components/SchoolLogo';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 const ClassRegister = React.lazy(() => import('./components/ClassRegister').then(module => ({ default: module.ClassRegister })));
 const Dashboard = React.lazy(() => import('./components/Dashboard').then(module => ({ default: module.Dashboard })));
@@ -14,8 +15,10 @@ const AdminPanel = React.lazy(() => import('./components/AdminPanel').then(modul
 const ReportPanel = React.lazy(() => import('./components/ReportPanel').then(module => ({ default: module.ReportPanel })));
 const TermPayersTab = React.lazy(() => import('./components/TermPayersTab').then(module => ({ default: module.TermPayersTab })));
 const BudgetPlanTab = React.lazy(() => import('./components/BudgetPlanTab').then(module => ({ default: module.BudgetPlanTab })));
+const ExamsDashboardTab = React.lazy(() => import('./components/ExamsDashboardTab').then(module => ({ default: module.ExamsDashboardTab })));
 import { db } from './lib/firebase';
 import { StudentClass } from './types';
+import { EnrollmentSummaryWidget } from './components/EnrollmentSummaryWidget';
 import { 
   Fingerprint, 
   LayoutDashboard, 
@@ -278,6 +281,50 @@ function NavigationWrapper() {
     };
   }, [activeTab]);
 
+  // Inactivity Idle Timer for Session Security (15 minutes of inactivity)
+  React.useEffect(() => {
+    if (!currentUser) return;
+
+    const INACTIVITY_TIMEOUT = 15 * 60 * 1000; // 15 minutes in milliseconds
+    let timeoutId: any;
+
+    const handleTimeout = () => {
+      sessionStorage.setItem('s_session_locked_by_idle', 'true');
+      logout();
+    };
+
+    const resetTimer = () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      timeoutId = setTimeout(handleTimeout, INACTIVITY_TIMEOUT);
+    };
+
+    // Events that indicate user activity
+    const activityEvents = [
+      'mousedown',
+      'mousemove',
+      'keydown',
+      'scroll',
+      'touchstart',
+      'click'
+    ];
+
+    // Initialize timer
+    resetTimer();
+
+    // Attach event listeners
+    activityEvents.forEach(event => {
+      window.addEventListener(event, resetTimer, { passive: true });
+    });
+
+    // Clean up
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      activityEvents.forEach(event => {
+        window.removeEventListener(event, resetTimer);
+      });
+    };
+  }, [currentUser, logout]);
+
   // Programmatic switch and cloud sync flow trigger helper function
   const triggerSwitchAndSyncCloud = async () => {
     setShowSyncConfirm(true);
@@ -316,7 +363,7 @@ function NavigationWrapper() {
     const role = currentUser.role;
     if (role === 'Administrator' || role === 'Headmaster') return true;
     if (role === 'Accountant') {
-      return ['dashboard', 'register', 'reports', 'termPayers', 'budgetPlan'].includes(tab);
+      return ['dashboard', 'register', 'reports', 'termPayers', 'budgetPlan', 'exams'].includes(tab);
     }
     if (role === 'Teacher') {
       return ['register'].includes(tab);
@@ -329,6 +376,7 @@ function NavigationWrapper() {
     { id: 'register', label: 'Check-In GHC 5', icon: Receipt },
     { id: 'termPayers', label: 'Term Payers Status', icon: CreditCard },
     { id: 'dashboard', label: 'Cash Flow Trends & Stats', icon: LayoutDashboard },
+    { id: 'exams', label: 'Exams Dashboard', icon: GraduationCap },
     { id: 'reports', label: 'Audits & Exports', icon: FolderEdit },
     { id: 'budgetPlan', label: 'Action Plans & Targets', icon: Target },
     { id: 'admin', label: 'Pupil Enrollment Core', icon: Settings },
@@ -347,6 +395,8 @@ function NavigationWrapper() {
         return <TermPayersTab />;
       case 'budgetPlan':
         return <BudgetPlanTab />;
+      case 'exams':
+        return <ExamsDashboardTab />;
       case 'admin':
         return <AdminPanel />;
       case 'reports':
@@ -614,54 +664,58 @@ function NavigationWrapper() {
       {/* Main workspace layout */}
       <div className="flex-1 flex flex-col md:flex-row relative overflow-hidden">
         {/* Navigation Sidebar */}
-        <aside className="hidden md:flex w-64 bg-neutral-900 border-r-4 border-neutral-800 p-6 flex-col justify-between shrink-0">
-          <div className="space-y-8">
-            <div>
-              <h3 className="text-neutral-500 text-[10px] font-black uppercase tracking-widest mb-4">
-                Main Menu
-              </h3>
-              <nav className="space-y-2">
-                {visibleTabs.map(tab => {
-                  const active = activeTab === tab.id;
-                  
-                  return (
-                    <button
-                      key={tab.id}
-                      onClick={() => setActiveTab(tab.id as any)}
-                      className={`w-full text-left font-black text-lg tracking-tight transition-all flex items-center justify-between py-1 select-none border-l-4 pr-1.5 ${
-                        active
-                          ? 'text-amber-400 border-amber-400 pl-3'
-                          : 'text-neutral-500 hover:text-white border-transparent pl-3'
-                      }`}
-                    >
-                      <span className="uppercase">
-                        {tab.id === 'register' 
-                          ? 'Daily Check-In' 
-                          : tab.id === 'termPayers' 
-                          ? 'Term Payers Status' 
-                          : tab.id === 'dashboard' 
-                          ? 'Cash Flow Feed' 
-                          : tab.id === 'reports' 
-                          ? 'Audits & Exports' 
-                          : tab.id === 'budgetPlan'
-                          ? 'Target Budgets & Plans'
-                          : 'Staff & Pupils'}
+        <aside className="hidden md:flex w-[290px] bg-neutral-900 border-r-4 border-neutral-800 p-6 flex-col justify-between shrink-0 overflow-y-auto h-[calc(100vh-76px)] max-h-[calc(100vh-76px)]">
+          {/* Main Menu container - natural block height to prevent squishing or overlapping of bottom widgets */}
+          <div className="mb-6 shrink-0">
+            <h3 className="text-neutral-500 text-[10px] font-black uppercase tracking-widest mb-4">
+              Main Menu
+            </h3>
+            <nav className="space-y-2">
+              {visibleTabs.map(tab => {
+                const active = activeTab === tab.id;
+                
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id as any)}
+                    className={`w-full text-left font-black text-lg tracking-tight transition-all flex items-center justify-between py-1 select-none border-l-4 pr-1.5 ${
+                      active
+                        ? 'text-amber-400 border-amber-400 pl-3'
+                        : 'text-neutral-500 hover:text-white border-transparent pl-3'
+                    }`}
+                  >
+                    <span className="uppercase">
+                      {tab.id === 'register' 
+                        ? 'Daily Check-In' 
+                        : tab.id === 'termPayers' 
+                        ? 'Term Payers Status' 
+                        : tab.id === 'dashboard' 
+                        ? 'Cash Flow Feed' 
+                        : tab.id === 'reports' 
+                        ? 'Audits & Exports' 
+                        : tab.id === 'budgetPlan'
+                        ? 'Target Budgets & Plans'
+                        : tab.id === 'exams'
+                        ? 'Exams Ledger'
+                        : 'Staff & Pupils'}
+                    </span>
+                    {tab.id === 'admin' && totalAdminAlerts > 0 && (
+                      <span 
+                        id="admin-security-badge-indicator"
+                        className="bg-red-500 text-neutral-950 font-mono text-[9px] font-black px-1.5 py-0.5 min-w-[16px] h-4 flex items-center justify-center rounded-full animate-bounce shrink-0"
+                        title={`${unassignedCount} unassigned pupil(s), ${missingRegCount} missing registration(s) today`}
+                      >
+                        {totalAdminAlerts}
                       </span>
-                      {tab.id === 'admin' && totalAdminAlerts > 0 && (
-                        <span 
-                          id="admin-security-badge-indicator"
-                          className="bg-red-500 text-neutral-950 font-mono text-[9px] font-black px-1.5 py-0.5 min-w-[16px] h-4 flex items-center justify-center rounded-full animate-bounce shrink-0"
-                          title={`${unassignedCount} unassigned pupil(s), ${missingRegCount} missing registration(s) today`}
-                        >
-                          {totalAdminAlerts}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </nav>
-            </div>
+                    )}
+                  </button>
+                );
+              })}
+            </nav>
+          </div>
 
+          <div className="space-y-6 shrink-0">
+            <EnrollmentSummaryWidget students={students || []} />
             <div className="bg-neutral-800/60 p-4 border-l-4 border-amber-400 space-y-3">
               <p className="text-[11px] font-black text-neutral-300 leading-tight uppercase tracking-wide">
                 Daily Fee Baseline
@@ -671,7 +725,6 @@ function NavigationWrapper() {
               </p>
             </div>
           </div>
-
         </aside>
 
         {/* Dynamic Mobile Navigation Bar with Dynamic Overflow Menu */}
@@ -711,7 +764,15 @@ function NavigationWrapper() {
                   const activeOverflowTab = overflowTabs.find(tab => tab.id === activeTab);
                   const isOverflowActive = !!activeOverflowTab;
                   const labelToUse = isOverflowActive 
-                    ? (activeTab === 'dashboard' ? 'Trends' : activeTab === 'reports' ? 'Audits' : 'Enroll') 
+                    ? (activeTab === 'dashboard' 
+                        ? 'Trends' 
+                        : activeTab === 'reports' 
+                        ? 'Audits' 
+                        : activeTab === 'exams' 
+                        ? 'Exams' 
+                        : activeTab === 'budgetPlan' 
+                        ? 'Budgets' 
+                        : 'Enroll') 
                     : 'More';
                     
                   return (
@@ -776,6 +837,8 @@ function NavigationWrapper() {
                                           ? 'Audits & Exports' 
                                           : tab.id === 'budgetPlan'
                                           ? 'Target Budgets'
+                                          : tab.id === 'exams'
+                                          ? 'Exams Ledger'
                                           : 'Staff & Pupils'}
                                       </span>
                                     </span>
@@ -874,24 +937,30 @@ function NavigationWrapper() {
                   );
                 })}
               </nav>
+
+              <div className="pt-4 border-t border-neutral-800">
+                <EnrollmentSummaryWidget students={students || []} />
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
 
         {/* Dynamic content sandbox workspace */}
         <main className="flex-1 p-6 md:p-8 max-w-7xl mx-auto w-full overflow-y-auto">
-          <React.Suspense fallback={
-            <div className="flex bg-neutral-900 border-4 border-neutral-800 flex-col items-center justify-center p-8 min-h-[400px] font-mono animate-pulse">
-              <div className="flex flex-col items-center gap-4">
-                <div className="w-12 h-12 border-4 border-amber-400 border-t-transparent rounded-full animate-spin"></div>
-                <div className="text-[11px] font-black text-amber-400 uppercase tracking-widest">
-                  Initialising Ledger Workspace...
+          <ErrorBoundary fallbackTitle="LEDGER WORKSPACE AUDITS ERROR">
+            <React.Suspense fallback={
+              <div className="flex bg-neutral-900 border-4 border-neutral-800 flex-col items-center justify-center p-8 min-h-[400px] font-mono animate-pulse">
+                <div className="flex flex-col items-center gap-4">
+                  <div className="w-12 h-12 border-4 border-amber-400 border-t-transparent rounded-full animate-spin"></div>
+                  <div className="text-[11px] font-black text-amber-400 uppercase tracking-widest">
+                    Initialising Ledger Workspace...
+                  </div>
                 </div>
               </div>
-            </div>
-          }>
-            {renderTabContent()}
-          </React.Suspense>
+            }>
+              {renderTabContent()}
+            </React.Suspense>
+          </ErrorBoundary>
         </main>
       </div>
 

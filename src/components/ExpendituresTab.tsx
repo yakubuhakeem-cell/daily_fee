@@ -1671,23 +1671,83 @@ Thank you for your dedicated service to Saako Holy Child Academy!`}
                   {/* CSS Print Styles */}
                   <style>{`
                     @media print {
+                      @page {
+                        size: portrait;
+                        margin: 0 !important;
+                      }
+                      body {
+                        margin: 0 !important;
+                        padding: 0 !important;
+                        background: #ffffff !important;
+                        -webkit-print-color-adjust: exact !important;
+                        print-color-adjust: exact !important;
+                      }
                       body * {
                         visibility: hidden !important;
                       }
                       #printable-salary-voucher-content, #printable-salary-voucher-content * {
                         visibility: visible !important;
                       }
+                      /* Hide the modal's native close button, header, and buttons footer during printing to free up vertical space */
+                      #salary-voucher-modal button,
+                      #salary-voucher-modal > div > div:first-of-type,
+                      #salary-voucher-modal > div > div:last-of-type {
+                        display: none !important;
+                      }
+                      /* Collapse layout of modal ancestors in print mode to prevent any top offset */
+                      #salary-voucher-modal,
+                      #salary-voucher-modal > div,
+                      #salary-voucher-modal > div > div {
+                        position: static !important;
+                        padding: 0 !important;
+                        margin: 0 !important;
+                        border: none !important;
+                        box-shadow: none !important;
+                        height: auto !important;
+                        max-height: none !important;
+                        overflow: visible !important;
+                      }
                       #printable-salary-voucher-content {
-                        position: absolute;
-                        left: 0;
-                        top: 0;
+                        position: fixed !important;
+                        left: 0 !important;
+                        top: 0 !important;
                         width: 100% !important;
+                        max-width: 100% !important;
                         background: #ffffff !important;
                         color: #000000 !important;
                         border: none !important;
-                        padding: 0 !important;
+                        padding: 10mm 15mm 10mm 15mm !important;
                         margin: 0 !important;
+                        box-sizing: border-box !important;
                       }
+                      /* Force single page layout adjustments to prevent spillover */
+                      .print\\:mb-1 { margin-bottom: 4px !important; }
+                      .print\\:mb-2 { margin-bottom: 8px !important; }
+                      .print\\:mb-3 { margin-bottom: 12px !important; }
+                      .print\\:mt-1 { margin-top: 4px !important; }
+                      .print\\:mt-2 { margin-top: 8px !important; }
+                      .print\\:mt-3 { margin-top: 12px !important; }
+                      .print\\:py-0\\.5 { padding-top: 2px !important; padding-bottom: 2px !important; }
+                      .print\\:py-1 { padding-top: 4px !important; padding-bottom: 4px !important; }
+                      .print\\:py-1\\.5 { padding-top: 6px !important; padding-bottom: 6px !important; }
+                      .print\\:py-2 { padding-top: 8px !important; padding-bottom: 8px !important; }
+                      .print\\:p-1\\.5 { padding: 6px !important; }
+                      .print\\:p-2 { padding: 8px !important; }
+                      .print\\:p-3 { padding: 12px !important; }
+                      .print\\:pb-1 { padding-bottom: 4px !important; }
+                      .print\\:pb-2 { padding-bottom: 8px !important; }
+                      .print\\:text-[7px] { font-size: 7px !important; }
+                      .print\\:text-[8px] { font-size: 8px !important; }
+                      .print\\:text-[9px] { font-size: 9px !important; }
+                      .print\\:text-xs { font-size: 10px !important; }
+                      .print\\:text-sm { font-size: 11px !important; }
+                      .print\\:text-base { font-size: 14px !important; }
+                      .print\\:text-lg { font-size: 16px !important; }
+                      .print\\:text-xl { font-size: 18px !important; }
+                      .print\\:gap-1.5 { gap: 6px !important; }
+                      .print\\:gap-2 { gap: 8px !important; }
+                      .print\\:gap-3 { gap: 12px !important; }
+
                       .print\\:no-print {
                         display: none !important;
                       }
@@ -1707,19 +1767,19 @@ Thank you for your dedicated service to Saako Holy Child Academy!`}
                   `}</style>
 
                   {/* Document Header for Printing */}
-                  <div className="mb-6 border-b-2 border-dashed border-neutral-800 pb-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 print:border-black">
+                  <div className="mb-6 border-b-2 border-dashed border-neutral-800 pb-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 print:border-black print:mb-2 print:pb-2">
                     <div>
-                      <h1 className="text-base font-black text-white uppercase tracking-wider font-mono print:text-black">
+                      <h1 className="text-base font-black text-white uppercase tracking-wider font-mono print:text-black print:text-sm">
                         SAAKO HOLY CHILD ACADEMY
                       </h1>
-                      <p className="text-[9px] text-neutral-400 font-bold uppercase tracking-tight print:text-black">
+                      <p className="text-[9px] text-neutral-400 font-bold uppercase tracking-tight print:text-black print:text-[8px]">
                         Registry Division & Payroll Bureau
                       </p>
-                      <p className="text-[9px] text-amber-400 font-mono font-black uppercase mt-1 print:text-black">
+                      <p className="text-[9px] text-amber-400 font-mono font-black uppercase mt-1 print:text-black print:text-[8px] print:mt-0.5">
                         Salary Slip Ref: {voucherRefId}
                       </p>
                     </div>
-                    <div className="text-left sm:text-right font-mono text-[9px] text-neutral-400 print:text-black">
+                    <div className="text-left sm:text-right font-mono text-[9px] text-neutral-400 print:text-black print:text-[8px]">
                       <div>Execution Date: <span className="text-white font-black print:text-black">{selectedVoucherSalary.date}</span></div>
                       <div>Disbursement: <span className="text-emerald-400 font-black uppercase print:text-black">{selectedVoucherSalary.paymentMethod}</span></div>
                       <div>System Status: <span className="text-emerald-400 font-black uppercase print:text-black">Disbursed</span></div>
@@ -1727,14 +1787,14 @@ Thank you for your dedicated service to Saako Holy Child Academy!`}
                   </div>
 
                   {/* Employee Info Block */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-neutral-900/40 border border-neutral-850 p-4 mb-6 print:bg-white print:border-black print:text-black">
-                    <div className="space-y-1 font-mono text-[11px] text-left">
-                      <div className="text-neutral-500 uppercase text-[8px] font-black tracking-widest print:text-neutral-600">Employee Details</div>
-                      <div className="text-sm font-black text-white print:text-black">{selectedVoucherSalary.workerName}</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-neutral-900/40 border border-neutral-850 p-4 mb-6 print:bg-white print:border-black print:text-black print:p-2 print:mb-2 print:gap-1.5">
+                    <div className="space-y-1 font-mono text-[11px] text-left print:text-[9px]">
+                      <div className="text-neutral-500 uppercase text-[8px] font-black tracking-widest print:text-neutral-600 print:text-[7px]">Employee Details</div>
+                      <div className="text-sm font-black text-white print:text-black print:text-xs">{selectedVoucherSalary.workerName}</div>
                       <div className="text-neutral-400 font-bold print:text-black">Role: {selectedVoucherSalary.role}</div>
                     </div>
-                    <div className="space-y-1 font-mono text-[11px] sm:text-right text-left">
-                      <div className="text-neutral-500 uppercase text-[8px] font-black tracking-widest print:text-neutral-600">Disbursement Metadata</div>
+                    <div className="space-y-1 font-mono text-[11px] sm:text-right text-left print:text-[9px]">
+                      <div className="text-neutral-500 uppercase text-[8px] font-black tracking-widest print:text-neutral-600 print:text-[7px]">Disbursement Metadata</div>
                       <div className="text-neutral-300 font-bold print:text-black">Pay Period: <span className="text-white font-black print:text-black">{selectedVoucherSalary.monthYear}</span></div>
                       {selectedVoucherSalary.paymentMethod === 'Mobile Money' && selectedVoucherSalary.momoNumber && (
                         <div className="text-amber-400 font-bold print:text-black">☎ Momo: {selectedVoucherSalary.momoNumber} {selectedVoucherSalary.momoName ? `(${selectedVoucherSalary.momoName})` : ''}</div>
@@ -1743,47 +1803,47 @@ Thank you for your dedicated service to Saako Holy Child Academy!`}
                   </div>
 
                   {/* Calculations Details Table */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6 print:border-black font-mono text-xs">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6 print:border-black font-mono text-xs print:gap-3 print:mb-2">
                     {/* Additions Column */}
-                    <div className="border border-neutral-800 rounded p-4 bg-neutral-900/20 print:border-black print:bg-white text-left">
-                      <h4 className="text-[10px] font-black uppercase tracking-widest text-emerald-400 pb-2 border-b border-neutral-800 print:text-black print:border-black flex items-center gap-1">
+                    <div className="border border-neutral-800 rounded p-4 bg-neutral-900/20 print:border-black print:bg-white text-left print:p-2">
+                      <h4 className="text-[10px] font-black uppercase tracking-widest text-emerald-400 pb-2 border-b border-neutral-800 print:text-black print:border-black flex items-center gap-1 print:pb-1 print:text-[8px]">
                         <span>Earnings & Additions</span>
                         <span className="text-neutral-500 ml-auto font-sans font-bold">(+)</span>
                       </h4>
-                      <table className="w-full text-left mt-3 text-[11px] space-y-1.5 border-collapse">
+                      <table className="w-full text-left mt-3 text-[11px] space-y-1.5 border-collapse print:mt-1 print:text-[8px]">
                         <tbody>
-                          <tr className="border-b border-neutral-850/50 print:border-neutral-200">
-                            <td className="py-1.5 text-neutral-400 print:text-black">Base Salary/Stipend</td>
-                            <td className="py-1.5 text-right text-white print:text-black font-bold">GHC {selectedVoucherSalary.baseSalary.toFixed(2)}</td>
+                          <tr className="border-b border-neutral-855/50 print:border-neutral-200">
+                            <td className="py-1.5 text-neutral-400 print:text-black print:py-0.5">Base Salary/Stipend</td>
+                            <td className="py-1.5 text-right text-white print:text-black font-bold print:py-0.5">GHC {selectedVoucherSalary.baseSalary.toFixed(2)}</td>
                           </tr>
                           {selectedVoucherSalary.allowance > 0 && (
-                            <tr className="border-b border-neutral-850/50 print:border-neutral-200">
-                              <td className="py-1.5 text-neutral-400 print:text-black">General Allowance</td>
-                              <td className="py-1.5 text-right text-emerald-400 print:text-black font-bold">+GHC {selectedVoucherSalary.allowance.toFixed(2)}</td>
+                            <tr className="border-b border-neutral-855/50 print:border-neutral-200">
+                              <td className="py-1.5 text-neutral-400 print:text-black print:py-0.5">General Allowance</td>
+                              <td className="py-1.5 text-right text-emerald-400 print:text-black font-bold print:py-0.5">+GHC {selectedVoucherSalary.allowance.toFixed(2)}</td>
                             </tr>
                           )}
                           {selectedVoucherSalary.responsibilityAllowance && selectedVoucherSalary.responsibilityAllowance > 0 ? (
-                            <tr className="border-b border-neutral-850/50 print:border-neutral-200">
-                              <td className="py-1.5 text-neutral-400 print:text-black">Responsibility Allowance</td>
-                              <td className="py-1.5 text-right text-emerald-400 print:text-black font-bold">+GHC {selectedVoucherSalary.responsibilityAllowance.toFixed(2)}</td>
+                            <tr className="border-b border-neutral-855/50 print:border-neutral-200">
+                              <td className="py-1.5 text-neutral-400 print:text-black print:py-0.5">Responsibility Allowance</td>
+                              <td className="py-1.5 text-right text-emerald-400 print:text-black font-bold print:py-0.5">+GHC {selectedVoucherSalary.responsibilityAllowance.toFixed(2)}</td>
                             </tr>
                           ) : null}
                           {selectedVoucherSalary.transportAllowance && selectedVoucherSalary.transportAllowance > 0 ? (
-                            <tr className="border-b border-neutral-850/50 print:border-neutral-200">
-                              <td className="py-1.5 text-neutral-400 print:text-black">Transport Allowance</td>
-                              <td className="py-1.5 text-right text-emerald-400 print:text-black font-bold">+GHC {selectedVoucherSalary.transportAllowance.toFixed(2)}</td>
+                            <tr className="border-b border-neutral-855/50 print:border-neutral-200">
+                              <td className="py-1.5 text-neutral-400 print:text-black print:py-0.5">Transport Allowance</td>
+                              <td className="py-1.5 text-right text-emerald-400 print:text-black font-bold print:py-0.5">+GHC {selectedVoucherSalary.transportAllowance.toFixed(2)}</td>
                             </tr>
                           ) : null}
                           {selectedVoucherSalary.rentAllowance && selectedVoucherSalary.rentAllowance > 0 ? (
-                            <tr className="border-b border-neutral-850/50 print:border-neutral-200">
-                              <td className="py-1.5 text-neutral-400 print:text-black">Housing/Rent Allowance</td>
-                              <td className="py-1.5 text-right text-emerald-400 print:text-black font-bold">+GHC {selectedVoucherSalary.rentAllowance.toFixed(2)}</td>
+                            <tr className="border-b border-neutral-855/50 print:border-neutral-200">
+                              <td className="py-1.5 text-neutral-400 print:text-black print:py-0.5">Housing/Rent Allowance</td>
+                              <td className="py-1.5 text-right text-emerald-400 print:text-black font-bold print:py-0.5">+GHC {selectedVoucherSalary.rentAllowance.toFixed(2)}</td>
                             </tr>
                           ) : null}
                           {selectedVoucherSalary.momoFeeAbsorbed && selectedVoucherSalary.momoFeeAbsorbed > 0 ? (
-                            <tr className="border-b border-neutral-850/50 print:border-neutral-200">
-                              <td className="py-1.5 text-neutral-400 print:text-black">MoMo Fee Reimbursement</td>
-                              <td className="py-1.5 text-right text-emerald-400 print:text-black font-bold">+GHC {selectedVoucherSalary.momoFeeAbsorbed.toFixed(2)}</td>
+                            <tr className="border-b border-neutral-855/50 print:border-neutral-200">
+                              <td className="py-1.5 text-neutral-400 print:text-black print:py-0.5">MoMo Fee Reimbursement</td>
+                              <td className="py-1.5 text-right text-emerald-400 print:text-black font-bold print:py-0.5">+GHC {selectedVoucherSalary.momoFeeAbsorbed.toFixed(2)}</td>
                             </tr>
                           ) : null}
                         </tbody>
@@ -1791,41 +1851,41 @@ Thank you for your dedicated service to Saako Holy Child Academy!`}
                     </div>
 
                     {/* Deductions Column */}
-                    <div className="border border-neutral-800 rounded p-4 bg-neutral-900/20 print:border-black print:bg-white text-left">
-                      <h4 className="text-[10px] font-black uppercase tracking-widest text-red-400 pb-2 border-b border-neutral-800 print:text-black print:border-black flex items-center gap-1">
+                    <div className="border border-neutral-800 rounded p-4 bg-neutral-900/20 print:border-black print:bg-white text-left print:p-2">
+                      <h4 className="text-[10px] font-black uppercase tracking-widest text-red-400 pb-2 border-b border-neutral-800 print:text-black print:border-black flex items-center gap-1 print:pb-1 print:text-[8px]">
                         <span>Statutory Deductions</span>
                         <span className="text-neutral-500 ml-auto font-sans font-bold">(-)</span>
                       </h4>
-                      <table className="w-full text-left mt-3 text-[11px] space-y-1.5 border-collapse">
+                      <table className="w-full text-left mt-3 text-[11px] space-y-1.5 border-collapse print:mt-1 print:text-[8px]">
                         <tbody>
                           {selectedVoucherSalary.deduction > 0 && (
-                            <tr className="border-b border-neutral-850/50 print:border-neutral-200">
-                              <td className="py-1.5 text-neutral-400 print:text-black">General Deduction</td>
-                              <td className="py-1.5 text-right text-red-400 print:text-black font-bold">-GHC {selectedVoucherSalary.deduction.toFixed(2)}</td>
+                            <tr className="border-b border-neutral-855/50 print:border-neutral-200">
+                              <td className="py-1.5 text-neutral-400 print:text-black print:py-0.5">General Deduction</td>
+                              <td className="py-1.5 text-right text-red-400 print:text-black font-bold print:py-0.5">-GHC {selectedVoucherSalary.deduction.toFixed(2)}</td>
                             </tr>
                           )}
                           {selectedVoucherSalary.ssnitDeduction && selectedVoucherSalary.ssnitDeduction > 0 ? (
-                            <tr className="border-b border-neutral-850/50 print:border-neutral-200">
-                              <td className="py-1.5 text-neutral-400 print:text-black">SSNIT Pension contribution</td>
-                              <td className="py-1.5 text-right text-red-400 print:text-black font-bold">-GHC {selectedVoucherSalary.ssnitDeduction.toFixed(2)}</td>
+                            <tr className="border-b border-neutral-855/50 print:border-neutral-200">
+                              <td className="py-1.5 text-neutral-400 print:text-black print:py-0.5">SSNIT Pension contribution</td>
+                              <td className="py-1.5 text-right text-red-400 print:text-black font-bold print:py-0.5">-GHC {selectedVoucherSalary.ssnitDeduction.toFixed(2)}</td>
                             </tr>
                           ) : null}
                           {selectedVoucherSalary.incomeTaxDeduction && selectedVoucherSalary.incomeTaxDeduction > 0 ? (
-                            <tr className="border-b border-neutral-850/50 print:border-neutral-200">
-                              <td className="py-1.5 text-neutral-400 print:text-black">Income Tax / PAYE</td>
-                              <td className="py-1.5 text-right text-red-400 print:text-black font-bold">-GHC {selectedVoucherSalary.incomeTaxDeduction.toFixed(2)}</td>
+                            <tr className="border-b border-neutral-855/50 print:border-neutral-200">
+                              <td className="py-1.5 text-neutral-400 print:text-black print:py-0.5">Income Tax / PAYE</td>
+                              <td className="py-1.5 text-right text-red-400 print:text-black font-bold print:py-0.5">-GHC {selectedVoucherSalary.incomeTaxDeduction.toFixed(2)}</td>
                             </tr>
                           ) : null}
                           {selectedVoucherSalary.welfareDeduction && selectedVoucherSalary.welfareDeduction > 0 ? (
-                            <tr className="border-b border-neutral-850/50 print:border-neutral-200">
-                              <td className="py-1.5 text-neutral-400 print:text-black">Welfare contribution</td>
-                              <td className="py-1.5 text-right text-red-400 print:text-black font-bold">-GHC {selectedVoucherSalary.welfareDeduction.toFixed(2)}</td>
+                            <tr className="border-b border-neutral-855/50 print:border-neutral-200">
+                              <td className="py-1.5 text-neutral-400 print:text-black print:py-0.5">Welfare contribution</td>
+                              <td className="py-1.5 text-right text-red-400 print:text-black font-bold print:py-0.5">-GHC {selectedVoucherSalary.welfareDeduction.toFixed(2)}</td>
                             </tr>
                           ) : null}
                           {selectedVoucherSalary.healthInsDeduction && selectedVoucherSalary.healthInsDeduction > 0 ? (
-                            <tr className="border-b border-neutral-850/50 print:border-neutral-200">
-                              <td className="py-1.5 text-neutral-400 print:text-black">Health Insurance (NHIS)</td>
-                              <td className="py-1.5 text-right text-red-400 print:text-black font-bold">-GHC {selectedVoucherSalary.healthInsDeduction.toFixed(2)}</td>
+                            <tr className="border-b border-neutral-855/50 print:border-neutral-200">
+                              <td className="py-1.5 text-neutral-400 print:text-black print:py-0.5">Health Insurance (NHIS)</td>
+                              <td className="py-1.5 text-right text-red-400 print:text-black font-bold print:py-0.5">-GHC {selectedVoucherSalary.healthInsDeduction.toFixed(2)}</td>
                             </tr>
                           ) : null}
                         </tbody>
@@ -1834,28 +1894,28 @@ Thank you for your dedicated service to Saako Holy Child Academy!`}
                   </div>
 
                   {/* Net Summary block */}
-                  <div className="bg-neutral-900 border-2 border-neutral-800 p-4 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3.5 mb-6 print:border-black print:bg-white print:text-black text-left">
-                    <span className="text-[11px] font-black uppercase text-neutral-400 font-mono print:text-black">Calculated Net Transferred Wage:</span>
-                    <strong className="text-xl font-black text-amber-400 font-mono print:text-black">GHC {selectedVoucherSalary.netPaid.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                  <div className="bg-neutral-900 border-2 border-neutral-800 p-4 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3.5 mb-6 print:border-black print:bg-white print:text-black text-left print:p-2 print:mb-2 print:gap-1.5">
+                    <span className="text-[11px] font-black uppercase text-neutral-400 font-mono print:text-black print:text-[10px]">Calculated Net Transferred Wage:</span>
+                    <strong className="text-xl font-black text-amber-400 font-mono print:text-black print:text-sm">GHC {selectedVoucherSalary.netPaid.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
                   </div>
 
                   {/* ALL-TIME LEDGER STATISTICS SUMMARY SECTION (Requirement 3) */}
-                  <div className="border-t-2 border-neutral-800 pt-5 mt-5 print:border-black print:text-black text-left">
-                    <h3 className="text-xs font-black uppercase tracking-widest text-amber-400 font-mono mb-3.5 flex items-center gap-2 print:text-black">
+                  <div className="border-t-2 border-neutral-800 pt-5 mt-5 print:border-black print:text-black text-left print:pt-2 print:mt-2">
+                    <h3 className="text-xs font-black uppercase tracking-widest text-amber-400 font-mono mb-3.5 flex items-center gap-2 print:text-black print:text-[10px] print:mb-1.5">
                       <Sparkles size={13} />
                       <span>Employee All-Time Ledger Summary</span>
                     </h3>
                     
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-                      <div className="bg-neutral-900/60 p-3.5 border border-neutral-850 print:border-black print:bg-white print:text-black">
-                        <span className="text-[8px] text-neutral-500 uppercase font-black tracking-widest block font-sans print:text-black">Cumulative Sum Disbursed To Date</span>
-                        <strong className="text-sm text-emerald-400 font-mono font-black mt-1 block print:text-black">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4 print:gap-2 print:mb-2">
+                      <div className="bg-neutral-900/60 p-3.5 border border-neutral-850 print:border-black print:bg-white print:text-black print:p-1.5">
+                        <span className="text-[8px] text-neutral-500 uppercase font-black tracking-widest block font-sans print:text-black print:text-[7px]">Cumulative Sum Disbursed To Date</span>
+                        <strong className="text-sm text-emerald-400 font-mono font-black mt-1 block print:text-black print:text-[10px]">
                           GHC {allTimePaidSum.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </strong>
                       </div>
-                      <div className="bg-neutral-900/60 p-3.5 border border-neutral-850 print:border-black print:bg-white print:text-black">
-                        <span className="text-[8px] text-neutral-500 uppercase font-black tracking-widest block font-sans print:text-black">Total Verified Salary Periods</span>
-                        <strong className="text-sm text-white font-mono font-black mt-1 block print:text-black">
+                      <div className="bg-neutral-900/60 p-3.5 border border-neutral-850 print:border-black print:bg-white print:text-black print:p-1.5">
+                        <span className="text-[8px] text-neutral-500 uppercase font-black tracking-widest block font-sans print:text-black print:text-[7px]">Total Verified Salary Periods</span>
+                        <strong className="text-sm text-white font-mono font-black mt-1 block print:text-black print:text-[10px]">
                           {workerPastPayments.length} Month Period(s) Paid
                         </strong>
                       </div>
@@ -1863,34 +1923,34 @@ Thank you for your dedicated service to Saako Holy Child Academy!`}
 
                     {/* Past Payments Small Table */}
                     {workerPastPayments.length <= 1 ? (
-                      <p className="text-[10px] text-neutral-500 italic font-medium print:text-black">
+                      <p className="text-[10px] text-neutral-500 italic font-medium print:text-black print:text-[8px]">
                         * Note: This represents the first registered salary disbursement entry for this employee profile.
                       </p>
                     ) : (
-                      <div className="border border-neutral-850 overflow-x-auto print:border-black">
-                        <table className="w-full text-left font-mono text-[10px] border-collapse">
+                      <div className="border border-neutral-850 overflow-x-auto print:border-black print:text-[8px]">
+                        <table className="w-full text-left font-mono text-[10px] border-collapse print:text-[8px]">
                           <thead>
-                            <tr className="bg-neutral-900 border-b border-neutral-850 uppercase tracking-widest text-[8px] text-neutral-500 font-black print:bg-white print:border-black print:text-black">
-                              <th className="px-3 py-2 border-r border-neutral-850 print:border-black">Pay Period</th>
-                              <th className="px-3 py-2 border-r border-neutral-850 print:border-black">Disbursement Date</th>
-                              <th className="px-3 py-2 border-r border-neutral-850 print:border-black">Payment Method</th>
-                              <th className="px-3 py-2 text-right">Net Paid (GHC)</th>
+                            <tr className="bg-neutral-900 border-b border-neutral-850 uppercase tracking-widest text-[8px] text-neutral-500 font-black print:bg-white print:border-black print:text-black print:text-[7px]">
+                              <th className="px-3 py-2 border-r border-neutral-850 print:border-black print:px-1.5 print:py-1">Pay Period</th>
+                              <th className="px-3 py-2 border-r border-neutral-850 print:border-black print:px-1.5 print:py-1">Disbursement Date</th>
+                              <th className="px-3 py-2 border-r border-neutral-850 print:border-black print:px-1.5 print:py-1">Payment Method</th>
+                              <th className="px-3 py-2 text-right print:px-1.5 print:py-1">Net Paid (GHC)</th>
                             </tr>
                           </thead>
                           <tbody>
                             {workerPastPayments.map((item, idx) => (
                               <tr 
                                 key={item.id} 
-                                className={`border-b border-neutral-850 hover:bg-neutral-900/30 transition-colors print:border-black print:bg-white print:text-black ${
-                                  item.id === selectedVoucherSalary.id ? 'bg-amber-400/5 print:bg-neutral-200' : ''
+                                className={`border-b border-neutral-855 hover:bg-neutral-900/30 transition-colors print:border-black print:bg-white print:text-black ${
+                                  item.id === selectedVoucherSalary.id ? 'bg-amber-400/5 print:bg-neutral-100' : ''
                                 }`}
                               >
-                                <td className="px-3 py-1.5 font-bold border-r border-neutral-855 print:border-black text-neutral-200 print:text-black">
+                                <td className="px-3 py-1.5 font-bold border-r border-neutral-855 print:border-black text-neutral-200 print:text-black print:px-1.5 print:py-0.5 print:text-[8px]">
                                   {item.monthYear} {item.id === selectedVoucherSalary.id ? ' (Current)' : ''}
                                 </td>
-                                <td className="px-3 py-1.5 border-r border-neutral-855 print:border-black text-neutral-400 print:text-black">{item.date}</td>
-                                <td className="px-3 py-1.5 border-r border-neutral-855 print:border-black text-neutral-400 print:text-black">{item.paymentMethod}</td>
-                                <td className="px-3 py-1.5 text-right font-bold text-neutral-200 print:text-black">GHC {item.netPaid.toFixed(2)}</td>
+                                <td className="px-3 py-1.5 border-r border-neutral-855 print:border-black text-neutral-400 print:text-black print:px-1.5 print:py-0.5 print:text-[8px]">{item.date}</td>
+                                <td className="px-3 py-1.5 border-r border-neutral-855 print:border-black text-neutral-400 print:text-black print:px-1.5 print:py-0.5 print:text-[8px]">{item.paymentMethod}</td>
+                                <td className="px-3 py-1.5 text-right font-bold text-neutral-200 print:text-black print:px-1.5 print:py-0.5 print:text-[8px]">GHC {item.netPaid.toFixed(2)}</td>
                               </tr>
                             ))}
                           </tbody>
@@ -1900,16 +1960,16 @@ Thank you for your dedicated service to Saako Holy Child Academy!`}
                   </div>
 
                   {/* Signatures block for printing */}
-                  <div className="mt-10 hidden print:flex justify-between items-center text-[9px] font-mono border-t border-neutral-300 pt-6 print:text-black print:border-black">
+                  <div className="mt-10 hidden print:flex print-signature-block justify-between items-center text-[9px] font-mono border-t border-neutral-300 pt-6 print:text-black print:border-black print:pt-2 print:text-[8px]">
                     <div>
                       <div className="border-b border-black w-40 mb-1" />
                       <p className="font-bold text-neutral-600">Authorized Accountant Stamp</p>
-                      <p className="text-[8px] text-neutral-400">Saako Holy Child Registry</p>
+                      <p className="text-[8px] text-neutral-400 print:text-[7px]">Saako Holy Child Registry</p>
                     </div>
                     <div className="text-right">
                       <div className="border-b border-black w-40 mb-1 ml-auto" />
                       <p className="font-bold text-neutral-600">Employee Acknowledged Sign</p>
-                      <p className="text-[8px] text-neutral-400">{selectedVoucherSalary.workerName}</p>
+                      <p className="text-[8px] text-neutral-400 print:text-[7px]">{selectedVoucherSalary.workerName}</p>
                     </div>
                   </div>
                 </div>
@@ -1927,7 +1987,14 @@ Thank you for your dedicated service to Saako Holy Child Academy!`}
                 </button>
                 <button
                   type="button"
-                  onClick={() => window.print()}
+                  onClick={() => {
+                    const originalTitle = document.title;
+                    document.title = ""; // Temporarily completely blanks out the window/document title so the browser print header is empty
+                    window.print();
+                    setTimeout(() => {
+                      document.title = originalTitle;
+                    }, 150);
+                  }}
                   className="bg-amber-500 hover:bg-amber-400 text-neutral-950 font-black px-4 py-2.5 text-[10px] font-mono uppercase tracking-wider transition-all cursor-pointer rounded-xs flex items-center gap-1.5 border-b-2 border-amber-700"
                 >
                   <Printer size={13} />

@@ -6,7 +6,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { SystemSettings } from '../types';
-import { Save, RefreshCw, Check, Landmark, School, Sparkles, Info, Palette } from 'lucide-react';
+import { Save, RefreshCw, Check, Landmark, School, Sparkles, Info, Palette, Clock } from 'lucide-react';
 import { SchoolLogo } from './SchoolLogo';
 
 export const SettingsPanel: React.FC = () => {
@@ -20,6 +20,9 @@ export const SettingsPanel: React.FC = () => {
   const [schoolLogoUrl, setSchoolLogoUrl] = useState(systemSettings?.schoolLogoUrl || '');
   const [baselineDailyFee, setBaselineDailyFee] = useState(systemSettings?.baselineDailyFee ?? 5.00);
   const [baselineTermFee, setBaselineTermFee] = useState(systemSettings?.baselineTermFee ?? 350.00);
+  const [baselineTermFeePreSchool, setBaselineTermFeePreSchool] = useState(systemSettings?.baselineTermFeePreSchool ?? 250.00);
+  const [baselineTermFeePrimary, setBaselineTermFeePrimary] = useState(systemSettings?.baselineTermFeePrimary ?? 350.00);
+  const [baselineTermFeeJhs, setBaselineTermFeeJhs] = useState(systemSettings?.baselineTermFeeJhs ?? 450.00);
   const [currencyCode, setCurrencyCode] = useState(systemSettings?.currencyCode || 'GHC');
   const [customMotto, setCustomMotto] = useState(systemSettings?.customMotto || 'Holiness Is Our Key');
   const [customLocation, setCustomLocation] = useState(systemSettings?.customLocation || 'Sawla');
@@ -27,6 +30,12 @@ export const SettingsPanel: React.FC = () => {
   const [adminWhatsAppPhone, setAdminWhatsAppPhone] = useState(systemSettings?.adminWhatsAppPhone || '');
   const [autoSendCheckInAlert, setLocalAutoSendCheckInAlert] = useState(systemSettings?.autoSendCheckInAlert ?? false);
   const [autoSendArrearsAlert, setLocalAutoSendArrearsAlert] = useState(systemSettings?.autoSendArrearsAlert ?? false);
+  const [termDiscountEnabled, setTermDiscountEnabled] = useState(systemSettings?.termDiscountEnabled ?? false);
+  const [termDiscountWeek, setTermDiscountWeek] = useState(systemSettings?.termDiscountWeek ?? 1);
+  const [termDiscountPercentage, setTermDiscountPercentage] = useState(systemSettings?.termDiscountPercentage ?? 10);
+  const [lateFeeEnabled, setLateFeeEnabled] = useState(systemSettings?.lateFeeEnabled ?? false);
+  const [lateFeeCutoffTime, setLateFeeCutoffTime] = useState(systemSettings?.lateFeeCutoffTime || '08:30');
+  const [lateFeePercentage, setLateFeePercentage] = useState(systemSettings?.lateFeePercentage ?? 10);
 
   // Sub-tabs state
   const [activeSubTab, setActiveSubTab] = useState<'financial' | 'appearance'>('appearance');
@@ -40,6 +49,9 @@ export const SettingsPanel: React.FC = () => {
       schoolLogoUrl: '',
       baselineDailyFee: 5.00,
       baselineTermFee: 350.00,
+      baselineTermFeePreSchool: 250.00,
+      baselineTermFeePrimary: 350.00,
+      baselineTermFeeJhs: 450.00,
       currencyCode: 'GHC',
       customMotto: 'Holiness Is Our Key',
       customLocation: 'Sawla',
@@ -52,6 +64,9 @@ export const SettingsPanel: React.FC = () => {
       schoolLogoUrl: 'https://images.unsplash.com/photo-1594708767771-a7502209ff51?w=150&auto=format&fit=crop&q=60',
       baselineDailyFee: 10.00,
       baselineTermFee: 750.00,
+      baselineTermFeePreSchool: 500.00,
+      baselineTermFeePrimary: 750.00,
+      baselineTermFeeJhs: 950.00,
       currencyCode: 'GHC',
       customMotto: 'Striving For Excellence',
       customLocation: 'Accra',
@@ -64,6 +79,9 @@ export const SettingsPanel: React.FC = () => {
       schoolLogoUrl: 'https://images.unsplash.com/photo-1516627145497-ae6968895b74?w=150&auto=format&fit=crop&q=60',
       baselineDailyFee: 4.00,
       baselineTermFee: 300.00,
+      baselineTermFeePreSchool: 200.00,
+      baselineTermFeePrimary: 300.00,
+      baselineTermFeeJhs: 400.00,
       currencyCode: 'GHC',
       customMotto: 'Knowledge is Power',
       customLocation: 'Kumasi',
@@ -76,6 +94,9 @@ export const SettingsPanel: React.FC = () => {
       schoolLogoUrl: 'https://images.unsplash.com/photo-1546410531-bb4caa6b424d?w=150&auto=format&fit=crop&q=60',
       baselineDailyFee: 20.00,
       baselineTermFee: 1500.00,
+      baselineTermFeePreSchool: 1000.00,
+      baselineTermFeePrimary: 1500.00,
+      baselineTermFeeJhs: 1800.00,
       currencyCode: 'USD',
       customMotto: 'Lead, Learn, Inspire',
       customLocation: 'Sawla District',
@@ -89,10 +110,16 @@ export const SettingsPanel: React.FC = () => {
     setSchoolLogoUrl(preset.schoolLogoUrl);
     setBaselineDailyFee(preset.baselineDailyFee);
     setBaselineTermFee(preset.baselineTermFee);
+    setBaselineTermFeePreSchool(preset.baselineTermFeePreSchool);
+    setBaselineTermFeePrimary(preset.baselineTermFeePrimary);
+    setBaselineTermFeeJhs(preset.baselineTermFeeJhs);
     setCurrencyCode(preset.currencyCode);
     setCustomMotto(preset.customMotto);
     setCustomLocation(preset.customLocation);
     setPrimaryColor(preset.primaryColor);
+    setLateFeeEnabled(false);
+    setLateFeeCutoffTime('08:30');
+    setLateFeePercentage(10);
     
     playFeedbackSound('success');
   };
@@ -108,13 +135,22 @@ export const SettingsPanel: React.FC = () => {
       schoolLogoUrl,
       baselineDailyFee: Number(baselineDailyFee),
       baselineTermFee: Number(baselineTermFee),
+      baselineTermFeePreSchool: Number(baselineTermFeePreSchool),
+      baselineTermFeePrimary: Number(baselineTermFeePrimary),
+      baselineTermFeeJhs: Number(baselineTermFeeJhs),
       currencyCode,
       customMotto,
       customLocation,
       primaryColor,
       adminWhatsAppPhone,
       autoSendCheckInAlert,
-      autoSendArrearsAlert
+      autoSendArrearsAlert,
+      termDiscountEnabled,
+      termDiscountWeek: Number(termDiscountWeek),
+      termDiscountPercentage: Number(termDiscountPercentage),
+      lateFeeEnabled,
+      lateFeeCutoffTime,
+      lateFeePercentage: Number(lateFeePercentage)
     };
 
     const isOk = await updateSystemSettings(payload);
@@ -418,7 +454,7 @@ export const SettingsPanel: React.FC = () => {
 
                 <div>
                   <label className="block text-xs font-mono font-bold text-neutral-400 uppercase tracking-wider mb-1">
-                    Baseline Term Subscription Fee
+                    Baseline Term Subscription Fee (Fallback)
                   </label>
                   <div className="relative">
                     <span className="absolute left-3 top-2.5 text-xs font-mono font-bold text-neutral-500">
@@ -436,8 +472,86 @@ export const SettingsPanel: React.FC = () => {
                     />
                   </div>
                   <p className="text-[10px] text-neutral-500 mt-1">
-                    Default billing amount charged per academic term for pupils subscribed under the static Term Payer scheme. (E.g. GHC 350)
+                    Ultimate default billing amount charged per academic term for pupils subscribed under the static Term Payer scheme.
                   </p>
+                </div>
+
+                <div className="border-t border-neutral-800/60 pt-4 space-y-4">
+                  <h4 className="text-[10px] font-black uppercase tracking-wider text-amber-500">Category Specific Term Fees</h4>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-[10px] font-mono font-bold text-neutral-400 uppercase tracking-wider mb-1">
+                        Pre-School Term Fee
+                      </label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-2.5 text-xs font-mono font-bold text-neutral-500">
+                          {currencyCode}
+                        </span>
+                        <input
+                          type="number"
+                          step="1"
+                          min="0"
+                          required
+                          value={baselineTermFeePreSchool}
+                          onChange={(e) => setBaselineTermFeePreSchool(Number(e.target.value))}
+                          className="w-full bg-neutral-950 border border-neutral-800 focus:border-emerald-500/50 rounded p-2 pl-12 text-xs text-white font-mono focus:outline-none transition-colors"
+                          placeholder="250"
+                        />
+                      </div>
+                      <p className="text-[9px] text-neutral-500 mt-1">
+                        Applied to Nursery, KG1, KG2
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-mono font-bold text-neutral-400 uppercase tracking-wider mb-1">
+                        Primary Term Fee
+                      </label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-2.5 text-xs font-mono font-bold text-neutral-500">
+                          {currencyCode}
+                        </span>
+                        <input
+                          type="number"
+                          step="1"
+                          min="0"
+                          required
+                          value={baselineTermFeePrimary}
+                          onChange={(e) => setBaselineTermFeePrimary(Number(e.target.value))}
+                          className="w-full bg-neutral-950 border border-neutral-800 focus:border-emerald-500/50 rounded p-2 pl-12 text-xs text-white font-mono focus:outline-none transition-colors"
+                          placeholder="350"
+                        />
+                      </div>
+                      <p className="text-[9px] text-neutral-500 mt-1">
+                        Applied to B1 – B6
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-mono font-bold text-neutral-400 uppercase tracking-wider mb-1">
+                        JHS Term Fee
+                      </label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-2.5 text-xs font-mono font-bold text-neutral-500">
+                          {currencyCode}
+                        </span>
+                        <input
+                          type="number"
+                          step="1"
+                          min="0"
+                          required
+                          value={baselineTermFeeJhs}
+                          onChange={(e) => setBaselineTermFeeJhs(Number(e.target.value))}
+                          className="w-full bg-neutral-950 border border-neutral-800 focus:border-emerald-500/50 rounded p-2 pl-12 text-xs text-white font-mono focus:outline-none transition-colors"
+                          placeholder="450"
+                        />
+                      </div>
+                      <p className="text-[9px] text-neutral-500 mt-1">
+                        Applied to B7 – B9
+                      </p>
+                    </div>
+                  </div>
                 </div>
 
                 <div>
@@ -515,37 +629,169 @@ export const SettingsPanel: React.FC = () => {
             </div>
 
             {/* Sub-tab Content: Baseline Rate presets or informational banner */}
-            <div className="bg-neutral-900/40 border border-neutral-800 p-5 rounded-lg space-y-3 flex flex-col justify-between">
-              <div>
-                <div className="flex items-center gap-2 border-b border-neutral-800/60 pb-2">
-                  <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                  <h4 className="text-xs font-bold font-mono uppercase text-neutral-300 tracking-wider">Institution Templates</h4>
+            <div className="space-y-6">
+              {/* Early Payment Discount Card */}
+              <div className="bg-neutral-900/60 border border-neutral-800 shadow-lg p-5 rounded-lg space-y-4">
+                <div className="flex items-center gap-2 border-b border-neutral-800 pb-3 text-left">
+                  <Sparkles className="w-4 h-4 text-amber-400" />
+                  <h3 className="text-sm font-black text-neutral-200 tracking-wider uppercase font-mono">Term Payer Discount</h3>
                 </div>
-                <p className="text-[10px] text-neutral-400 leading-relaxed">
-                  These quick presets immediately update branding titles, system identifiers, custom logos, currencies, location properties, and baseline school fees in a single click.
-                </p>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
-                {presets.map((preset, index) => (
-                  <button
-                    key={index}
-                    type="button"
-                    onClick={() => applyPreset(preset)}
-                    className="bg-neutral-950 hover:bg-neutral-900 border border-neutral-800 hover:border-emerald-500/40 p-3 rounded text-left transition-all active:scale-95 flex flex-col justify-between h-24 group cursor-pointer"
-                  >
-                    <span className="text-[11px] font-bold text-neutral-200 group-hover:text-emerald-400 transition-colors line-clamp-1 block">
-                      {preset.name}
-                    </span>
-                    <div className="space-y-0.5 mt-2">
-                      <span className="text-[8px] font-mono text-neutral-500 block uppercase">
-                        Theme Hex: <span style={{ color: preset.primaryColor }}>{preset.primaryColor}</span>
-                      </span>
-                      <span className="text-[8px] font-mono text-emerald-400/90 block font-bold">
-                        {preset.currencyCode} {preset.baselineDailyFee.toFixed(2)}/day
+
+                <div className="space-y-4 text-left">
+                  {/* Enable Switch */}
+                  <label className="flex items-start gap-2.5 cursor-pointer select-none text-neutral-400 hover:text-white">
+                    <input
+                      type="checkbox"
+                      checked={termDiscountEnabled}
+                      onChange={(e) => {
+                        setTermDiscountEnabled(e.target.checked);
+                        playFeedbackSound('success');
+                      }}
+                      className="mt-0.5 w-4 h-4 bg-neutral-950 border border-neutral-850 rounded focus:ring-0 text-amber-500 cursor-pointer accent-amber-500"
+                    />
+                    <div className="font-mono text-[11px] leading-snug">
+                      <span className="font-bold block uppercase text-neutral-300">Enable Early Payment Discount</span>
+                      <span className="text-[10px] text-neutral-500 block leading-normal">
+                        Automatically reduce the term subscription fee for pupils who make payment within the specified week of the term.
                       </span>
                     </div>
-                  </button>
-                ))}
+                  </label>
+
+                  {termDiscountEnabled && (
+                    <div className="grid grid-cols-2 gap-3 pt-2 pl-6 animate-fadeIn">
+                      <div>
+                        <label className="block text-[10px] font-mono font-bold text-neutral-400 uppercase tracking-wider mb-1">
+                          Applicable Week
+                        </label>
+                        <select
+                          value={termDiscountWeek}
+                          onChange={(e) => setTermDiscountWeek(Number(e.target.value))}
+                          className="w-full bg-neutral-950 border border-neutral-800 focus:border-emerald-500/50 rounded p-1.5 text-xs text-white font-mono focus:outline-none transition-colors"
+                        >
+                          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(w => (
+                            <option key={w} value={w}>Week {w}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-mono font-bold text-neutral-400 uppercase tracking-wider mb-1">
+                          Discount Percent
+                        </label>
+                        <div className="relative">
+                          <input
+                            type="number"
+                            min="1"
+                            max="100"
+                            value={termDiscountPercentage}
+                            onChange={(e) => setTermDiscountPercentage(Number(e.target.value))}
+                            className="w-full bg-neutral-950 border border-neutral-800 focus:border-emerald-500/50 rounded p-1.5 pr-6 text-xs text-white font-mono focus:outline-none transition-colors"
+                            placeholder="10"
+                          />
+                          <span className="absolute right-2 top-2 text-[10px] font-mono text-neutral-500 font-bold">%</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Late Gate Check-In Fee Card */}
+              <div className="bg-neutral-900/60 border border-neutral-800 shadow-lg p-5 rounded-lg space-y-4">
+                <div className="flex items-center gap-2 border-b border-neutral-800 pb-3 text-left">
+                  <Clock className="w-4 h-4 text-rose-500" />
+                  <h3 className="text-sm font-black text-neutral-200 tracking-wider uppercase font-mono">Late Gate Check-In Fee</h3>
+                </div>
+
+                <div className="space-y-4 text-left">
+                  {/* Enable Switch */}
+                  <label className="flex items-start gap-2.5 cursor-pointer select-none text-neutral-400 hover:text-white">
+                    <input
+                      type="checkbox"
+                      checked={lateFeeEnabled}
+                      onChange={(e) => {
+                        setLateFeeEnabled(e.target.checked);
+                        playFeedbackSound('success');
+                      }}
+                      className="mt-0.5 w-4 h-4 bg-neutral-950 border border-neutral-850 rounded focus:ring-0 text-rose-500 cursor-pointer accent-rose-500"
+                    />
+                    <div className="font-mono text-[11px] leading-snug">
+                      <span className="font-bold block uppercase text-neutral-300">Enable Late Check-In Penalty</span>
+                      <span className="text-[10px] text-neutral-500 block leading-normal">
+                        Automatically apply a predefined penalty surcharge if a pupil registers at the gate after the daily cutoff time.
+                      </span>
+                    </div>
+                  </label>
+
+                  {lateFeeEnabled && (
+                    <div className="grid grid-cols-2 gap-3 pt-2 pl-6 animate-fadeIn">
+                      <div>
+                        <label className="block text-[10px] font-mono font-bold text-neutral-400 uppercase tracking-wider mb-1">
+                          Cutoff Time
+                        </label>
+                        <input
+                          type="time"
+                          required
+                          value={lateFeeCutoffTime}
+                          onChange={(e) => setLateFeeCutoffTime(e.target.value)}
+                          className="w-full bg-neutral-950 border border-neutral-800 focus:border-emerald-500/50 rounded p-1.5 text-xs text-white font-mono focus:outline-none transition-colors"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-mono font-bold text-neutral-400 uppercase tracking-wider mb-1">
+                          Penalty Surcharge
+                        </label>
+                        <div className="relative">
+                          <input
+                            type="number"
+                            min="1"
+                            max="100"
+                            required
+                            value={lateFeePercentage}
+                            onChange={(e) => setLateFeePercentage(Number(e.target.value))}
+                            className="w-full bg-neutral-950 border border-neutral-800 focus:border-emerald-500/50 rounded p-1.5 pr-6 text-xs text-white font-mono focus:outline-none transition-colors"
+                            placeholder="10"
+                          />
+                          <span className="absolute right-2 top-2 text-[10px] font-mono text-neutral-500 font-bold">%</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Institution Templates */}
+              <div className="bg-neutral-900/40 border border-neutral-800 p-5 rounded-lg space-y-3 flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center gap-2 border-b border-neutral-800/60 pb-2 text-left">
+                    <School className="w-3.5 h-3.5 text-amber-400" />
+                    <h4 className="text-xs font-bold font-mono uppercase text-neutral-300 tracking-wider">Institution Templates</h4>
+                  </div>
+                  <p className="text-[10px] text-neutral-400 leading-relaxed text-left">
+                    These quick presets immediately update branding titles, system identifiers, custom logos, currencies, location properties, and baseline school fees in a single click.
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4 text-left">
+                  {presets.map((preset, index) => (
+                    <button
+                      key={index}
+                      type="button"
+                      onClick={() => applyPreset(preset)}
+                      className="bg-neutral-950 hover:bg-neutral-900 border border-neutral-800 hover:border-emerald-500/40 p-3 rounded text-left transition-all active:scale-95 flex flex-col justify-between h-24 group cursor-pointer w-full"
+                    >
+                      <span className="text-[11px] font-bold text-neutral-200 group-hover:text-emerald-400 transition-colors line-clamp-1 block">
+                        {preset.name}
+                      </span>
+                      <div className="space-y-0.5 mt-2">
+                        <span className="text-[8px] font-mono text-neutral-500 block uppercase">
+                          Theme Hex: <span style={{ color: preset.primaryColor }}>{preset.primaryColor}</span>
+                        </span>
+                        <span className="text-[8px] font-mono text-emerald-400/90 block font-bold">
+                          {preset.currencyCode} {preset.baselineDailyFee.toFixed(2)}/day
+                        </span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           </div>

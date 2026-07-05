@@ -106,6 +106,54 @@
         "description": { "type": "string", "description": "Extra details and notes" }
       },
       "required": ["id", "itemName", "targetAmount", "savedPercentage", "createdAt", "active", "completed"]
+    },
+    "ExamsPayment": {
+      "title": "ExamsPayment",
+      "description": "Student exam fee payment records",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique payment ID" },
+        "studentId": { "type": "string", "description": "Student ID reference" },
+        "studentName": { "type": "string", "description": "Student name" },
+        "class": { "type": "string", "description": "Class grade" },
+        "category": { "type": "string", "description": "Level category" },
+        "amountPaid": { "type": "number", "description": "GHC paid amount" },
+        "datePaid": { "type": "string", "description": "Payment date YYYY-MM-DD" },
+        "collectedBy": { "type": "string", "description": "Staff cashier name" },
+        "termId": { "type": "string", "description": "Active term ID reference" },
+        "paymentMethod": { "type": "string", "description": "Cash/Momo/Bank" },
+        "notes": { "type": "string", "description": "Notes" },
+        "timestamp": { "type": "string", "description": "Creation timestamp" }
+      },
+      "required": ["id", "studentId", "studentName", "class", "category", "amountPaid", "datePaid", "collectedBy", "termId", "paymentMethod", "timestamp"]
+    },
+    "ExamsExpense": {
+      "title": "ExamsExpense",
+      "description": "Exam companies printing invoices logs",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique invoice ID" },
+        "providerName": { "type": "string", "description": "Exams printing vendor name" },
+        "date": { "type": "string", "description": "Billing date YYYY-MM-DD" },
+        "targetClass": { "type": "string", "description": "Class scope of printing order" },
+        "billingPerChild": { "type": "number", "description": "Publisher cost per child" },
+        "studentCount": { "type": "number", "description": "Quantity of assessments ordered" },
+        "totalAmount": { "type": "number", "description": "Calculated total cost invoice" },
+        "amountPaid": { "type": "number", "description": "Settled amount" },
+        "status": { "type": "string", "description": "Payment settlement status" },
+        "notes": { "type": "string", "description": "Notes" },
+        "timestamp": { "type": "string", "description": "Log timestamp" }
+      },
+      "required": ["id", "providerName", "date", "targetClass", "billingPerChild", "studentCount", "totalAmount", "amountPaid", "status", "timestamp"]
+    },
+    "ExamsSettings": {
+      "title": "ExamsSettings",
+      "description": "Exams default class-level fee standards",
+      "type": "object",
+      "properties": {
+        "classFees": { "type": "object", "description": "JSON map object detailing class fee rules" }
+      },
+      "required": ["classFees"]
     }
   },
   "firestore": {
@@ -132,6 +180,18 @@
     "/budget_targets/{targetId}": {
       "schema": "BudgetTarget",
       "description": "Collection of saving target action plans"
+    },
+    "/exams_payments/{paymentId}": {
+      "schema": "ExamsPayment",
+      "description": "Collection of pupil exam fee collections"
+    },
+    "/exams_expenses/{expenseId}": {
+      "schema": "ExamsExpense",
+      "description": "Collection of exams print orders/invoices logs"
+    },
+    "/exams_settings/{settingsId}": {
+      "schema": "ExamsSettings",
+      "description": "Collection of default assessment standard prices"
     }
   }
 }
