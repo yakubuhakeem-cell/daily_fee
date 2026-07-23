@@ -4,10 +4,11 @@
  */
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { Student, PaymentRecord, UserAccount, UserRole, StudentClass, SchoolCategory, Term, PendingEdit, BackupRecord, Expense, ExpenseCategory, PaymentMethod, WorkerSalary, SystemSettings, BudgetTarget, ExamsPayment, ExamsExpense, ExamsSettings, AuditLog } from '../types';
-import { INITIAL_USERS, INITIAL_STUDENTS, generateSeedPayments, getClassCategory } from '../initialData';
+import { Student, PaymentRecord, UserAccount, UserRole, StudentClass, SchoolCategory, Term, PendingEdit, BackupRecord, Expense, ExpenseCategory, PaymentMethod, WorkerSalary, SystemSettings, BudgetTarget, ExamsPayment, ExamsExpense, ExamsSettings, AuditLog, TeacherEvaluation, JournalEntry } from '../types';
+import { INITIAL_USERS, INITIAL_STUDENTS, ORIGINAL_DEMO_STUDENT_IDS, generateSeedPayments, getClassCategory } from '../initialData';
 import { db as rawDb } from '../lib/firebase';
 import { generateSchoolDays } from '../utils/termUtils';
+import { idbEngine } from '../lib/idbEngine';
 
 
 // Safe wrapper over browser's localStorage to prevent QuotaExceededError and sandbox blocking from crashing the application.
@@ -87,6 +88,9 @@ interface AppContextType {
   payments: PaymentRecord[];
   terms: Term[];
   activeTerm: Term | null;
+  realActiveTerm: Term | null;
+  viewingTermId: string | null;
+  setViewingTermId: (id: string | null) => void;
   addTerm: (name: string, startDate: string, daysCount: number, isActive?: boolean) => void;
   editTerm: (termId: string, name: string, startDate: string, daysCount: number, isActive?: boolean) => void;
   setActiveTerm: (termId: string) => void;
@@ -98,7 +102,7 @@ interface AppContextType {
   login: (email: string, mfaCode?: string, password?: string) => { success: boolean; requiresMfa?: boolean; requiresPassword?: boolean; error?: string };
   logout: () => void;
   toggleMfaForUser: (userId: string) => void;
-  addStudent: (name: string, className: StudentClass, guardianPhone?: string, photoUrl?: string, discount?: number, gender?: 'Male' | 'Female', paymentType?: 'Daily' | 'Term', termFee?: number, legacyDebt?: number) => void;
+  addStudent: (name: string, className: StudentClass, guardianPhone?: string, photoUrl?: string, discount?: number, gender?: 'Male' | 'Female', paymentType?: 'Daily' | 'Term', termFee?: number, legacyDebt?: number, enrollmentDate?: string) => void;
   updateStudent: (student: Student) => void;
   deleteStudent: (studentId: string) => void;
   purgeDeactivatedStudents: () => void;
@@ -118,8 +122,8 @@ interface AppContextType {
   clearDailyPaymentsForClass: (classId: StudentClass, date: string) => void;
   deleteStudentPayments: (studentId: string) => void;
   adjustPayment: (paymentId: string, updatedAmount: number, updatedIsAbsent: boolean, notes: string, reason: string) => void;
-  registerStaff: (name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled?: boolean, passwordEnabled?: boolean, password?: string, assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string, photoUrl?: string, employeeId?: string, department?: string, gender?: 'Male' | 'Female', employmentType?: 'Full-Time' | 'Part-Time' | 'Contract' | 'Volunteer', appointmentDate?: string, contractEndDate?: string, renewalOption?: 'Automatic' | 'Manual Review' | 'Fixed Term' | 'Non-Renewable', renewalPeriod?: string) => { success: boolean; error?: string };
-  updateStaff: (userId: string, name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled?: boolean, passwordEnabled?: boolean, password?: string, assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string, photoUrl?: string, employeeId?: string, department?: string, gender?: 'Male' | 'Female', employmentType?: 'Full-Time' | 'Part-Time' | 'Contract' | 'Volunteer', idCardDeactivated?: boolean, appointmentDate?: string, contractEndDate?: string, renewalOption?: 'Automatic' | 'Manual Review' | 'Fixed Term' | 'Non-Renewable', renewalPeriod?: string, signatureUrl?: string, managementSignatureUrl?: string) => { success: boolean; error?: string };
+  registerStaff: (name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled?: boolean, passwordEnabled?: boolean, password?: string, assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string, photoUrl?: string, employeeId?: string, department?: string, gender?: 'Male' | 'Female', employmentType?: 'Full-Time' | 'Part-Time' | 'Contract' | 'Volunteer', appointmentDate?: string, contractEndDate?: string, renewalOption?: 'Automatic' | 'Manual Review' | 'Fixed Term' | 'Non-Renewable', renewalPeriod?: string, personalAddress?: string) => { success: boolean; error?: string };
+  updateStaff: (userId: string, name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled?: boolean, passwordEnabled?: boolean, password?: string, assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string, photoUrl?: string, employeeId?: string, department?: string, gender?: 'Male' | 'Female', employmentType?: 'Full-Time' | 'Part-Time' | 'Contract' | 'Volunteer', idCardDeactivated?: boolean, appointmentDate?: string, contractEndDate?: string, renewalOption?: 'Automatic' | 'Manual Review' | 'Fixed Term' | 'Non-Renewable', renewalPeriod?: string, signatureUrl?: string, managementSignatureUrl?: string, personalAddress?: string) => { success: boolean; error?: string };
   deleteStaff: (userId: string) => { success: boolean; error?: string };
   toggleStaffActive: (userId: string) => { success: boolean; error?: string };
   getDailyStats: (date: string) => DailyStats;
@@ -129,6 +133,7 @@ interface AppContextType {
   sendMonthlyEmailDraft: (email: string) => { success: boolean; message: string; draftContent: string };
   resetData: () => void;
   clearSampleStudents: () => void;
+  purgeOnlyDemoData: () => Promise<{ success: boolean; message: string }>;
   clearAllPayments: () => void;
   firebaseConnected: boolean;
   firebaseError: string | null;
@@ -146,6 +151,7 @@ interface AppContextType {
   backups: BackupRecord[];
   createBackup: (label?: string, isAuto?: boolean) => void;
   restoreBackup: (backupId: string) => void;
+  importDatabaseBackup: (backupData: any) => Promise<void>;
   deleteBackup: (backupId: string) => void;
   clearAllBackups: () => void;
   audioMuted: boolean;
@@ -155,6 +161,12 @@ interface AppContextType {
   setTheme: (theme: 'dark' | 'daylight') => void;
   expenses: Expense[];
   salaries: WorkerSalary[];
+  teacherEvaluations: TeacherEvaluation[];
+  journalEntries: JournalEntry[];
+  addTeacherEvaluation: (evaluation: Omit<TeacherEvaluation, 'id' | 'dateCreated'>) => Promise<boolean>;
+  deleteTeacherEvaluation: (id: string) => Promise<boolean>;
+  addJournalEntry: (entry: Omit<JournalEntry, 'id' | 'timestamp'>) => Promise<boolean>;
+  deleteJournalEntry: (id: string) => Promise<boolean>;
   addExpense: (amount: number, category: ExpenseCategory, description: string, approvedBy: string, date: string) => void;
   deleteExpense: (expenseId: string) => void;
   addSalary: (
@@ -181,7 +193,7 @@ interface AppContextType {
   ) => void;
   deleteSalary: (salaryId: string) => void;
   whatsappLogs: any[];
-  sendautomatedWhatsApp: (phone: string, message: string, studentId?: string, studentName?: string, type?: string) => Promise<{ success: boolean; log?: any; error?: string }>;
+  sendautomatedWhatsApp: (phone: string, message: string, studentId?: string, studentName?: string, type?: string, forceDirect?: boolean) => Promise<{ success: boolean; log?: any; error?: string }>;
   fetchWhatsappLogs: () => Promise<void>;
   auditLogs: AuditLog[];
   fetchAuditLogs: () => Promise<void>;
@@ -203,6 +215,7 @@ interface AppContextType {
   deleteExamsPayment: (paymentId: string) => Promise<void>;
   addExamsExpense: (providerName: string, targetClass: StudentClass | 'All-Preschool' | 'All-Primary' | 'All-JHS' | 'Entire-School', billingPerChild: number, studentCount: number, totalAmount: number, amountPaid: number, status: 'Paid' | 'Unpaid' | 'Partially Paid', notes?: string, date?: string) => Promise<void>;
   deleteExamsExpense: (expenseId: string) => Promise<void>;
+  updateExamsExpense: (expense: ExamsExpense) => Promise<void>;
   updateExamsSettings: (settings: ExamsSettings) => Promise<void>;
 }
 
@@ -450,8 +463,11 @@ export function calculateStudentFinancialState(
   }
 
   const holidays = activeTerm.publicHolidays || [];
-  // Get all school days in the active term up to currentDate (inclusive)
-  const schoolDaysUpToToday = activeTerm.schoolDays.filter(d => d <= currentDate && !holidays.includes(d));
+  // Get all school days in the active term up to currentDate (inclusive) and after student's enrollment date
+  const schoolDaysUpToToday = activeTerm.schoolDays.filter(d => {
+    const afterEnrollment = student.enrollmentDate ? d >= student.enrollmentDate : true;
+    return d <= currentDate && !holidays.includes(d) && afterEnrollment;
+  });
 
   // Filter days where the student was NOT absent
   const billableDays = schoolDaysUpToToday.filter(dStr => {
@@ -532,6 +548,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [terms, setTerms] = useState<Term[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [salaries, setSalaries] = useState<WorkerSalary[]>([]);
+  const [teacherEvaluations, setTeacherEvaluations] = useState<TeacherEvaluation[]>([]);
+  const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([]);
   const [whatsappLogs, setWhatsappLogs] = useState<any[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [budgetTargets, setBudgetTargets] = useState<BudgetTarget[]>([]);
@@ -551,7 +569,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     baselineTermFeeJhs: 450.00,
     currencyCode: "GHC",
     customMotto: "Holiness Is Our Key",
-    customLocation: "Sawla",
+    customLocation: "Sawla, Jelinkon street",
     autoSendCheckInAlert: false,
     autoSendArrearsAlert: false,
     primaryColor: "#fbbf24",
@@ -561,7 +579,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     debtAlertMethod: 'whatsapp',
     lateFeeEnabled: false,
     lateFeeCutoffTime: "08:30",
-    lateFeePercentage: 10
+    lateFeePercentage: 10,
+    disableDemoData: false
   };
 
   const [systemSettings, setSystemSettingsState] = useState<SystemSettings>(() => {
@@ -579,7 +598,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateSystemSettings = async (newSettings: Partial<SystemSettings>): Promise<boolean> => {
     const updated = { ...systemSettings, ...newSettings };
     setSystemSettingsState(updated);
-    localStorage.setItem('s_system_settings', JSON.stringify(updated));
+    idbEngine.setItem('s_system_settings', updated);
 
     const changes: string[] = [];
     if (newSettings.baselineDailyFee !== undefined && newSettings.baselineDailyFee !== systemSettings.baselineDailyFee) {
@@ -610,7 +629,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const activeTerm = terms.find(t => t.active) || null;
+  const [viewingTermId, setViewingTermId] = useState<string | null>(null);
+
+  const realActiveTerm = terms.find(t => t.active) || null;
+  const activeTerm = viewingTermId 
+    ? (terms.find(t => t.id === viewingTermId) || realActiveTerm) 
+    : realActiveTerm;
 
   const [storageMode, setStorageModeState] = useState<'cloud' | 'local'>(() => {
     const saved = localStorage.getItem('s_storage_preference');
@@ -638,12 +662,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [theme, setThemeState] = useState<'dark' | 'daylight'>(() => {
     const saved = localStorage.getItem('s_theme');
-    return (saved === 'dark' || saved === 'daylight') ? saved : 'dark';
+    if (saved === 'dark' || saved === 'daylight') return saved;
+    try {
+      const savedSettings = localStorage.getItem('s_system_settings');
+      if (savedSettings) {
+        const parsed = JSON.parse(savedSettings);
+        if (parsed?.theme === 'dark' || parsed?.theme === 'daylight') {
+          return parsed.theme;
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+    return 'dark';
   });
 
   const setTheme = (t: 'dark' | 'daylight') => {
     localStorage.setItem('s_theme', t);
     setThemeState(t);
+    updateSystemSettings({ theme: t });
   };
 
   useEffect(() => {
@@ -801,13 +838,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const [pendingLocalEdits, setPendingLocalEdits] = useState<PendingEdit[]>(() => {
-    const saved = localStorage.getItem('s_pending_local_edits');
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [pendingLocalEdits, setPendingLocalEdits] = useState<PendingEdit[]>([]);
 
   const recordLocallyPendingEdit = (type: PendingEdit['type'], action: PendingEdit['action'], description: string) => {
-    const isLocal = localStorage.getItem('s_storage_preference') === 'local' || storageMode === 'local';
+    const isLocal = storageMode === 'local';
     if (!isLocal) return; // only track on local mode
     const newEdit: PendingEdit = {
       id: 'edit_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
@@ -818,26 +852,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setPendingLocalEdits(prev => {
       const nextEdits = [newEdit, ...prev];
-      localStorage.setItem('s_pending_local_edits', JSON.stringify(nextEdits));
+      idbEngine.setItem('s_pending_local_edits', nextEdits);
       return nextEdits;
     });
   };
 
   const clearPendingLocalEdits = () => {
     setPendingLocalEdits([]);
-    localStorage.removeItem('s_pending_local_edits');
+    idbEngine.removeItem('s_pending_local_edits');
   };
 
-  const [backups, setBackups] = useState<BackupRecord[]>(() => {
-    const saved = localStorage.getItem('s_backups');
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [backups, setBackups] = useState<BackupRecord[]>([]);
 
   // Sync to refs for safe closure lookup in setInterval loop without re-triggering effect
   const studentsRef = React.useRef(students);
   const paymentsRef = React.useRef(payments);
   const usersRef = React.useRef(users);
   const termsRef = React.useRef(terms);
+  const examsPaymentsRef = React.useRef(examsPayments);
+  const examsExpensesRef = React.useRef(examsExpenses);
 
   useEffect(() => {
     studentsRef.current = students;
@@ -854,6 +887,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     termsRef.current = terms;
   }, [terms]);
+
+  useEffect(() => {
+    examsPaymentsRef.current = examsPayments;
+  }, [examsPayments]);
+
+  useEffect(() => {
+    examsExpensesRef.current = examsExpenses;
+  }, [examsExpenses]);
 
   const createBackup = (label?: string, isAuto = false) => {
     const now = new Date();
@@ -872,6 +913,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const currentPayments = paymentsRef.current;
     const currentUsers = usersRef.current;
     const currentTerms = termsRef.current;
+    const currentExamsPayments = examsPaymentsRef.current;
+    const currentExamsExpenses = examsExpensesRef.current;
 
     const actualLabel = label || `${isAuto ? 'Automated Scheduled' : 'Manual'} Backup`;
 
@@ -884,19 +927,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         students: currentStudents.length,
         payments: currentPayments.length,
         users: currentUsers.length,
-        terms: currentTerms.length
+        terms: currentTerms.length,
+        examsPayments: currentExamsPayments.length,
+        examsExpenses: currentExamsExpenses.length
       },
       data: {
         students: JSON.parse(JSON.stringify(currentStudents)),
         payments: JSON.parse(JSON.stringify(currentPayments)),
         users: JSON.parse(JSON.stringify(currentUsers)),
-        terms: JSON.parse(JSON.stringify(currentTerms))
+        terms: JSON.parse(JSON.stringify(currentTerms)),
+        examsPayments: JSON.parse(JSON.stringify(currentExamsPayments)),
+        examsExpenses: JSON.parse(JSON.stringify(currentExamsExpenses))
       }
     };
 
     setBackups(prev => {
       const next = [newBackup, ...prev].slice(0, 10);
-      localStorage.setItem('s_backups', JSON.stringify(next));
+      idbEngine.setItem('s_backups', next);
       return next;
     });
 
@@ -915,25 +962,139 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setUsers(backup.data.users);
     setTerms(backup.data.terms);
 
-    localStorage.setItem('s_students', JSON.stringify(backup.data.students));
-    localStorage.setItem('s_payments', JSON.stringify(backup.data.payments));
-    localStorage.setItem('s_users', JSON.stringify(backup.data.users));
-    localStorage.setItem('s_terms', JSON.stringify(backup.data.terms));
+    idbEngine.setItem('s_students', backup.data.students);
+    idbEngine.setItem('s_payments', backup.data.payments);
+    idbEngine.setItem('s_users', backup.data.users);
+    idbEngine.setItem('s_terms', backup.data.terms);
+
+    if (backup.data.examsPayments) {
+      setExamsPayments(backup.data.examsPayments);
+      idbEngine.setItem('s_exams_payments', backup.data.examsPayments);
+    }
+    if (backup.data.examsExpenses) {
+      setExamsExpenses(backup.data.examsExpenses);
+      idbEngine.setItem('s_exams_expenses', backup.data.examsExpenses);
+    }
 
     recordLocallyPendingEdit('bulk', 'update', `Restored system state from local backup: "${backup.label}"`);
+  };
+
+  const importDatabaseBackup = async (backupData: any) => {
+    if (!backupData || backupData.app !== "FEETRACK") {
+      throw new Error("Invalid backup file: Not a FEETRACK database backup.");
+    }
+
+    const { data, currentDate: backupDate, activeTerm: backupActiveTerm, systemSettings: backupSystemSettings } = backupData;
+    if (!data) {
+      throw new Error("Invalid backup file: Missing database payload.");
+    }
+
+    // 1. Update Students
+    if (Array.isArray(data.students)) {
+      setStudents(data.students);
+      await idbEngine.setItem('s_students', data.students);
+    }
+
+    // 2. Update Payments
+    if (Array.isArray(data.payments)) {
+      setPayments(data.payments);
+      await idbEngine.setItem('s_payments', data.payments);
+    }
+
+    // 3. Update Users
+    if (Array.isArray(data.users)) {
+      setUsers(data.users);
+      await idbEngine.setItem('s_users', data.users);
+    }
+
+    // 4. Update Terms
+    if (Array.isArray(data.terms) && data.terms.length > 0) {
+      setTerms(data.terms);
+      await idbEngine.setItem('s_terms', data.terms);
+    }
+
+    // 5. Update Expenses
+    if (Array.isArray(data.expenses)) {
+      setExpenses(data.expenses);
+      await idbEngine.setItem('s_expenses', data.expenses);
+    }
+
+    // 6. Update Salaries
+    if (Array.isArray(data.salaries)) {
+      setSalaries(data.salaries);
+      await idbEngine.setItem('s_salaries', data.salaries);
+    }
+
+    // 7. Update Whatsapp Logs
+    if (Array.isArray(data.whatsappLogs)) {
+      setWhatsappLogs(data.whatsappLogs);
+      await idbEngine.setItem('s_whatsapp_logs', data.whatsappLogs);
+    }
+
+    // 8. Update Budget Targets
+    if (Array.isArray(data.budgetTargets)) {
+      setBudgetTargets(data.budgetTargets);
+      await idbEngine.setItem('s_budget_targets', data.budgetTargets);
+    }
+
+    // 9. Update Backups
+    if (Array.isArray(data.backups)) {
+      setBackups(data.backups);
+      await idbEngine.setItem('s_backups', data.backups);
+    }
+
+    // 10. Update Exams Payments
+    if (Array.isArray(data.examsPayments)) {
+      setExamsPayments(data.examsPayments);
+      await idbEngine.setItem('s_exams_payments', data.examsPayments);
+    }
+
+    // 11. Update Exams Expenses
+    if (Array.isArray(data.examsExpenses)) {
+      setExamsExpenses(data.examsExpenses);
+      await idbEngine.setItem('s_exams_expenses', data.examsExpenses);
+    }
+
+    // 12. Update Exams Settings
+    if (data.examsSettings) {
+      setExamsSettings(data.examsSettings);
+      await idbEngine.setItem('s_exams_settings', data.examsSettings);
+    }
+
+    // 13. Update Global Settings & States
+    if (backupDate) {
+      setCurrentDate(backupDate);
+    }
+    if (backupActiveTerm) {
+      setActiveTerm(backupActiveTerm);
+    }
+    if (backupSystemSettings) {
+      updateSystemSettings(backupSystemSettings);
+    }
+
+    recordLocallyPendingEdit('bulk', 'update', `Uploaded and restored database state from external JSON backup`);
+    
+    // Seed Firestore if in Cloud sync mode
+    if (db.isActive() && storageMode === 'cloud') {
+      try {
+        await seedFirebaseFromLocal();
+      } catch (err) {
+        console.error("Auto-syncing to firestore after database restore failed:", err);
+      }
+    }
   };
 
   const deleteBackup = (backupId: string) => {
     setBackups(prev => {
       const next = prev.filter(b => b.id !== backupId);
-      localStorage.setItem('s_backups', JSON.stringify(next));
+      idbEngine.setItem('s_backups', next);
       return next;
     });
   };
 
   const clearAllBackups = () => {
     setBackups([]);
-    localStorage.removeItem('s_backups');
+    idbEngine.removeItem('s_backups');
   };
 
   // Background backup task - running every 30 minutes
@@ -995,16 +1156,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     setBgSyncStatus('syncing');
     try {
-      const [dbUsers, dbStudents, dbPayments, dbExpenses, dbSalaries, dbBudgetTargets] = await Promise.all([
+      const [dbUsers, dbStudents, dbPayments, dbExpenses, dbSalaries, dbBudgetTargets, dbEvaluations] = await Promise.all([
         db.getUsers(),
         db.getStudents(),
         db.getPayments(),
         db.getExpenses(),
         db.getSalaries(),
-        db.getBudgetTargets()
+        db.getBudgetTargets(),
+        db.getTeacherEvaluations()
       ]);
 
-      if (dbUsers === null || dbStudents === null || dbPayments === null || dbExpenses === null || dbSalaries === null || dbBudgetTargets === null) {
+      if (dbUsers === null || dbStudents === null || dbPayments === null || dbExpenses === null || dbSalaries === null || dbBudgetTargets === null || dbEvaluations === null) {
         setBgSyncStatus('error');
         return;
       }
@@ -1015,14 +1177,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setExpenses(dbExpenses);
       setSalaries(dbSalaries);
       setBudgetTargets(dbBudgetTargets);
+      setTeacherEvaluations(dbEvaluations);
 
       // Cache locally to keep quick sync speed
-      localStorage.setItem('s_users', JSON.stringify(dbUsers));
-      localStorage.setItem('s_students', JSON.stringify(dbStudents));
-      localStorage.setItem('s_payments', JSON.stringify(dbPayments));
-      localStorage.setItem('s_expenses', JSON.stringify(dbExpenses));
-      localStorage.setItem('s_salaries', JSON.stringify(dbSalaries));
-      localStorage.setItem('s_budget_targets', JSON.stringify(dbBudgetTargets));
+      idbEngine.setItem('s_users', dbUsers);
+      idbEngine.setItem('s_students', dbStudents);
+      idbEngine.setItem('s_payments', dbPayments);
+      idbEngine.setItem('s_expenses', dbExpenses);
+      idbEngine.setItem('s_salaries', dbSalaries);
+      idbEngine.setItem('s_budget_targets', dbBudgetTargets);
+      idbEngine.setItem('s_teacher_evaluations', dbEvaluations);
 
       setBgSyncStatus('success');
       setLastBgSyncTime(new Date().toLocaleTimeString());
@@ -1054,45 +1218,97 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => clearInterval(interval);
   }, [bgSyncEnabled, storageMode]);
 
+  const healTerms = (termsList: Term[]): Term[] => {
+    if (!termsList || termsList.length === 0) return [];
+    const activeList = termsList.filter(t => t.active);
+    if (activeList.length <= 1) {
+      return termsList;
+    }
+    const customActive = activeList.filter(t => t.id !== 'term_default');
+    const selectedActive = customActive.length > 0 
+      ? customActive[customActive.length - 1] 
+      : activeList[activeList.length - 1];
+    return termsList.map(t => ({
+      ...t,
+      active: t.id === selectedActive.id
+    }));
+  };
+
   const initializeData = async () => {
+    // Initialize idbEngine and perform seamless local data migration on first load
+    await idbEngine.init();
+    await idbEngine.migrateFromLocalStorage();
+
+    let dbSettings: SystemSettings | null = null;
     try {
-      const dbSettings = await db.getSystemSettings();
+      dbSettings = await db.getSystemSettings();
       if (dbSettings) {
         setSystemSettingsState(dbSettings);
-        localStorage.setItem('s_system_settings', JSON.stringify(dbSettings));
+        idbEngine.setItem('s_system_settings', dbSettings);
+        if (dbSettings.theme) {
+          setThemeState(dbSettings.theme);
+          localStorage.setItem('s_theme', dbSettings.theme);
+        }
+      } else {
+        const localSettings = await idbEngine.getItem<SystemSettings>('s_system_settings');
+        if (localSettings) {
+          setSystemSettingsState(localSettings);
+          if (localSettings.theme) {
+            setThemeState(localSettings.theme);
+            localStorage.setItem('s_theme', localSettings.theme);
+          }
+        }
       }
     } catch (e) {
       console.warn("Failed loading initial system settings from local/cloud server:", e);
+      try {
+        const localSettings = await idbEngine.getItem<SystemSettings>('s_system_settings');
+        if (localSettings) {
+          setSystemSettingsState(localSettings);
+          if (localSettings.theme) {
+            setThemeState(localSettings.theme);
+            localStorage.setItem('s_theme', localSettings.theme);
+          }
+        }
+      } catch (innerErr) {
+        console.warn("Failed loading settings from local IndexedDB fallback:", innerErr);
+      }
     }
 
     const active = db.isActive() && storageMode === 'cloud';
     setFirebaseConnected(active);
     setFirebaseError(null);
 
-    const localUsers = localStorage.getItem('s_users');
-    const localStudents = localStorage.getItem('s_students');
-    const localPayments = localStorage.getItem('s_payments');
-    const localTerms = localStorage.getItem('s_terms');
-    const localUser = localStorage.getItem('s_current_user');
-    const localExpenses = localStorage.getItem('s_expenses');
-    const localSalaries = localStorage.getItem('s_salaries');
-    const localBudgetTargets = localStorage.getItem('s_budget_targets');
+    const localUsers = await idbEngine.getItem<UserAccount[]>('s_users');
+    const localStudents = await idbEngine.getItem<Student[]>('s_students');
+    const localPayments = await idbEngine.getItem<PaymentRecord[]>('s_payments');
+    const localTerms = await idbEngine.getItem<Term[]>('s_terms');
+    const localUser = await idbEngine.getItem<any>('s_current_user');
+    const localExpenses = await idbEngine.getItem<Expense[]>('s_expenses');
+    const localSalaries = await idbEngine.getItem<WorkerSalary[]>('s_salaries');
+    const localBudgetTargets = await idbEngine.getItem<BudgetTarget[]>('s_budget_targets');
+    const localEvaluations = await idbEngine.getItem<TeacherEvaluation[]>('s_teacher_evaluations');
+    const localJournalEntries = await idbEngine.getItem<JournalEntry[]>('s_journal_entries');
+    const localExamsPayments = await idbEngine.getItem<ExamsPayment[]>('s_exams_payments');
+    const localExamsExpenses = await idbEngine.getItem<ExamsExpense[]>('s_exams_expenses');
+    const localExamsSettings = await idbEngine.getItem<ExamsSettings>('s_exams_settings');
+    const localPromoBackups = await idbEngine.getItem<any[]>('s_promotion_backups');
 
     // 1. Session authentication state loading
     try {
       if (localUser) {
-        const parsed = JSON.parse(localUser);
+        const parsed = typeof localUser === 'string' ? JSON.parse(localUser) : localUser;
         if (parsed && typeof parsed === 'object' && parsed.id && parsed.role) {
           setCurrentUser(parsed);
         } else {
           setCurrentUser(null);
-          localStorage.removeItem('s_current_user');
+          idbEngine.removeItem('s_current_user');
         }
       }
     } catch (e) {
       console.warn('Recovered s_current_user authentication state corruption:', e);
       setCurrentUser(null);
-      localStorage.removeItem('s_current_user');
+      idbEngine.removeItem('s_current_user');
     }
 
     if (active) {
@@ -1100,7 +1316,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       
       try {
         // Run lookups in parallel to minimize wait times (cut 24s sequence down to 8s)
-        const [dbUsers, dbStudents, dbPayments, dbTerms, dbExpenses, dbSalaries, dbBudgetTargets, dbExamsPayments, dbExamsExpenses, dbExamsSettings] = await Promise.all([
+        const [dbUsers, dbStudents, dbPayments, dbTerms, dbExpenses, dbSalaries, dbBudgetTargets, dbExamsPayments, dbExamsExpenses, dbExamsSettings, dbEvaluations, dbJournalEntries] = await Promise.all([
           db.getUsers(),
           db.getStudents(),
           db.getPayments(),
@@ -1110,15 +1326,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           db.getBudgetTargets(),
           db.getExamsPayments(),
           db.getExamsExpenses(),
-          db.getExamsSettings()
+          db.getExamsSettings(),
+          db.getTeacherEvaluations(),
+          db.getJournalEntries()
         ]);
 
-        if (dbUsers === null || dbStudents === null || dbPayments === null || dbTerms === null || dbExpenses === null || dbSalaries === null || dbBudgetTargets === null) {
+        if (dbUsers === null || dbStudents === null || dbPayments === null || dbTerms === null || dbExpenses === null || dbSalaries === null || dbBudgetTargets === null || dbExamsPayments === null || dbExamsExpenses === null) {
           console.warn('Cloud database collections are offline/misconfigured. Falling back to LocalStorage...');
           setFirebaseConnected(false);
           setStorageModeState('local');
           setFirebaseError('Cloud database returned null. Reverting to local storage mode.');
-          loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries, localBudgetTargets);
+          loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries, localBudgetTargets, localEvaluations, localJournalEntries, localExamsPayments, localExamsExpenses, localExamsSettings, localPromoBackups);
           return;
         }
 
@@ -1127,9 +1345,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (dbUsers.length === 0) {
           console.log('Firebase collections are unseeded. Performing initial core bootstrap sync...');
           
+          const skipDemo = (dbSettings?.disableDemoData || systemSettings?.disableDemoData);
           let parsedLocalUsers = INITIAL_USERS;
-          let parsedLocalStudents = INITIAL_STUDENTS;
-          let parsedLocalPayments = generateSeedPayments();
+          let parsedLocalStudents = skipDemo ? [] : INITIAL_STUDENTS;
+          let parsedLocalPayments = skipDemo ? [] : generateSeedPayments();
           let parsedLocalTerms = [{
             id: 'term_default',
             name: 'Term 1 (May/June 2026)',
@@ -1141,28 +1360,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           
           try {
             if (localUsers) {
-              const u = JSON.parse(localUsers);
+              const u = typeof localUsers === 'string' ? JSON.parse(localUsers) : localUsers;
               if (Array.isArray(u) && u.length > 0) parsedLocalUsers = u;
             }
           } catch (e) {}
           
           try {
             if (localStudents) {
-              const s = JSON.parse(localStudents);
+              const s = typeof localStudents === 'string' ? JSON.parse(localStudents) : localStudents;
               if (Array.isArray(s) && s.length > 0) parsedLocalStudents = s;
             }
           } catch (e) {}
 
           try {
             if (localPayments) {
-              const p = JSON.parse(localPayments);
+              const p = typeof localPayments === 'string' ? JSON.parse(localPayments) : localPayments;
               if (Array.isArray(p) && p.length > 0) parsedLocalPayments = p;
             }
           } catch (e) {}
 
           try {
             if (localTerms) {
-              const t = JSON.parse(localTerms);
+              const t = typeof localTerms === 'string' ? JSON.parse(localTerms) : localTerms;
               if (Array.isArray(t) && t.length > 0) parsedLocalTerms = t;
             }
           } catch (e) {}
@@ -1173,75 +1392,183 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setStudents(parsedLocalStudents);
             setPayments(parsedLocalPayments);
             setTerms(parsedLocalTerms);
-            localStorage.setItem('s_users', JSON.stringify(parsedLocalUsers));
-            localStorage.setItem('s_students', JSON.stringify(parsedLocalStudents));
-            localStorage.setItem('s_payments', JSON.stringify(parsedLocalPayments));
-            localStorage.setItem('s_terms', JSON.stringify(parsedLocalTerms));
+            idbEngine.setItem('s_users', parsedLocalUsers);
+            idbEngine.setItem('s_students', parsedLocalStudents);
+            idbEngine.setItem('s_payments', parsedLocalPayments);
+            idbEngine.setItem('s_terms', parsedLocalTerms);
             return;
           } else {
             console.warn('Seeding failed (perhaps due to unauthorized 401 or structural issues). Falling back to local storage.');
             setFirebaseConnected(false);
             setStorageModeState('local');
             setFirebaseError('Relational seeding transaction failed. Reverting to safe local storage mode.');
-            loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries, localBudgetTargets);
+            loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries, localBudgetTargets, localEvaluations, localJournalEntries, localExamsPayments, localExamsExpenses, localExamsSettings, localPromoBackups);
             return;
           }
         }
 
-        setUsers(dbUsers);
-        setStudents(dbStudents);
-        setPayments(dbPayments);
-        setExpenses(dbExpenses);
-        setSalaries(dbSalaries);
-        setBudgetTargets(dbBudgetTargets);
-        setExamsPayments(dbExamsPayments || []);
-        setExamsExpenses(dbExamsExpenses || []);
+        const mergeAndHeal = <T extends { id: string }>(
+          localItems: any,
+          cloudItems: T[] | null | undefined,
+          saveToCloud: (item: T) => Promise<any>,
+          collectionLabel: string
+        ): T[] => {
+          const mergedMap = new Map<string, T>();
+          const cloudIds = new Set<string>();
+
+          const resolvedCloud = cloudItems || [];
+          resolvedCloud.forEach(item => {
+            if (item && item.id) {
+              mergedMap.set(item.id, item);
+              cloudIds.add(item.id);
+            }
+          });
+
+          let resolvedLocal: T[] = [];
+          try {
+            if (localItems) {
+              resolvedLocal = typeof localItems === 'string' ? JSON.parse(localItems) : localItems;
+            }
+          } catch (e) {
+            console.warn(`[Self-Healing] Failed to parse local storage items for ${collectionLabel}:`, e);
+          }
+
+          const unsynced: T[] = [];
+          if (Array.isArray(resolvedLocal)) {
+            resolvedLocal.forEach(item => {
+              if (item && item.id) {
+                if (!cloudIds.has(item.id)) {
+                  mergedMap.set(item.id, item);
+                  unsynced.push(item);
+                } else {
+                  // It exists in both cloud and local. Let's compare them to heal updates
+                  const cloudItem = mergedMap.get(item.id);
+                  if (cloudItem) {
+                    const localStr = JSON.stringify(item);
+                    const cloudStr = JSON.stringify(cloudItem);
+                    if (localStr !== cloudStr) {
+                      // They differ! Determine if local is newer or has active changes to push
+                      let useLocal = true;
+                      const localTime = (item as any).timestamp || (item as any).updatedAt || (item as any).datePaid || (item as any).date;
+                      const cloudTime = (cloudItem as any).timestamp || (cloudItem as any).updatedAt || (cloudItem as any).datePaid || (cloudItem as any).date;
+                      
+                      if (localTime && cloudTime) {
+                        try {
+                          const localMs = new Date(localTime).getTime();
+                          const cloudMs = new Date(cloudTime).getTime();
+                          if (!isNaN(localMs) && !isNaN(cloudMs)) {
+                            useLocal = localMs > cloudMs;
+                          }
+                        } catch (e) {}
+                      }
+                      
+                      if (useLocal) {
+                        console.log(`[Self-Healing] Found modified local item ${item.id} of "${collectionLabel}" that differs from cloud. Prioritizing local and syncing to cloud...`);
+                        mergedMap.set(item.id, item);
+                        unsynced.push(item);
+                      }
+                    }
+                  }
+                }
+              }
+            });
+          }
+
+          if (unsynced.length > 0) {
+            console.log(`[Self-Healing] Found ${unsynced.length} offline-created or modified items in "${collectionLabel}". Syncing to cloud...`);
+            unsynced.forEach(item => {
+              saveToCloud(item)
+                .then(() => console.log(`[Self-Healing] Successfully synced item ${item.id} of "${collectionLabel}"`))
+                .catch(err => console.error(`[Self-Healing] Failed to sync item ${item.id} of "${collectionLabel}":`, err));
+            });
+          }
+
+          return Array.from(mergedMap.values());
+        };
+
+        const healedUsers = mergeAndHeal(localUsers, dbUsers, db.saveUser, 'users');
+        const healedStudents = mergeAndHeal(localStudents, dbStudents, db.saveStudent, 'students');
+        const healedPayments = mergeAndHeal(localPayments, dbPayments, db.savePayment, 'payments');
+        const healedExpenses = mergeAndHeal(localExpenses, dbExpenses, db.saveExpense, 'expenses');
+        const healedSalaries = mergeAndHeal(localSalaries, dbSalaries, db.saveSalary, 'salaries');
+        const healedBudgetTargets = mergeAndHeal(localBudgetTargets, dbBudgetTargets, db.saveBudgetTarget, 'budget_targets');
+        const healedEvaluations = mergeAndHeal(localEvaluations, dbEvaluations, db.saveTeacherEvaluation, 'teacher_evaluations');
+        const healedJournalEntries = mergeAndHeal(localJournalEntries, dbJournalEntries, db.saveJournalEntry, 'journal_entries');
+        const healedExamsPayments = mergeAndHeal(localExamsPayments, dbExamsPayments, db.saveExamsPayment, 'exams_payments');
+        const healedExamsExpenses = mergeAndHeal(localExamsExpenses, dbExamsExpenses, db.saveExamsExpense, 'exams_expenses');
+
+        setUsers(healedUsers);
+        setStudents(healedStudents);
+        setPayments(healedPayments);
+        setExpenses(healedExpenses);
+        setSalaries(healedSalaries);
+        setBudgetTargets(healedBudgetTargets);
+        setTeacherEvaluations(healedEvaluations);
+        setJournalEntries(healedJournalEntries);
+        setExamsPayments(healedExamsPayments);
+        setExamsExpenses(healedExamsExpenses);
+
         if (dbExamsSettings) {
           setExamsSettings(dbExamsSettings);
         } else {
-          // If no settings exist on cloud, initialize with defaults
-          const defaultSettings = {
-            classFees: {
-              'Nursery': { feeCharged: 20, companyBilling: 12 },
-              'KG1': { feeCharged: 20, companyBilling: 12 },
-              'KG2': { feeCharged: 20, companyBilling: 12 },
-              'B1': { feeCharged: 30, companyBilling: 18 },
-              'B2': { feeCharged: 30, companyBilling: 18 },
-              'B3': { feeCharged: 30, companyBilling: 18 },
-              'B4': { feeCharged: 30, companyBilling: 18 },
-              'B5': { feeCharged: 30, companyBilling: 18 },
-              'B6': { feeCharged: 30, companyBilling: 18 },
-              'B7': { feeCharged: 45, companyBilling: 25 },
-              'B8': { feeCharged: 45, companyBilling: 25 },
-              'B9': { feeCharged: 45, companyBilling: 25 }
-            }
-          };
+          // If no settings exist on cloud, initialize with defaults or fallback to local
+          let defaultSettings = localExamsSettings;
+          if (!defaultSettings) {
+            defaultSettings = {
+              classFees: {
+                'Nursery': { feeCharged: 20, companyBilling: 12 },
+                'KG1': { feeCharged: 20, companyBilling: 12 },
+                'KG2': { feeCharged: 20, companyBilling: 12 },
+                'B1': { feeCharged: 30, companyBilling: 18 },
+                'B2': { feeCharged: 30, companyBilling: 18 },
+                'B3': { feeCharged: 30, companyBilling: 18 },
+                'B4': { feeCharged: 30, companyBilling: 18 },
+                'B5': { feeCharged: 30, companyBilling: 18 },
+                'B6': { feeCharged: 30, companyBilling: 18 },
+                'B7': { feeCharged: 45, companyBilling: 25 },
+                'B8': { feeCharged: 45, companyBilling: 25 },
+                'B9': { feeCharged: 45, companyBilling: 25 }
+              }
+            };
+          }
           setExamsSettings(defaultSettings);
           db.saveExamsSettings(defaultSettings);
         }
 
         // Sync local copies as high speed cache
-        localStorage.setItem('s_users', JSON.stringify(dbUsers));
-        localStorage.setItem('s_students', JSON.stringify(dbStudents));
-        localStorage.setItem('s_payments', JSON.stringify(dbPayments));
-        localStorage.setItem('s_expenses', JSON.stringify(dbExpenses));
-        localStorage.setItem('s_salaries', JSON.stringify(dbSalaries));
-        localStorage.setItem('s_budget_targets', JSON.stringify(dbBudgetTargets));
-        localStorage.setItem('s_exams_payments', JSON.stringify(dbExamsPayments || []));
-        localStorage.setItem('s_exams_expenses', JSON.stringify(dbExamsExpenses || []));
+        idbEngine.setItem('s_users', healedUsers);
+        idbEngine.setItem('s_students', healedStudents);
+        idbEngine.setItem('s_payments', healedPayments);
+        idbEngine.setItem('s_expenses', healedExpenses);
+        idbEngine.setItem('s_salaries', healedSalaries);
+        idbEngine.setItem('s_teacher_evaluations', healedEvaluations);
+        idbEngine.setItem('s_journal_entries', healedJournalEntries);
+        idbEngine.setItem('s_budget_targets', healedBudgetTargets);
+        idbEngine.setItem('s_exams_payments', healedExamsPayments);
+        idbEngine.setItem('s_exams_expenses', healedExamsExpenses);
         if (dbExamsSettings) {
-          localStorage.setItem('s_exams_settings', JSON.stringify(dbExamsSettings));
+          idbEngine.setItem('s_exams_settings', dbExamsSettings);
+        } else if (localExamsSettings) {
+          idbEngine.setItem('s_exams_settings', localExamsSettings);
         }
         
         // Sync terms in active cloud mode
         if (dbTerms && dbTerms.length > 0) {
-          setTerms(dbTerms);
-          localStorage.setItem('s_terms', JSON.stringify(dbTerms));
+          const healed = healTerms(dbTerms);
+          setTerms(healed);
+          idbEngine.setItem('s_terms', healed);
+          // If the healed list changed (i.e. deactivated a duplicate active term), save it back
+          const wasHealed = healed.some((t, i) => t.active !== dbTerms[i].active);
+          if (wasHealed) {
+            db.saveTerms(healed);
+          }
         } else {
           if (localTerms) {
-            const parsed = JSON.parse(localTerms);
-            setTerms(parsed);
-            db.saveTerms(parsed);
+            const parsed = typeof localTerms === 'string' ? JSON.parse(localTerms) : localTerms;
+            const healed = healTerms(parsed);
+            setTerms(healed);
+            idbEngine.setItem('s_terms', healed);
+            db.saveTerms(healed);
           } else {
             const initialTerms = [{
               id: 'term_default',
@@ -1252,7 +1579,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               active: true
             }];
             setTerms(initialTerms);
-            localStorage.setItem('s_terms', JSON.stringify(initialTerms));
+            idbEngine.setItem('s_terms', initialTerms);
             db.saveTerms(initialTerms);
           }
         }
@@ -1279,11 +1606,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         
         setFirebaseError(displayError);
-        loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries, localBudgetTargets);
+        loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries, localBudgetTargets, localEvaluations, localJournalEntries, localExamsPayments, localExamsExpenses, localExamsSettings, localPromoBackups);
       }
     } else {
       console.log('FEETRACK running in standard client-persistence mode (Local Storage).');
-      loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries, localBudgetTargets);
+      loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries, localBudgetTargets, localEvaluations, localJournalEntries, localExamsPayments, localExamsExpenses, localExamsSettings, localPromoBackups);
     }
   };
 
@@ -1293,18 +1620,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [storageMode]);
 
     const loadLocalBackup = (
-      localUsers: string | null,
-      localStudents: string | null,
-      localPayments: string | null,
-      localTerms: string | null,
-      localExpenses: string | null,
-      localSalaries: string | null,
-      localBudgetTargets: string | null
+      localUsers: any,
+      localStudents: any,
+      localPayments: any,
+      localTerms: any,
+      localExpenses: any,
+      localSalaries: any,
+      localBudgetTargets: any,
+      localEvaluations: any,
+      localJournalEntries: any,
+      localExamsPayments: any,
+      localExamsExpenses: any,
+      localExamsSettings: any,
+      localPromoBackups: any
     ) => {
       // Users list healing
       try {
         if (localUsers) {
-          const parsed: UserAccount[] = JSON.parse(localUsers);
+          const parsed: UserAccount[] = typeof localUsers === 'string' ? JSON.parse(localUsers) : localUsers;
           if (!parsed.some(u => u.email.toLowerCase() === 'yakubuhakeem@gmail.com')) {
             parsed.unshift({
               id: 'admin-hakeem',
@@ -1316,50 +1649,57 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               passwordEnabled: true,
               password: 'admin2026'
             });
-            localStorage.setItem('s_users', JSON.stringify(parsed));
+            idbEngine.setItem('s_users', parsed);
           }
           setUsers(parsed);
         } else {
           setUsers(INITIAL_USERS);
-          localStorage.setItem('s_users', JSON.stringify(INITIAL_USERS));
+          idbEngine.setItem('s_users', INITIAL_USERS);
         }
       } catch (e) {
         setUsers(INITIAL_USERS);
-        localStorage.setItem('s_users', JSON.stringify(INITIAL_USERS));
+        idbEngine.setItem('s_users', INITIAL_USERS);
       }
+
+      const skipDemo = !!systemSettings?.disableDemoData;
 
       // Students database healing
       try {
         if (localStudents) {
-          setStudents(JSON.parse(localStudents));
+          setStudents(typeof localStudents === 'string' ? JSON.parse(localStudents) : localStudents);
         } else {
-          setStudents(INITIAL_STUDENTS);
-          localStorage.setItem('s_students', JSON.stringify(INITIAL_STUDENTS));
+          const defaultStuds = skipDemo ? [] : INITIAL_STUDENTS;
+          setStudents(defaultStuds);
+          idbEngine.setItem('s_students', defaultStuds);
         }
       } catch (e) {
-        setStudents(INITIAL_STUDENTS);
-        localStorage.setItem('s_students', JSON.stringify(INITIAL_STUDENTS));
+        const defaultStuds = skipDemo ? [] : INITIAL_STUDENTS;
+        setStudents(defaultStuds);
+        idbEngine.setItem('s_students', defaultStuds);
       }
 
       // Payments ledger healing
       try {
         if (localPayments) {
-          setPayments(JSON.parse(localPayments));
+          setPayments(typeof localPayments === 'string' ? JSON.parse(localPayments) : localPayments);
         } else {
-          const seeds = generateSeedPayments();
+          const seeds = skipDemo ? [] : generateSeedPayments();
           setPayments(seeds);
-          localStorage.setItem('s_payments', JSON.stringify(seeds));
+          idbEngine.setItem('s_payments', seeds);
         }
       } catch (e) {
-        const seeds = generateSeedPayments();
+        const seeds = skipDemo ? [] : generateSeedPayments();
         setPayments(seeds);
-        localStorage.setItem('s_payments', JSON.stringify(seeds));
+        idbEngine.setItem('s_payments', seeds);
       }
 
       // Terms database healing
       try {
         if (localTerms) {
-          setTerms(JSON.parse(localTerms));
+          const parsed = typeof localTerms === 'string' ? JSON.parse(localTerms) : localTerms;
+          const healed = healTerms(parsed);
+          setTerms(healed);
+          idbEngine.setItem('s_terms', healed);
         } else {
           const initialTerms = [{
             id: 'term_default',
@@ -1370,7 +1710,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             active: true
           }];
           setTerms(initialTerms);
-          localStorage.setItem('s_terms', JSON.stringify(initialTerms));
+          idbEngine.setItem('s_terms', initialTerms);
         }
       } catch (e) {
         const initialTerms = [{
@@ -1382,77 +1722,100 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           active: true
         }];
         setTerms(initialTerms);
-        localStorage.setItem('s_terms', JSON.stringify(initialTerms));
+        idbEngine.setItem('s_terms', initialTerms);
       }
 
       // Expenses database healing
       try {
         if (localExpenses) {
-          setExpenses(JSON.parse(localExpenses));
+          setExpenses(typeof localExpenses === 'string' ? JSON.parse(localExpenses) : localExpenses);
         } else {
           setExpenses([]);
-          localStorage.setItem('s_expenses', JSON.stringify([]));
+          idbEngine.setItem('s_expenses', []);
         }
       } catch (e) {
         setExpenses([]);
-        localStorage.setItem('s_expenses', JSON.stringify([]));
+        idbEngine.setItem('s_expenses', []);
       }
 
       // Salaries database healing
       try {
         if (localSalaries) {
-          setSalaries(JSON.parse(localSalaries));
+          setSalaries(typeof localSalaries === 'string' ? JSON.parse(localSalaries) : localSalaries);
         } else {
           setSalaries([]);
-          localStorage.setItem('s_salaries', JSON.stringify([]));
+          idbEngine.setItem('s_salaries', []);
         }
       } catch (e) {
         setSalaries([]);
-        localStorage.setItem('s_salaries', JSON.stringify([]));
+        idbEngine.setItem('s_salaries', []);
+      }
+
+      // Teacher evaluations database healing
+      try {
+        if (localEvaluations) {
+          setTeacherEvaluations(typeof localEvaluations === 'string' ? JSON.parse(localEvaluations) : localEvaluations);
+        } else {
+          setTeacherEvaluations([]);
+          idbEngine.setItem('s_teacher_evaluations', []);
+        }
+      } catch (e) {
+        setTeacherEvaluations([]);
+        idbEngine.setItem('s_teacher_evaluations', []);
+      }
+
+      // Journal entries database healing
+      try {
+        if (localJournalEntries) {
+          setJournalEntries(typeof localJournalEntries === 'string' ? JSON.parse(localJournalEntries) : localJournalEntries);
+        } else {
+          setJournalEntries([]);
+          idbEngine.setItem('s_journal_entries', []);
+        }
+      } catch (e) {
+        setJournalEntries([]);
+        idbEngine.setItem('s_journal_entries', []);
       }
 
       // Budget targets database healing
       try {
         if (localBudgetTargets) {
-          setBudgetTargets(JSON.parse(localBudgetTargets));
+          setBudgetTargets(typeof localBudgetTargets === 'string' ? JSON.parse(localBudgetTargets) : localBudgetTargets);
         } else {
           setBudgetTargets([]);
-          localStorage.setItem('s_budget_targets', JSON.stringify([]));
+          idbEngine.setItem('s_budget_targets', []);
         }
       } catch (e) {
         setBudgetTargets([]);
-        localStorage.setItem('s_budget_targets', JSON.stringify([]));
+        idbEngine.setItem('s_budget_targets', []);
       }
 
       // Exams database healing
       try {
-        const localExamsPayments = localStorage.getItem('s_exams_payments');
         if (localExamsPayments) {
-          setExamsPayments(JSON.parse(localExamsPayments));
+          setExamsPayments(typeof localExamsPayments === 'string' ? JSON.parse(localExamsPayments) : localExamsPayments);
         } else {
           setExamsPayments([]);
-          localStorage.setItem('s_exams_payments', JSON.stringify([]));
+          idbEngine.setItem('s_exams_payments', []);
         }
       } catch (e) {
         setExamsPayments([]);
       }
 
       try {
-        const localExamsExpenses = localStorage.getItem('s_exams_expenses');
         if (localExamsExpenses) {
-          setExamsExpenses(JSON.parse(localExamsExpenses));
+          setExamsExpenses(typeof localExamsExpenses === 'string' ? JSON.parse(localExamsExpenses) : localExamsExpenses);
         } else {
           setExamsExpenses([]);
-          localStorage.setItem('s_exams_expenses', JSON.stringify([]));
+          idbEngine.setItem('s_exams_expenses', []);
         }
       } catch (e) {
         setExamsExpenses([]);
       }
 
       try {
-        const localExamsSettings = localStorage.getItem('s_exams_settings');
         if (localExamsSettings) {
-          setExamsSettings(JSON.parse(localExamsSettings));
+          setExamsSettings(typeof localExamsSettings === 'string' ? JSON.parse(localExamsSettings) : localExamsSettings);
         } else {
           const defaultSettings = {
             classFees: {
@@ -1471,19 +1834,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             }
           };
           setExamsSettings(defaultSettings);
-          localStorage.setItem('s_exams_settings', JSON.stringify(defaultSettings));
+          idbEngine.setItem('s_exams_settings', defaultSettings);
         }
       } catch (e) {
         setExamsSettings(null);
       }
 
       try {
-        const localPromoBackups = localStorage.getItem('s_promotion_backups');
         if (localPromoBackups) {
-          setPromotionBackups(JSON.parse(localPromoBackups));
+          setPromotionBackups(typeof localPromoBackups === 'string' ? JSON.parse(localPromoBackups) : localPromoBackups);
         } else {
           setPromotionBackups([]);
-          localStorage.setItem('s_promotion_backups', JSON.stringify([]));
+          idbEngine.setItem('s_promotion_backups', []);
         }
       } catch (e) {
         setPromotionBackups([]);
@@ -1493,9 +1855,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Sync to local backups
   const saveState = (newUsers: UserAccount[], newStudents: Student[], newPayments: PaymentRecord[]) => {
     setActiveSavesCount(prev => prev + 1);
-    localStorage.setItem('s_users', JSON.stringify(newUsers));
-    localStorage.setItem('s_students', JSON.stringify(newStudents));
-    localStorage.setItem('s_payments', JSON.stringify(newPayments));
+    idbEngine.setItem('s_users', newUsers);
+    idbEngine.setItem('s_students', newStudents);
+    idbEngine.setItem('s_payments', newPayments);
     
     // Simulate a brief minimum sync animation duration (approx 500ms) to ensure 'Saving...' registers with users
     setTimeout(() => {
@@ -1537,13 +1899,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     setCurrentUser(user);
-    localStorage.setItem('s_current_user', JSON.stringify(user));
+    idbEngine.setItem('s_current_user', user);
     return { success: true };
   };
 
   const logout = () => {
     setCurrentUser(null);
-    localStorage.removeItem('s_current_user');
+    idbEngine.removeItem('s_current_user');
   };
 
   const toggleMfaForUser = (userId: string) => {
@@ -1563,7 +1925,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setUsers(updated);
     if (currentUser && currentUser.id === userId && updatedUser) {
       setCurrentUser(updatedUser);
-      localStorage.setItem('s_current_user', JSON.stringify(updatedUser));
+      idbEngine.setItem('s_current_user', updatedUser);
     }
     saveState(updated, students, payments);
     if (updatedUser && db.isActive() && storageMode === 'cloud') {
@@ -1573,7 +1935,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const registerStaff = (name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled = false, passwordEnabled = false, password = '', assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string, photoUrl?: string, employeeId?: string, department?: string, gender?: 'Male' | 'Female', employmentType?: 'Full-Time' | 'Part-Time' | 'Contract' | 'Volunteer', appointmentDate?: string, contractEndDate?: string, renewalOption?: 'Automatic' | 'Manual Review' | 'Fixed Term' | 'Non-Renewable', renewalPeriod?: string) => {
+  const registerStaff = (name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled = false, passwordEnabled = false, password = '', assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string, photoUrl?: string, employeeId?: string, department?: string, gender?: 'Male' | 'Female', employmentType?: 'Full-Time' | 'Part-Time' | 'Contract' | 'Volunteer', appointmentDate?: string, contractEndDate?: string, renewalOption?: 'Automatic' | 'Manual Review' | 'Fixed Term' | 'Non-Renewable', renewalPeriod?: string, personalAddress?: string) => {
     const trimmedEmail = email.toLowerCase().trim();
     if (users.some(u => u.email.toLowerCase() === trimmedEmail)) {
       return { success: false, error: 'A staff member with this email is already registered.' };
@@ -1604,7 +1966,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       appointmentDate,
       contractEndDate,
       renewalOption,
-      renewalPeriod
+      renewalPeriod,
+      personalAddress
     };
 
     const nextUsers = [...users, newUser];
@@ -1618,7 +1981,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
-  const updateStaff = (userId: string, name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled = false, passwordEnabled = false, password = '', assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string, photoUrl?: string, employeeId?: string, department?: string, gender?: 'Male' | 'Female', employmentType?: 'Full-Time' | 'Part-Time' | 'Contract' | 'Volunteer', idCardDeactivated?: boolean, appointmentDate?: string, contractEndDate?: string, renewalOption?: 'Automatic' | 'Manual Review' | 'Fixed Term' | 'Non-Renewable', renewalPeriod?: string, signatureUrl?: string, managementSignatureUrl?: string) => {
+  const updateStaff = (userId: string, name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled = false, passwordEnabled = false, password = '', assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string, photoUrl?: string, employeeId?: string, department?: string, gender?: 'Male' | 'Female', employmentType?: 'Full-Time' | 'Part-Time' | 'Contract' | 'Volunteer', idCardDeactivated?: boolean, appointmentDate?: string, contractEndDate?: string, renewalOption?: 'Automatic' | 'Manual Review' | 'Fixed Term' | 'Non-Renewable', renewalPeriod?: string, signatureUrl?: string, managementSignatureUrl?: string, personalAddress?: string) => {
     const trimmedEmail = email.toLowerCase().trim();
     if (users.some(u => u.email.toLowerCase() === trimmedEmail && u.id !== userId)) {
       return { success: false, error: 'A staff member with this email is already registered.' };
@@ -1654,7 +2017,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           renewalOption: renewalOption !== undefined ? renewalOption : u.renewalOption,
           renewalPeriod: renewalPeriod !== undefined ? renewalPeriod : u.renewalPeriod,
           signatureUrl: signatureUrl !== undefined ? signatureUrl : u.signatureUrl,
-          managementSignatureUrl: managementSignatureUrl !== undefined ? managementSignatureUrl : u.managementSignatureUrl
+          managementSignatureUrl: managementSignatureUrl !== undefined ? managementSignatureUrl : u.managementSignatureUrl,
+          personalAddress: personalAddress !== undefined ? personalAddress : u.personalAddress
         };
         return updatedUser;
       }
@@ -1664,7 +2028,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setUsers(nextUsers);
     if (currentUser && currentUser.id === userId && updatedUser) {
       setCurrentUser(updatedUser);
-      localStorage.setItem('s_current_user', JSON.stringify(updatedUser));
+      idbEngine.setItem('s_current_user', updatedUser);
     }
     saveState(nextUsers, students, payments);
     if (updatedUser && db.isActive() && storageMode === 'cloud') {
@@ -1721,7 +2085,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
-  const addStudent = (name: string, className: StudentClass, guardianPhone?: string, photoUrl?: string, discount = 0, gender?: 'Male' | 'Female', paymentType: 'Daily' | 'Term' = 'Daily', termFee = 350, legacyDebt = 0) => {
+  const addStudent = (
+    name: string, 
+    className: StudentClass, 
+    guardianPhone?: string, 
+    photoUrl?: string, 
+    discount = 0, 
+    gender?: 'Male' | 'Female', 
+    paymentType: 'Daily' | 'Term' = 'Daily', 
+    termFee = 350, 
+    legacyDebt = 0,
+    enrollmentDate?: string
+  ) => {
+    // Check if a student with the same name already exists in offline pending edits
+    const hasPendingAdd = pendingLocalEdits.some(edit => 
+      edit.type === 'student' && 
+      edit.description.toLowerCase().includes(name.trim().toLowerCase())
+    );
+    if (hasPendingAdd) {
+      const proceed = window.confirm(`Warning: A student record for "${name}" already exists in your offline pending edits queue.\n\nAre you sure you want to add this student record again?`);
+      if (!proceed) return;
+    }
+
     const isDuplicate = students.some(s => 
       s.name.trim().toLowerCase() === name.trim().toLowerCase() && 
       s.class === className
@@ -1737,6 +2122,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const count = students.filter(s => s.class === className).length + 1;
     const rollNumber = `${prefix}-${year}-${String(count).padStart(3, '0')}`;
 
+    let adjustedLegacyDebt = legacyDebt;
+    if (enrollmentDate && activeTerm && activeTerm.schoolDays && activeTerm.schoolDays.length > 0) {
+      const schoolDays = [...activeTerm.schoolDays].sort();
+      const firstSchoolDay = schoolDays[0];
+      if (enrollmentDate > firstSchoolDay) {
+        const priorDays = schoolDays.filter(d => d < enrollmentDate);
+        const priorDaysCount = priorDays.length;
+        if (priorDaysCount > 0) {
+          if (paymentType === 'Term') {
+            const dailyRate = termFee / schoolDays.length;
+            const deduction = priorDaysCount * dailyRate;
+            adjustedLegacyDebt = Math.max(0, legacyDebt - deduction);
+          } else {
+            const dailyRate = Math.max(0.01, (systemSettings?.baselineDailyFee ?? 5.00) - discount);
+            const deduction = priorDaysCount * dailyRate;
+            adjustedLegacyDebt = Math.max(0, legacyDebt - deduction);
+          }
+        }
+      }
+    }
+
     const newStudent: Student = {
       id: 'student_' + Date.now(),
       name,
@@ -1750,7 +2156,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       gender: gender,
       paymentType: paymentType,
       termFee: termFee,
-      legacyDebt: legacyDebt
+      legacyDebt: adjustedLegacyDebt,
+      enrollmentDate: enrollmentDate
     };
 
     const nextStudents = [...students, newStudent];
@@ -1765,6 +2172,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateStudent = (updatedStudent: Student) => {
+    // Check if student has pending local updates
+    const hasPending = pendingLocalEdits.some(edit => 
+      (edit.type === 'student' || edit.type === 'payment') && 
+      edit.description.toLowerCase().includes(updatedStudent.name.toLowerCase())
+    );
+    if (hasPending) {
+      const proceed = window.confirm(`Warning: ${updatedStudent.name} has pending offline updates that are not yet synced to the cloud. Overwriting now may cause synchronization conflicts.\n\nAre you sure you want to proceed with updating this record?`);
+      if (!proceed) return;
+    }
+
     const nextStudents = students.map(s => s.id === updatedStudent.id ? updatedStudent : s);
     setStudents(nextStudents);
     saveState(users, nextStudents, payments);
@@ -1950,12 +2367,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const recordPayment = (studentId: string, verified = true, customAmount?: number, customNotes?: string, allowDuplicate = false) => {
+    if (viewingTermId) {
+      playFeedbackSound('error');
+      console.warn("Write operations are disabled while viewing historical archives.");
+      return;
+    }
     const student = students.find(s => s.id === studentId);
     if (!student) return;
+
+    // Check if the student's record has pending updates
+    const hasPending = pendingLocalEdits.some(edit => 
+      (edit.type === 'student' || edit.type === 'payment') && 
+      edit.description.toLowerCase().includes(student.name.toLowerCase())
+    );
+    if (hasPending && !allowDuplicate) {
+      const proceed = window.confirm(`Warning: ${student.name} has pending offline updates that are not yet synced to the cloud.\n\nRecording a new payment now might create conflicts. Do you want to proceed anyway?`);
+      if (!proceed) {
+        return;
+      }
+    }
 
     const discountAmount = student.discount || 0;
     const baseDailyFee = systemSettings?.baselineDailyFee ?? 5.00;
     const finalAmount = customAmount !== undefined ? customAmount : Math.max(0, baseDailyFee - discountAmount);
+
+    // Duplicate check: if the same fee record is being submitted multiple times (same date, same amount)
+    const duplicatePayment = payments.find(p => 
+      p.studentId === studentId && 
+      p.date === currentDate && 
+      Math.abs(p.amount - finalAmount) < 0.01 && 
+      !p.isAbsent
+    );
+    if (duplicatePayment && !allowDuplicate) {
+      const proceed = window.confirm(`Warning: A payment of GHC ${finalAmount.toFixed(2)} has already been recorded for ${student.name} on ${currentDate}.\n\nSubmitting again will log a duplicate payment. Are you sure you want to log this duplicate payment?`);
+      if (!proceed) {
+        return;
+      }
+    }
 
     const dailyRate = Math.max(0.01, baseDailyFee - discountAmount);
 
@@ -2027,7 +2475,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let billableDays: string[] = [];
     if (activeTerm && activeTerm.schoolDays) {
       const holidays = activeTerm.publicHolidays || [];
-      const pastSchoolDays = activeTerm.schoolDays.filter(d => d < currentDate && !holidays.includes(d));
+      const pastSchoolDays = activeTerm.schoolDays.filter(d => {
+        const afterEnrollment = student.enrollmentDate ? d >= student.enrollmentDate : true;
+        return d < currentDate && !holidays.includes(d) && afterEnrollment;
+      });
       billableDays = pastSchoolDays.filter(dStr => {
         return !studentPayments.some(p => p.date === dStr && p.isAbsent);
       });
@@ -2326,6 +2777,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     notes?: string,
     customDate?: string
   ) => {
+    if (viewingTermId) {
+      playFeedbackSound('error');
+      console.warn("Write operations are disabled while viewing historical archives.");
+      return;
+    }
     const student = students.find(s => s.id === studentId);
     if (!student) return;
 
@@ -2368,6 +2824,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const recordAbsent = (studentId: string) => {
+    if (viewingTermId) {
+      playFeedbackSound('error');
+      console.warn("Write operations are disabled while viewing historical archives.");
+      return;
+    }
     const student = students.find(s => s.id === studentId);
     if (!student) return;
 
@@ -2593,6 +3054,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const bulkRecordPayments = (studentIds: string[], verified = true, customAmount?: number) => {
+    if (viewingTermId) {
+      playFeedbackSound('error');
+      console.warn("Write operations are disabled while viewing historical archives.");
+      return;
+    }
     let nextPayments = [...payments];
     const recordsToSync: PaymentRecord[] = [];
     studentIds.forEach(id => {
@@ -2972,13 +3438,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const getDailyStats = (dateStr: string): DailyStats => {
     const targetDatePayments = payments.filter(p => p.date === dateStr);
+    const targetExamsPayments = examsPayments.filter(p => p.datePaid === dateStr);
     const activeStudents = students.filter(s => s.active);
 
     const paidCount = targetDatePayments.filter(p => !p.isAbsent).length;
     const absentCount = targetDatePayments.filter(p => p.isAbsent).length;
     const pendingCount = Math.max(0, activeStudents.length - paidCount - absentCount);
 
-    const totalCollected = targetDatePayments.reduce((acc, p) => acc + ((p.verified && !p.isAbsent) ? p.amount : 0), 0);
+    const totalFeesCollected = targetDatePayments.reduce((acc, p) => acc + ((p.verified && !p.isAbsent) ? p.amount : 0), 0);
+    const totalExamsCollected = targetExamsPayments.reduce((acc, p) => acc + p.amountPaid, 0);
+    const totalCollected = totalFeesCollected + totalExamsCollected;
+
     const baseDailyFee = systemSettings?.baselineDailyFee ?? 5.00;
     const totalExpected = activeStudents.reduce((acc, s) => acc + Math.max(0, baseDailyFee - (s.discount || 0)), 0);
 
@@ -3001,6 +3471,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         byCategory[p.category] = (byCategory[p.category] || 0) + p.amount;
         byClass[p.class] = (byClass[p.class] || 0) + p.amount;
       }
+    });
+
+    targetExamsPayments.forEach(p => {
+      byCategory[p.category] = (byCategory[p.category] || 0) + p.amountPaid;
+      byClass[p.class] = (byClass[p.class] || 0) + p.amountPaid;
     });
 
     return {
@@ -3067,8 +3542,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const getCashFlowTrend = (): CashFlowTrendPoint[] => {
     // Generate payments aggregated for the last 5 days
-    const datesList: string[] = payments.map(p => p.date);
-    const uniqueDates: string[] = Array.from(new Set(datesList)).sort();
+    const datesList: string[] = [...payments.map(p => p.date), ...examsPayments.map(p => p.datePaid)];
+    const uniqueDates: string[] = Array.from(new Set(datesList)).filter(Boolean).sort();
     
     // Fallback if empty
     if (uniqueDates.length === 0) {
@@ -3077,15 +3552,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return uniqueDates.map((dateStr: string) => {
       const datePayments = payments.filter(p => p.date === dateStr && p.verified);
+      const dateExamsPayments = examsPayments.filter(p => p.datePaid === dateStr);
       const parts = dateStr.split('-');
       const formattedDate = parts[2] ? `${parts[2]}/${parts[1]}` : dateStr;
-      const totalAmount = datePayments.reduce((acc, p) => acc + p.amount, 0);
+      const totalAmount = datePayments.reduce((acc, p) => acc + p.amount, 0) + dateExamsPayments.reduce((acc, p) => acc + p.amountPaid, 0);
 
       return {
         date: dateStr,
         formattedDate,
         amount: totalAmount,
-        transactions: datePayments.length
+        transactions: datePayments.length + dateExamsPayments.length
       };
     });
   };
@@ -3158,10 +3634,11 @@ School Administration Financial Audit System (MFA Secure)
   };
 
   const saveTerms = (newTerms: Term[]) => {
-    setTerms(newTerms);
-    localStorage.setItem('s_terms', JSON.stringify(newTerms));
+    const healed = healTerms(newTerms);
+    setTerms(healed);
+    idbEngine.setItem('s_terms', healed);
     if (storageMode === 'cloud') {
-      db.saveTerms(newTerms);
+      db.saveTerms(healed);
     }
   };
 
@@ -3297,10 +3774,10 @@ School Administration Financial Audit System (MFA Secure)
   };
 
   const resetData = () => {
-    localStorage.removeItem('s_users');
-    localStorage.removeItem('s_students');
-    localStorage.removeItem('s_payments');
-    localStorage.removeItem('s_terms');
+    idbEngine.removeItem('s_users');
+    idbEngine.removeItem('s_students');
+    idbEngine.removeItem('s_payments');
+    idbEngine.removeItem('s_terms');
     setUsers(INITIAL_USERS);
     setStudents(INITIAL_STUDENTS);
     setPayments(generateSeedPayments());
@@ -3314,7 +3791,9 @@ School Administration Financial Audit System (MFA Secure)
       active: true
     }];
     setTerms(initialTerms);
-    localStorage.setItem('s_terms', JSON.stringify(initialTerms));
+    idbEngine.setItem('s_terms', initialTerms);
+
+    updateSystemSettings({ disableDemoData: false });
 
     if (db.isActive() && storageMode === 'cloud') {
       db.seedTables(INITIAL_USERS, INITIAL_STUDENTS, generateSeedPayments(), initialTerms).catch(err => {
@@ -3326,8 +3805,10 @@ School Administration Financial Audit System (MFA Secure)
   const clearSampleStudents = () => {
     setStudents([]);
     setPayments([]);
-    localStorage.setItem('s_students', JSON.stringify([]));
-    localStorage.setItem('s_payments', JSON.stringify([]));
+    idbEngine.setItem('s_students', []);
+    idbEngine.setItem('s_payments', []);
+    
+    updateSystemSettings({ disableDemoData: true });
     
     // If backend sync is active, clear database on the server too keeping staff users intact
     if (db.isActive() && storageMode === 'cloud') {
@@ -3337,9 +3818,47 @@ School Administration Financial Audit System (MFA Secure)
     }
   };
 
+  const purgeOnlyDemoData = async (): Promise<{ success: boolean; message: string }> => {
+    const demoStudentIds = new Set(ORIGINAL_DEMO_STUDENT_IDS);
+    const demoUserIds = new Set(['accountant-1']);
+
+    const nextStudents = students.filter(s => !demoStudentIds.has(s.id));
+    const nextPayments = payments.filter(p => !demoStudentIds.has(p.studentId));
+    const nextUsers = users.filter(u => !demoUserIds.has(u.id));
+
+    setStudents(nextStudents);
+    setPayments(nextPayments);
+    setUsers(nextUsers);
+
+    idbEngine.setItem('s_students', nextStudents);
+    idbEngine.setItem('s_payments', nextPayments);
+    idbEngine.setItem('s_users', nextUsers);
+
+    await updateSystemSettings({ disableDemoData: true });
+
+    if (db.isActive()) {
+      try {
+        const res = await (db as any).purgeDemoData();
+        if (res && res.success) {
+          return {
+            success: true,
+            message: `Cleaned up your registers successfully: Removed ${res.purgedStudentsCount} demo student records, ${res.purgedPaymentsCount} sample transactions, and ${res.purgedUsersCount} demo staff account.`
+          };
+        }
+      } catch (err) {
+        console.error("Failed to call backend purge-demo API:", err);
+      }
+    }
+
+    return {
+      success: true,
+      message: "Successfully filtered out the 27 demo students and their transactions locally."
+    };
+  };
+
   const clearAllPayments = () => {
     setPayments([]);
-    localStorage.setItem('s_payments', JSON.stringify([]));
+    idbEngine.setItem('s_payments', []);
     
     // If backend sync is active, clear payments collection on backend keeping everything else
     if (db.isActive() && storageMode === 'cloud') {
@@ -3363,7 +3882,7 @@ School Administration Financial Audit System (MFA Secure)
     };
     const updatedBackups = [newBackup, ...promotionBackups].slice(0, 10);
     setPromotionBackups(updatedBackups);
-    localStorage.setItem('s_promotion_backups', JSON.stringify(updatedBackups));
+    idbEngine.setItem('s_promotion_backups', updatedBackups);
 
     // 2. Compute promotions
     const CLASS_PROMOTION_MAP: Record<StudentClass, { nextClass: StudentClass | null; category: SchoolCategory; completes: boolean }> = {
@@ -3460,7 +3979,7 @@ School Administration Financial Audit System (MFA Secure)
       // Filter out this backup from the list
       const updatedBackups = promotionBackups.filter(b => b.id !== targetBackupId);
       setPromotionBackups(updatedBackups);
-      localStorage.setItem('s_promotion_backups', JSON.stringify(updatedBackups));
+      idbEngine.setItem('s_promotion_backups', updatedBackups);
 
       if (db.isActive() && storageMode === 'cloud') {
         db.saveStudentsBulk(revertedStudents).catch(err => {
@@ -3490,7 +4009,7 @@ School Administration Financial Audit System (MFA Secure)
 
     const updated = [newExpense, ...expenses];
     setExpenses(updated);
-    localStorage.setItem('s_expenses', JSON.stringify(updated));
+    idbEngine.setItem('s_expenses', updated);
 
     if (db.isActive() && storageMode === 'cloud') {
       db.saveExpense(newExpense).catch(err => {
@@ -3502,7 +4021,7 @@ School Administration Financial Audit System (MFA Secure)
   const deleteExpense = (expenseId: string) => {
     const updated = expenses.filter(e => e.id !== expenseId);
     setExpenses(updated);
-    localStorage.setItem('s_expenses', JSON.stringify(updated));
+    idbEngine.setItem('s_expenses', updated);
 
     if (db.isActive() && storageMode === 'cloud') {
       db.deleteExpense(expenseId).catch(err => {
@@ -3526,7 +4045,7 @@ School Administration Financial Audit System (MFA Secure)
 
     const updated = [newTarget, ...budgetTargets];
     setBudgetTargets(updated);
-    localStorage.setItem('s_budget_targets', JSON.stringify(updated));
+    idbEngine.setItem('s_budget_targets', updated);
 
     if (db.isActive() && storageMode === 'cloud') {
       try {
@@ -3540,7 +4059,7 @@ School Administration Financial Audit System (MFA Secure)
   const updateBudgetTarget = async (target: BudgetTarget) => {
     const updated = budgetTargets.map(t => t.id === target.id ? target : t);
     setBudgetTargets(updated);
-    localStorage.setItem('s_budget_targets', JSON.stringify(updated));
+    idbEngine.setItem('s_budget_targets', updated);
 
     if (db.isActive() && storageMode === 'cloud') {
       try {
@@ -3554,7 +4073,7 @@ School Administration Financial Audit System (MFA Secure)
   const deleteBudgetTarget = async (targetId: string) => {
     const updated = budgetTargets.filter(t => t.id !== targetId);
     setBudgetTargets(updated);
-    localStorage.setItem('s_budget_targets', JSON.stringify(updated));
+    idbEngine.setItem('s_budget_targets', updated);
 
     if (db.isActive() && storageMode === 'cloud') {
       try {
@@ -3577,6 +4096,34 @@ School Administration Financial Audit System (MFA Secure)
       throw new Error(`Student with ID ${studentId} not found in roster.`);
     }
 
+    // Check if student has pending local updates
+    const hasPending = pendingLocalEdits.some(edit => 
+      (edit.type === 'student' || edit.type === 'payment') && 
+      edit.description.toLowerCase().includes(student.name.toLowerCase())
+    );
+    if (hasPending) {
+      const proceed = window.confirm(`Warning: ${student.name} has pending offline updates that are not yet synced to the cloud.\n\nDo you want to proceed with recording this exams fee?`);
+      if (!proceed) {
+        throw new Error("Action cancelled by user due to pending offline updates.");
+      }
+    }
+
+    // Duplicate exams payment check
+    const targetDate = datePaid || currentDate;
+    const targetTerm = activeTerm?.id || 'term_default';
+    const duplicateExamsPayment = examsPayments.find(p => 
+      p.studentId === studentId && 
+      p.datePaid === targetDate && 
+      p.termId === targetTerm && 
+      Math.abs(p.amountPaid - amountPaid) < 0.01
+    );
+    if (duplicateExamsPayment) {
+      const proceed = window.confirm(`Warning: An exams fee payment of GHC ${amountPaid.toFixed(2)} has already been recorded for ${student.name} on this date (${targetDate}) for this term.\n\nDo you want to proceed with saving this duplicate exams payment?`);
+      if (!proceed) {
+        throw new Error("Action cancelled by user to prevent duplicate exams payment.");
+      }
+    }
+
     const newPayment: ExamsPayment = {
       id: `ex-pay-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
       studentId: student.id,
@@ -3594,7 +4141,7 @@ School Administration Financial Audit System (MFA Secure)
 
     const updated = [newPayment, ...examsPayments];
     setExamsPayments(updated);
-    localStorage.setItem('s_exams_payments', JSON.stringify(updated));
+    idbEngine.setItem('s_exams_payments', updated);
 
     if (db.isActive() && storageMode === 'cloud') {
       try {
@@ -3608,7 +4155,7 @@ School Administration Financial Audit System (MFA Secure)
   const deleteExamsPayment = async (paymentId: string) => {
     const updated = examsPayments.filter(p => p.id !== paymentId);
     setExamsPayments(updated);
-    localStorage.setItem('s_exams_payments', JSON.stringify(updated));
+    idbEngine.setItem('s_exams_payments', updated);
 
     if (db.isActive() && storageMode === 'cloud') {
       try {
@@ -3646,7 +4193,7 @@ School Administration Financial Audit System (MFA Secure)
 
     const updated = [newExpense, ...examsExpenses];
     setExamsExpenses(updated);
-    localStorage.setItem('s_exams_expenses', JSON.stringify(updated));
+    idbEngine.setItem('s_exams_expenses', updated);
 
     if (db.isActive() && storageMode === 'cloud') {
       try {
@@ -3660,7 +4207,7 @@ School Administration Financial Audit System (MFA Secure)
   const deleteExamsExpense = async (expenseId: string) => {
     const updated = examsExpenses.filter(e => e.id !== expenseId);
     setExamsExpenses(updated);
-    localStorage.setItem('s_exams_expenses', JSON.stringify(updated));
+    idbEngine.setItem('s_exams_expenses', updated);
 
     if (db.isActive() && storageMode === 'cloud') {
       try {
@@ -3671,9 +4218,23 @@ School Administration Financial Audit System (MFA Secure)
     }
   };
 
+  const updateExamsExpense = async (updatedExpense: ExamsExpense) => {
+    const updated = examsExpenses.map(e => e.id === updatedExpense.id ? updatedExpense : e);
+    setExamsExpenses(updated);
+    idbEngine.setItem('s_exams_expenses', updated);
+
+    if (db.isActive() && storageMode === 'cloud') {
+      try {
+        await db.saveExamsExpense(updatedExpense);
+      } catch (err) {
+        console.error("Failed to update exams expense in cloud:", err);
+      }
+    }
+  };
+
   const updateExamsSettings = async (settings: ExamsSettings) => {
     setExamsSettings(settings);
-    localStorage.setItem('s_exams_settings', JSON.stringify(settings));
+    idbEngine.setItem('s_exams_settings', settings);
 
     if (db.isActive() && storageMode === 'cloud') {
       try {
@@ -3738,7 +4299,7 @@ School Administration Financial Audit System (MFA Secure)
 
     const updated = [newSalary, ...salaries];
     setSalaries(updated);
-    localStorage.setItem('s_salaries', JSON.stringify(updated));
+    idbEngine.setItem('s_salaries', updated);
 
     if (db.isActive() && storageMode === 'cloud') {
       db.saveSalary(newSalary).catch(err => {
@@ -3750,13 +4311,91 @@ School Administration Financial Audit System (MFA Secure)
   const deleteSalary = (salaryId: string) => {
     const updated = salaries.filter(s => s.id !== salaryId);
     setSalaries(updated);
-    localStorage.setItem('s_salaries', JSON.stringify(updated));
+    idbEngine.setItem('s_salaries', updated);
 
     if (db.isActive() && storageMode === 'cloud') {
       db.deleteSalary(salaryId).catch(err => {
         console.error("Failed to delete salary from cloud:", err);
       });
     }
+  };
+
+  const addTeacherEvaluation = async (evaluation: Omit<TeacherEvaluation, 'id' | 'dateCreated'>) => {
+    const newEval: TeacherEvaluation = {
+      ...evaluation,
+      id: `eval-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+      dateCreated: new Date().toISOString()
+    };
+    const updated = [newEval, ...teacherEvaluations];
+    setTeacherEvaluations(updated);
+    idbEngine.setItem('s_teacher_evaluations', updated);
+
+    if (db.isActive() && storageMode === 'cloud') {
+      try {
+        const success = await db.saveTeacherEvaluation(newEval);
+        return success;
+      } catch (err) {
+        console.error("Failed to save evaluation to cloud:", err);
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const deleteTeacherEvaluation = async (id: string) => {
+    const updated = teacherEvaluations.filter(e => e.id !== id);
+    setTeacherEvaluations(updated);
+    idbEngine.setItem('s_teacher_evaluations', updated);
+
+    if (db.isActive() && storageMode === 'cloud') {
+      try {
+        const success = await db.deleteTeacherEvaluation(id);
+        return success;
+      } catch (err) {
+        console.error("Failed to delete evaluation from cloud:", err);
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const addJournalEntry = async (entry: Omit<JournalEntry, 'id' | 'timestamp'>) => {
+    const newEntry: JournalEntry = {
+      ...entry,
+      id: `journal-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+      timestamp: new Date().toISOString()
+    };
+    const updated = [newEntry, ...journalEntries];
+    setJournalEntries(updated);
+    idbEngine.setItem('s_journal_entries', updated);
+
+    if (db.isActive() && storageMode === 'cloud') {
+      try {
+        const success = await db.saveJournalEntry(newEntry);
+        return success;
+      } catch (err) {
+        console.error("Failed to save journal entry to cloud:", err);
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const deleteJournalEntry = async (id: string) => {
+    const updated = journalEntries.filter(e => e.id !== id);
+    setJournalEntries(updated);
+    idbEngine.setItem('s_journal_entries', updated);
+
+    if (db.isActive() && storageMode === 'cloud') {
+      try {
+        const success = await db.deleteJournalEntry(id);
+        return success;
+      } catch (err) {
+        console.error("Failed to delete journal entry from cloud:", err);
+        return false;
+      }
+    }
+    return true;
   };
 
   const fetchWhatsappLogs = async () => {
@@ -3822,9 +4461,26 @@ School Administration Financial Audit System (MFA Secure)
     message: string,
     studentId?: string,
     studentName?: string,
-    type?: string
+    type?: string,
+    forceDirect?: boolean
   ) => {
     try {
+      const gatewayMode = systemSettings?.whatsappGatewayMode || 'direct';
+      const isDirect = forceDirect || (gatewayMode === 'direct');
+
+      if (isDirect && typeof window !== 'undefined') {
+        let targetPhone = phone.replace(/\D/g, "");
+        if (targetPhone.startsWith("0") && targetPhone.length === 10) {
+          targetPhone = "233" + targetPhone.substring(1);
+        }
+        const urlText = encodeURIComponent(message);
+        const waUrl = targetPhone 
+          ? `https://api.whatsapp.com/send?phone=${targetPhone}&text=${urlText}`
+          : `https://api.whatsapp.com/send?text=${urlText}`;
+        
+        window.open(waUrl, '_blank', 'noopener,noreferrer');
+      }
+
       const res = await fetch('/api/whatsapp/send', {
         method: 'POST',
         headers: {
@@ -3836,6 +4492,10 @@ School Administration Financial Audit System (MFA Secure)
           studentId,
           studentName,
           type,
+          isDirect,
+          whatsappGatewayMode: gatewayMode,
+          whatsappWebhookUrl: systemSettings?.whatsappWebhookUrl || '',
+          whatsappWebhookToken: systemSettings?.whatsappWebhookToken || '',
           operator: currentUser ? currentUser.name : 'System Automation'
         })
       });
@@ -3916,7 +4576,7 @@ School Administration Financial Audit System (MFA Secure)
     
     if (needsUpdate) {
       setBudgetTargets(updatedTargets);
-      localStorage.setItem('s_budget_targets', JSON.stringify(updatedTargets));
+      idbEngine.setItem('s_budget_targets', updatedTargets);
       
       if (db.isActive() && storageMode === 'cloud') {
         updatedTargets.forEach(async (target, idx) => {
@@ -3941,6 +4601,9 @@ School Administration Financial Audit System (MFA Secure)
       payments,
       terms,
       activeTerm,
+      realActiveTerm,
+      viewingTermId,
+      setViewingTermId,
       addTerm,
       editTerm,
       setActiveTerm,
@@ -3983,6 +4646,7 @@ School Administration Financial Audit System (MFA Secure)
       sendMonthlyEmailDraft,
       resetData,
       clearSampleStudents,
+      purgeOnlyDemoData,
       clearAllPayments,
       firebaseConnected,
       firebaseError,
@@ -4000,6 +4664,7 @@ School Administration Financial Audit System (MFA Secure)
       backups,
       createBackup,
       restoreBackup,
+      importDatabaseBackup,
       deleteBackup,
       clearAllBackups,
       audioMuted,
@@ -4009,6 +4674,12 @@ School Administration Financial Audit System (MFA Secure)
       setTheme,
       expenses,
       salaries,
+      teacherEvaluations,
+      addTeacherEvaluation,
+      deleteTeacherEvaluation,
+      journalEntries,
+      addJournalEntry,
+      deleteJournalEntry,
       addExpense,
       deleteExpense,
       addSalary,
@@ -4040,6 +4711,7 @@ School Administration Financial Audit System (MFA Secure)
       deleteExamsPayment,
       addExamsExpense,
       deleteExamsExpense,
+      updateExamsExpense,
       updateExamsSettings
     }}>
       {children}

@@ -6,11 +6,11 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
 import { useApp, getStudentB9ExpiryDate, getDiscountedTermFee } from '../context/AppContext';
-import { StudentClass, Student, UserRole } from '../types';
-import { Plus, UserPlus, Trash2, Edit2, ShieldAlert, Check, X, ToggleLeft, ToggleRight, Database, Server, RefreshCw, Copy, Share2, Users, BellRing, MessageSquareCode, UserCheck, Camera, Upload, Download, Search, QrCode, Printer, Contact, Award, DollarSign, Info, MessageSquare, Sliders, Bot, FileText, FileSignature, CalendarDays } from 'lucide-react';
+import { StudentClass, Student, UserRole, SchoolCategory } from '../types';
+import { Plus, UserPlus, Trash2, Edit2, ShieldAlert, Check, X, ToggleLeft, ToggleRight, Database, Server, RefreshCw, Copy, Share2, Users, BellRing, MessageSquareCode, UserCheck, Camera, Upload, Download, Search, QrCode, Printer, Contact, Award, DollarSign, Info, MessageSquare, Smartphone, Sliders, Bot, FileText, FileSignature, CalendarDays, ChevronDown, ChevronRight, Scale, LayoutGrid, List } from 'lucide-react';
 import { getClassCategory } from '../initialData';
-import { AdjustmentsTab } from './AdjustmentsTab';
 import { ExpendituresTab } from './ExpendituresTab';
+import { LedgerTab } from './LedgerTab';
 import { WhatsAppLogsTab } from './WhatsAppLogsTab';
 import { VoiceSearchButton } from './VoiceSearchButton';
 import { SettingsPanel } from './SettingsPanel';
@@ -18,6 +18,10 @@ import { IdCardsGeneratorTab } from './IdCardsGeneratorTab';
 import { AiAssistantTab } from './AiAssistantTab';
 import { EnrollmentSummaryWidget } from './EnrollmentSummaryWidget';
 import { AuditTrailTab } from './AuditTrailTab';
+import { SchoolLogo } from './SchoolLogo';
+import { PerformanceTab } from './PerformanceTab';
+import { DatabaseTab } from './DatabaseTab';
+import { ImageCropperModal } from './ImageCropperModal';
 
 interface SignaturePadProps {
   title: string;
@@ -183,6 +187,7 @@ export const AdminPanel: React.FC = React.memo(() => {
     bgSyncStatus,
     lastBgSyncTime,
     clearSampleStudents,
+    purgeOnlyDemoData,
     currentDate,
     activeTerm,
     payments,
@@ -206,7 +211,8 @@ export const AdminPanel: React.FC = React.memo(() => {
     expenses,
     salaries,
     budgetTargets,
-    systemSettings
+    systemSettings,
+    sendautomatedWhatsApp
   } = useApp();
 
   const [localTimeLeft, setLocalTimeLeft] = useState<number>(30 * 60);
@@ -221,9 +227,16 @@ export const AdminPanel: React.FC = React.memo(() => {
     return () => clearInterval(timer);
   }, []);
 
-  const [activeTab, setActiveTab] = useState<'students' | 'mfa' | 'gates' | 'database' | 'adjustments' | 'expenditures' | 'whatsapp' | 'settings' | 'idcards' | 'ai_assistant' | 'audit'>('students');
+  const [activeTab, setActiveTab] = useState<'students' | 'mfa' | 'gates' | 'database' | 'expenditures' | 'performance' | 'whatsapp' | 'settings' | 'idcards' | 'ai_assistant' | 'audit'>('students');
   const [studentFilter, setStudentFilter] = useState<'all' | 'active' | 'inactive'>('all');
+  const [studentViewStyle, setStudentViewStyle] = useState<'list' | 'album'>('list');
   const [searchQuery, setSearchQuery] = useState('');
+  const [expandedRegistryCategories, setExpandedRegistryCategories] = useState<Record<SchoolCategory, boolean>>({
+    'Pre-school': true,
+    'Primary': true,
+    'JHS': true,
+  });
+  const [expandedStudentIds, setExpandedStudentIds] = useState<Record<string, boolean>>({});
 
   // Appointment Letter & Renewal Modal states
   const [appointmentModalUser, setAppointmentModalUser] = useState<any | null>(null);
@@ -241,6 +254,7 @@ export const AdminPanel: React.FC = React.memo(() => {
   const [isRenewalTab, setIsRenewalTab] = useState(false); // active tab inside modal (Appointment vs Renewal Letter)
   const [appStaffSignature, setAppStaffSignature] = useState<string>('');
   const [appManagementSignature, setAppManagementSignature] = useState<string>('');
+  const [appPersonalAddress, setAppPersonalAddress] = useState<string>('');
 
   const openAppointmentModal = (u: any) => {
     setAppointmentModalUser(u);
@@ -263,6 +277,7 @@ export const AdminPanel: React.FC = React.memo(() => {
     setAppAllowance('0.00');
     setAppStaffSignature(u.signatureUrl || '');
     setAppManagementSignature(u.managementSignatureUrl || '');
+    setAppPersonalAddress(u.personalAddress || '');
     setIsRenewalTab(false);
   };
 
@@ -292,7 +307,8 @@ export const AdminPanel: React.FC = React.memo(() => {
       appRenewalOpt,
       appRenewalPeriod,
       appStaffSignature,
-      appManagementSignature
+      appManagementSignature,
+      appPersonalAddress
     );
 
     if (res.success) {
@@ -305,7 +321,8 @@ export const AdminPanel: React.FC = React.memo(() => {
         renewalOption: appRenewalOpt,
         renewalPeriod: appRenewalPeriod,
         signatureUrl: appStaffSignature,
-        managementSignatureUrl: appManagementSignature
+        managementSignatureUrl: appManagementSignature,
+        personalAddress: appPersonalAddress
       });
       showToast("Appointment terms successfully updated in system registers.");
     } else {
@@ -347,7 +364,8 @@ export const AdminPanel: React.FC = React.memo(() => {
       renewalClause,
       newRenewalPeriodStr,
       appStaffSignature,
-      appManagementSignature
+      appManagementSignature,
+      appPersonalAddress
     );
 
     if (res.success) {
@@ -363,7 +381,8 @@ export const AdminPanel: React.FC = React.memo(() => {
         renewalOption: renewalClause,
         renewalPeriod: newRenewalPeriodStr,
         signatureUrl: appStaffSignature,
-        managementSignatureUrl: appManagementSignature
+        managementSignatureUrl: appManagementSignature,
+        personalAddress: appPersonalAddress
       });
       
       playFeedbackSound('confirm');
@@ -393,9 +412,78 @@ export const AdminPanel: React.FC = React.memo(() => {
 
     const schoolName = systemSettings?.schoolName || 'SAWLA COMPREHENSIVE ACADEMY';
     const schoolSlogan = systemSettings?.schoolSlogan || systemSettings?.customMotto || 'Holiness is our key';
-    const schoolAddress = systemSettings?.schoolBoxAddress || 'P. O. Box ls 15, Sawla, Savannah Region, Ghana';
+    const schoolAddress = systemSettings?.schoolBoxAddress || 'P. O. Box LS 15, Sawla Savannah Region • Sawla, Jelinkon street, Savannah Region, Ghana';
     const schoolPhone = systemSettings?.schoolPhone || '+233 24 123 4567';
     const schoolEmail = systemSettings?.schoolEmail || 'info@sawlacomprehensive.edu.gh';
+
+    const getLogoSvgHtml = (size = 90, forceFallback = false): string => {
+      if (systemSettings?.schoolLogoUrl && !forceFallback) {
+        const fallbackSvg = getLogoSvgHtml(size, true);
+        return `
+          <div style="display: inline-block; width: ${size}px; height: ${size}px; position: relative; vertical-align: middle;">
+            <img src="${systemSettings.schoolLogoUrl}" style="width: ${size}px; height: ${size}px; object-fit: contain; border-radius: 50%;" onerror="this.style.display='none'; this.nextElementSibling.style.display='inline-block';" />
+            <span style="display: none; width: ${size}px; height: ${size}px; vertical-align: top;">
+              ${fallbackSvg}
+            </span>
+          </div>
+        `;
+      }
+      const sName = schoolName.toUpperCase();
+      const sLoc = systemSettings?.customLocation || 'Sawla';
+      const sMotto = systemSettings?.customMotto || 'Holiness Is Our Key';
+      return `
+        <svg width="${size}" height="${size}" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <path id="academy-text-arc" d="M 52 205 A 148 148 0 1 1 348 205" fill="none" />
+          </defs>
+          <circle cx="200" cy="200" r="190" fill="#ffffff" stroke="#04563a" strokeWidth="11" />
+          <circle cx="200" cy="200" r="146" fill="none" stroke="#04563a" strokeWidth="3.5" />
+          <text>
+            <textPath href="#academy-text-arc" startOffset="50%" textAnchor="middle" fill="#04563a" fontWeight="900" fontSize="23" letterSpacing="1px" fontFamily="system-ui, -apple-system, sans-serif">
+              ${sName}
+            </textPath>
+          </text>
+          <g id="central-heraldic-shield">
+            <path d="M 98 185 A 102 102 0 0 1 302 185 Z" fill="#009e60" stroke="#04563a" strokeWidth="3" />
+            <path d="M 98 185 A 102 102 0 0 0 200 287 L 200 185 Z" fill="#024227" stroke="#04563a" strokeWidth="3" />
+            <path d="M 200 185 L 200 287 A 102 102 0 0 0 302 185 Z" fill="#fbf7f4" stroke="#04563a" strokeWidth="3" />
+          </g>
+          <g id="upper-hemisphere-book-pen">
+            <path d="M 134 180 C 168 174, 192 174, 200 181 C 208 174, 232 174, 266 180" fill="none" stroke="#ffffff" strokeWidth="6" strokeLinecap="round" />
+            <path d="M 200 180 C 185 160, 163 160, 138 168 L 138 141 C 163 133, 185 133, 200 153 Z" fill="#d0f2e5" stroke="#ffffff" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M 200 180 C 215 160, 237 160, 262 168 L 262 141 C 237 133, 215 133, 200 153 Z" fill="#d0f2e5" stroke="#ffffff" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M 241 114 L 189 171 L 184 172 L 187 167 L 235 110 Z" fill="#ffffff" stroke="#04563a" strokeWidth="1.5" />
+            <line x1="225" y1="126" x2="201" y2="152" stroke="#04563a" strokeWidth="1.5" />
+          </g>
+          <g id="lower-left-farming-tools">
+            <path d="M 125 240 Q 120 230 131 228 L 150 242 L 139 254 Z" fill="#b0bec5" stroke="#37474f" strokeWidth="1.5" strokeLinejoin="round" />
+            <line x1="127" y1="239" x2="187" y2="208" stroke="#cca480" strokeWidth="4" strokeLinecap="round" />
+            <path d="M 179 248 C 170 230, 155 212, 140 204 L 144 200 C 160 209, 175 228, 184 246 Z" fill="#eceff1" stroke="#455a64" strokeWidth="1.5" strokeLinecap="round" />
+            <rect x="181" y="245" width="5" height="10" transform="rotate(25 181 245)" fill="#6d4c41" stroke="#3e2723" strokeWidth="1.2" />
+          </g>
+          <g id="lower-right-hearth-broom">
+            <path d="M 222 205 L 232 200 L 236 211 L 226 216 Z" fill="#212121" stroke="#000000" strokeWidth="1" />
+            <line x1="227" y1="205" x2="263" y2="263" stroke="#424242" strokeWidth="2.5" strokeLinecap="round" />
+            <line x1="227" y1="205" x2="251" y2="267" stroke="#333333" strokeWidth="2.0" strokeLinecap="round" />
+            <line x1="227" y1="205" x2="274" y2="257" stroke="#424242" strokeWidth="2.0" strokeLinecap="round" />
+            <line x1="227" y1="205" x2="241" y2="268" stroke="#212121" strokeWidth="2.5" strokeLinecap="round" />
+            <line x1="227" y1="205" x2="281" y2="249" stroke="#555555" strokeWidth="1.5" strokeLinecap="round" />
+            <line x1="227" y1="205" x2="232" y2="269" stroke="#555555" strokeWidth="1.5" strokeLinecap="round" />
+            <rect x="225" y="209" width="9" height="3" rx="0.5" fill="#fbc02d" />
+            <rect x="227" y="215" width="10" height="3.5" rx="0.5" fill="#fbc02d" transform="rotate(-15 227 215)" />
+          </g>
+          <g id="bottom-crest-banner">
+            <circle cx="106" cy="303" r="18" fill="#024227" stroke="#04563a" strokeWidth="2.5" />
+            <text x="106" y="308" textAnchor="middle" fill="#ffffff" fontWeight="900" fontSize="13" fontFamily="system-ui, -apple-system, sans-serif">20</text>
+            <circle cx="294" cy="303" r="18" fill="#024227" stroke="#04563a" strokeWidth="2.5" />
+            <text x="294" y="308" textAnchor="middle" fill="#ffffff" fontWeight="900" fontSize="13" fontFamily="system-ui, -apple-system, sans-serif">03</text>
+            <path d="M 120 307 Q 200 334 280 307 L 277 285 Q 200 312 123 285 Z" fill="#024227" stroke="#04563a" strokeWidth="3.5" strokeLinejoin="round" />
+            <text x="200" y="304" textAnchor="middle" fill="#ffffff" fontWeight="900" fontSize="14" letterSpacing="1px" fontFamily="system-ui, -apple-system, sans-serif">${sLoc}</text>
+          </g>
+          <text x="200" y="346" textAnchor="middle" fill="#024227" fontWeight="900" fontSize="13" letterSpacing="0.8px" fontFamily="Georgia, serif">${sMotto}</text>
+        </svg>
+      `;
+    };
 
     let htmlContent = '';
 
@@ -406,88 +494,142 @@ export const AdminPanel: React.FC = React.memo(() => {
             <title>Letter of Appointment - ${appointmentModalUser.name}</title>
             <style>
               body {
-                font-family: 'Times New Roman', Times, serif, sans-serif;
-                margin: 40px;
+                font-family: 'Times New Roman', Times, serif;
+                margin: 50px;
                 line-height: 1.6;
-                color: #111;
+                color: #1f2937;
                 font-size: 14px;
+                position: relative;
               }
               .letterhead {
-                text-align: center;
-                border-bottom: 3px double #000;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                border-bottom: 3px double #04563a;
                 padding-bottom: 15px;
-                margin-bottom: 30px;
+                margin-bottom: 35px;
+              }
+              .letterhead-logo {
+                width: 95px;
+                height: 95px;
+                flex-shrink: 0;
+              }
+              .letterhead-details {
+                text-align: right;
+                flex-grow: 1;
+                padding-left: 20px;
               }
               .school-name {
-                font-size: 26px;
-                font-weight: bold;
-                letter-spacing: 1px;
+                font-family: 'Georgia', serif;
+                font-size: 24px;
+                font-weight: 800;
+                color: #024227;
+                letter-spacing: 0.5px;
                 margin: 0;
                 text-transform: uppercase;
               }
               .school-slogan {
-                font-size: 12px;
+                font-family: 'Georgia', serif;
+                font-size: 11px;
                 font-style: italic;
-                margin: 3px 0 8px 0;
-                color: #444;
+                margin: 3px 0 6px 0;
+                color: #d97706;
+                font-weight: bold;
               }
               .school-contact {
-                font-size: 11px;
-                margin: 2px 0;
+                font-size: 10px;
+                color: #4b5563;
+                margin: 1px 0;
                 font-family: Arial, sans-serif;
+              }
+              .watermark-container {
+                position: absolute;
+                top: 45%;
+                left: 50%;
+                transform: translate(-50%, -50%) rotate(-12deg);
+                opacity: 0.04;
+                pointer-events: none;
+                z-index: -1;
               }
               .letter-date {
                 text-align: right;
                 margin-bottom: 25px;
                 font-weight: bold;
+                font-family: Arial, sans-serif;
+                font-size: 12px;
+                color: #374151;
               }
               .recipient-info {
-                margin-bottom: 25px;
+                margin-bottom: 30px;
+                line-height: 1.5;
+                font-family: Arial, sans-serif;
+                font-size: 12px;
+                color: #374151;
               }
               .recipient-name {
                 font-weight: bold;
-                font-size: 15px;
+                font-size: 14px;
+                color: #024227;
+                font-family: 'Times New Roman', serif;
               }
               .letter-subject {
                 text-align: center;
                 font-weight: bold;
-                font-size: 16px;
+                font-size: 15px;
                 text-decoration: underline;
                 text-transform: uppercase;
                 margin: 25px 0;
+                color: #024227;
+                font-family: 'Georgia', serif;
+                letter-spacing: 0.3px;
               }
               .letter-body {
                 text-align: justify;
               }
               .clause-title {
                 font-weight: bold;
-                margin-top: 15px;
+                margin-top: 20px;
+                margin-bottom: 5px;
+                color: #024227;
+                font-family: 'Georgia', serif;
+                font-size: 13px;
               }
               .signature-section {
-                margin-top: 50px;
+                margin-top: 55px;
                 display: flex;
                 justify-content: space-between;
+                page-break-inside: avoid;
               }
               .signature-block {
                 width: 45%;
               }
               .signature-line {
-                border-top: 1px solid #000;
+                border-top: 1px solid #777;
                 margin-top: 45px;
                 padding-top: 5px;
                 text-align: center;
                 font-size: 12px;
               }
               @media print {
-                body { margin: 20px; }
+                body { margin: 30px; }
               }
             </style>
           </head>
           <body>
             <div class="letterhead">
-              <div class="school-name">${schoolName}</div>
-              <div class="school-slogan">${schoolSlogan}</div>
-              <div class="school-contact">${schoolAddress} | Tel: ${schoolPhone} | Email: ${schoolEmail}</div>
+              <div class="letterhead-logo">
+                ${getLogoSvgHtml(95)}
+              </div>
+              <div class="letterhead-details">
+                <div class="school-name">${schoolName}</div>
+                <div class="school-slogan">${schoolSlogan}</div>
+                <div class="school-contact">${schoolAddress}</div>
+                <div class="school-contact">Tel: ${schoolPhone} | Email: ${schoolEmail}</div>
+              </div>
+            </div>
+
+            <div class="watermark-container">
+              ${getLogoSvgHtml(380)}
             </div>
 
             <div class="letter-date">Date: ${formattedLetterDate}</div>
@@ -495,9 +637,7 @@ export const AdminPanel: React.FC = React.memo(() => {
             <div class="recipient-info">
               To:<br/>
               <span class="recipient-name">${appointmentModalUser.name}</span><br/>
-              ${appDepartment}<br/>
-              ${schoolName}<br/>
-              Sawla, Ghana
+              ${appPersonalAddress ? appPersonalAddress.replace(/\n/g, '<br/>') : `${appDepartment}<br/>Personal Address Not Set`}
             </div>
 
             <div class="letter-subject">RE: LETTER OF APPOINTMENT AS ${appJobTitle.toUpperCase()}</div>
@@ -561,88 +701,142 @@ export const AdminPanel: React.FC = React.memo(() => {
             <title>Letter of Contract Renewal - ${appointmentModalUser.name}</title>
             <style>
               body {
-                font-family: 'Times New Roman', Times, serif, sans-serif;
-                margin: 40px;
+                font-family: 'Times New Roman', Times, serif;
+                margin: 50px;
                 line-height: 1.6;
-                color: #111;
+                color: #1f2937;
                 font-size: 14px;
+                position: relative;
               }
               .letterhead {
-                text-align: center;
-                border-bottom: 3px double #000;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                border-bottom: 3px double #04563a;
                 padding-bottom: 15px;
-                margin-bottom: 30px;
+                margin-bottom: 35px;
+              }
+              .letterhead-logo {
+                width: 95px;
+                height: 95px;
+                flex-shrink: 0;
+              }
+              .letterhead-details {
+                text-align: right;
+                flex-grow: 1;
+                padding-left: 20px;
               }
               .school-name {
-                font-size: 26px;
-                font-weight: bold;
-                letter-spacing: 1px;
+                font-family: 'Georgia', serif;
+                font-size: 24px;
+                font-weight: 800;
+                color: #024227;
+                letter-spacing: 0.5px;
                 margin: 0;
                 text-transform: uppercase;
               }
               .school-slogan {
-                font-size: 12px;
+                font-family: 'Georgia', serif;
+                font-size: 11px;
                 font-style: italic;
-                margin: 3px 0 8px 0;
-                color: #444;
+                margin: 3px 0 6px 0;
+                color: #d97706;
+                font-weight: bold;
               }
               .school-contact {
-                font-size: 11px;
-                margin: 2px 0;
+                font-size: 10px;
+                color: #4b5563;
+                margin: 1px 0;
                 font-family: Arial, sans-serif;
+              }
+              .watermark-container {
+                position: absolute;
+                top: 45%;
+                left: 50%;
+                transform: translate(-50%, -50%) rotate(-12deg);
+                opacity: 0.04;
+                pointer-events: none;
+                z-index: -1;
               }
               .letter-date {
                 text-align: right;
                 margin-bottom: 25px;
                 font-weight: bold;
+                font-family: Arial, sans-serif;
+                font-size: 12px;
+                color: #374151;
               }
               .recipient-info {
-                margin-bottom: 25px;
+                margin-bottom: 30px;
+                line-height: 1.5;
+                font-family: Arial, sans-serif;
+                font-size: 12px;
+                color: #374151;
               }
               .recipient-name {
                 font-weight: bold;
-                font-size: 15px;
+                font-size: 14px;
+                color: #024227;
+                font-family: 'Times New Roman', serif;
               }
               .letter-subject {
                 text-align: center;
                 font-weight: bold;
-                font-size: 16px;
+                font-size: 15px;
                 text-decoration: underline;
                 text-transform: uppercase;
                 margin: 25px 0;
+                color: #024227;
+                font-family: 'Georgia', serif;
+                letter-spacing: 0.3px;
               }
               .letter-body {
                 text-align: justify;
               }
               .clause-title {
                 font-weight: bold;
-                margin-top: 15px;
+                margin-top: 20px;
+                margin-bottom: 5px;
+                color: #024227;
+                font-family: 'Georgia', serif;
+                font-size: 13px;
               }
               .signature-section {
-                margin-top: 50px;
+                margin-top: 55px;
                 display: flex;
                 justify-content: space-between;
+                page-break-inside: avoid;
               }
               .signature-block {
                 width: 45%;
               }
               .signature-line {
-                border-top: 1px solid #000;
+                border-top: 1px solid #777;
                 margin-top: 45px;
                 padding-top: 5px;
                 text-align: center;
                 font-size: 12px;
               }
               @media print {
-                body { margin: 20px; }
+                body { margin: 30px; }
               }
             </style>
           </head>
           <body>
             <div class="letterhead">
-              <div class="school-name">${schoolName}</div>
-              <div class="school-slogan">${schoolSlogan}</div>
-              <div class="school-contact">${schoolAddress} | Tel: ${schoolPhone} | Email: ${schoolEmail}</div>
+              <div class="letterhead-logo">
+                ${getLogoSvgHtml(95)}
+              </div>
+              <div class="letterhead-details">
+                <div class="school-name">${schoolName}</div>
+                <div class="school-slogan">${schoolSlogan}</div>
+                <div class="school-contact">${schoolAddress}</div>
+                <div class="school-contact">Tel: ${schoolPhone} | Email: ${schoolEmail}</div>
+              </div>
+            </div>
+
+            <div class="watermark-container">
+              ${getLogoSvgHtml(380)}
             </div>
 
             <div class="letter-date">Date: ${formattedLetterDate}</div>
@@ -650,9 +844,7 @@ export const AdminPanel: React.FC = React.memo(() => {
             <div class="recipient-info">
               To:<br/>
               <span class="recipient-name">${appointmentModalUser.name}</span><br/>
-              ${appDepartment}<br/>
-              ${schoolName}<br/>
-              Sawla, Ghana
+              ${appPersonalAddress ? appPersonalAddress.replace(/\n/g, '<br/>') : `${appDepartment}<br/>Personal Address Not Set`}
             </div>
 
             <div class="letter-subject">RE: RENEWAL & EXTENSION OF APPOINTMENT CONTRACT</div>
@@ -725,12 +917,27 @@ export const AdminPanel: React.FC = React.memo(() => {
   const [isSyncingTransition, setIsSyncingTransition] = useState(false);
   const [copiedAddress, setCopiedAddress] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [showPurgeDemoConfirm, setShowPurgeDemoConfirm] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [backupLabel, setBackupLabel] = useState('');
   const [showRestoreConfirmId, setShowRestoreConfirmId] = useState<string | null>(null);
   const [showBackupPurgeConfirm, setShowBackupPurgeConfirm] = useState(false);
   const [selectedIdCardStudent, setSelectedIdCardStudent] = useState<Student | null>(null);
   const [historyModalStudent, setHistoryModalStudent] = useState<Student | null>(null);
+  const [isEditingPortfolio, setIsEditingPortfolio] = useState(false);
+  const [portfolioEditName, setPortfolioEditName] = useState("");
+  const [portfolioEditPhone, setPortfolioEditPhone] = useState("");
+  const [portfolioEditPhoto, setPortfolioEditPhoto] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    if (historyModalStudent) {
+      setPortfolioEditName(historyModalStudent.name || '');
+      setPortfolioEditPhone(historyModalStudent.guardianPhone || '');
+      setPortfolioEditPhoto(historyModalStudent.photoUrl);
+      setIsEditingPortfolio(false);
+    }
+  }, [historyModalStudent]);
+
   const [idCardQrDataUrl, setIdCardQrDataUrl] = useState<string>('');
   const [idCardTheme, setIdCardTheme] = useState<'dark' | 'light'>('dark');
 
@@ -903,6 +1110,75 @@ export const AdminPanel: React.FC = React.memo(() => {
     if (!iframeDoc) return;
 
     const isDarkTheme = bulkPrintTheme === 'dark';
+    const schoolName = systemSettings?.schoolName || 'SAAKO HOLY CHILD ACADEMY';
+    const getLogoSvgHtml = (size = 18, forceFallback = false): string => {
+      if (systemSettings?.schoolLogoUrl && !forceFallback) {
+        const fallbackSvg = getLogoSvgHtml(size, true);
+        return `
+          <div style="display: inline-block; width: ${size}px; height: ${size}px; position: relative; vertical-align: middle;">
+            <img src="${systemSettings.schoolLogoUrl}" style="width: ${size}px; height: ${size}px; object-fit: contain; border-radius: 50%;" onerror="this.style.display='none'; this.nextElementSibling.style.display='inline-block';" />
+            <span style="display: none; width: ${size}px; height: ${size}px; vertical-align: top;">
+              ${fallbackSvg}
+            </span>
+          </div>
+        `;
+      }
+      const sName = schoolName.toUpperCase();
+      const sLoc = systemSettings?.customLocation || 'Sawla';
+      const sMotto = systemSettings?.customMotto || 'Holiness Is Our Key';
+      return `
+        <svg width="${size}" height="${size}" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg" style="border-radius: 50%;">
+          <defs>
+            <path id="academy-text-arc" d="M 52 205 A 148 148 0 1 1 348 205" fill="none" />
+          </defs>
+          <circle cx="200" cy="200" r="190" fill="#ffffff" stroke="#04563a" strokeWidth="11" />
+          <circle cx="200" cy="200" r="146" fill="none" stroke="#04563a" strokeWidth="3.5" />
+          <text>
+            <textPath href="#academy-text-arc" startOffset="50%" textAnchor="middle" fill="#04563a" fontWeight="900" fontSize="23" letterSpacing="1px" fontFamily="system-ui, -apple-system, sans-serif">
+              ${sName}
+            </textPath>
+          </text>
+          <g id="central-heraldic-shield">
+            <path d="M 98 185 A 102 102 0 0 1 302 185 Z" fill="#009e60" stroke="#04563a" strokeWidth="3" />
+            <path d="M 98 185 A 102 102 0 0 0 200 287 L 200 185 Z" fill="#024227" stroke="#04563a" strokeWidth="3" />
+            <path d="M 200 185 L 200 287 A 102 102 0 0 0 302 185 Z" fill="#fbf7f4" stroke="#04563a" strokeWidth="3" />
+          </g>
+          <g id="upper-hemisphere-book-pen">
+            <path d="M 134 180 C 168 174, 192 174, 200 181 C 208 174, 232 174, 266 180" fill="none" stroke="#ffffff" strokeWidth="6" strokeLinecap="round" />
+            <path d="M 200 180 C 185 160, 163 160, 138 168 L 138 141 C 163 133, 185 133, 200 153 Z" fill="#d0f2e5" stroke="#ffffff" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M 200 180 C 215 160, 237 160, 262 168 L 262 141 C 237 133, 215 133, 200 153 Z" fill="#d0f2e5" stroke="#ffffff" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M 241 114 L 189 171 L 184 172 L 187 167 L 235 110 Z" fill="#ffffff" stroke="#04563a" strokeWidth="1.5" />
+            <line x1="225" y1="126" x2="201" y2="152" stroke="#04563a" strokeWidth="1.5" />
+          </g>
+          <g id="lower-left-farming-tools">
+            <path d="M 125 240 Q 120 230 131 228 L 150 242 L 139 254 Z" fill="#b0bec5" stroke="#37474f" strokeWidth="1.5" strokeLinejoin="round" />
+            <line x1="127" y1="239" x2="187" y2="208" stroke="#cca480" strokeWidth="4" strokeLinecap="round" />
+            <path d="M 179 248 C 170 230, 155 212, 140 204 L 144 200 C 160 209, 175 228, 184 246 Z" fill="#eceff1" stroke="#455a64" strokeWidth="1.5" strokeLinecap="round" />
+          </g>
+          <g id="lower-right-hearth-broom">
+            <path d="M 222 205 L 232 200 L 236 211 L 226 216 Z" fill="#212121" stroke="#000000" strokeWidth="1" />
+            <line x1="227" y1="205" x2="263" y2="263" stroke="#424242" strokeWidth="2.5" strokeLinecap="round" />
+            <line x1="227" y1="205" x2="251" y2="267" stroke="#333333" strokeWidth="2.0" strokeLinecap="round" />
+            <line x1="227" y1="205" x2="274" y2="257" stroke="#424242" strokeWidth="2.0" strokeLinecap="round" />
+            <line x1="227" y1="205" x2="241" y2="268" stroke="#212121" strokeWidth="2.5" strokeLinecap="round" />
+            <line x1="227" y1="205" x2="281" y2="249" stroke="#555555" strokeWidth="1.5" strokeLinecap="round" />
+            <line x1="227" y1="205" x2="232" y2="269" stroke="#555555" strokeWidth="1.5" strokeLinecap="round" />
+            <rect x="225" y="209" width="9" height="3" rx="0.5" fill="#fbc02d" />
+            <rect x="227" y="215" width="10" height="3.5" rx="0.5" fill="#fbc02d" transform="rotate(-15 227 215)" />
+          </g>
+          <g id="bottom-crest-banner">
+            <circle cx="106" cy="303" r="18" fill="#024227" stroke="#04563a" strokeWidth="2.5" />
+            <text x="106" y="308" textAnchor="middle" fill="#ffffff" fontWeight="900" fontSize="13" fontFamily="system-ui, -apple-system, sans-serif">20</text>
+            <circle cx="294" cy="303" r="18" fill="#024227" stroke="#04563a" strokeWidth="2.5" />
+            <text x="294" y="308" textAnchor="middle" fill="#ffffff" fontWeight="900" fontSize="13" fontFamily="system-ui, -apple-system, sans-serif">03</text>
+            <path d="M 120 307 Q 200 334 280 307 L 277 285 Q 200 312 123 285 Z" fill="#024227" stroke="#04563a" strokeWidth="3.5" strokeLinejoin="round" />
+            <text x="200" y="304" textAnchor="middle" fill="#ffffff" fontWeight="900" fontSize="14" letterSpacing="1px" fontFamily="system-ui, -apple-system, sans-serif">${sLoc}</text>
+          </g>
+          <text x="200" y="346" textAnchor="middle" fill="#024227" fontWeight="900" fontSize="13" letterSpacing="0.8px" fontFamily="Georgia, serif">${sMotto}</text>
+        </svg>
+      `;
+    };
+
     const cardBgFront = isDarkTheme 
       ? 'background: linear-gradient(135deg, #171717 0%, #0a0a0a 100%) !important; color: #ffffff !important;'
       : 'background: linear-gradient(135deg, #ffffff 0%, #f9f9f9 100%) !important; color: #111111 !important; border: 1.5px solid #d4d4d8 !important;';
@@ -928,8 +1204,8 @@ export const AdminPanel: React.FC = React.memo(() => {
           <div class="accent-top"></div>
           <div class="header">
             <div class="header-logo-container">
-              <div class="logo-badge">SH</div>
-              <div class="logo-text">SHCA-SAWLA</div>
+              ${getLogoSvgHtml(18)}
+              <div class="logo-text">${schoolName.toUpperCase()}</div>
             </div>
             <div>
               <span class="active-pass-badge">Active Pass</span>
@@ -1495,6 +1771,24 @@ export const AdminPanel: React.FC = React.memo(() => {
     return list;
   }, [students, studentFilter, searchQuery]);
 
+  // Group filtered students by their grade categories
+  const groupedFilteredStudents = useMemo(() => {
+    const groups: Record<SchoolCategory, Student[]> = {
+      'Pre-school': [],
+      'Primary': [],
+      'JHS': [],
+    };
+    filteredStudentsForList.forEach(st => {
+      const cat = st.category || 'Primary';
+      if (groups[cat]) {
+        groups[cat].push(st);
+      } else {
+        groups['Primary'].push(st);
+      }
+    });
+    return groups;
+  }, [filteredStudentsForList]);
+
   // State for SMS Modal
   const [smsTarget, setSmsTarget] = useState<{
     student: Student;
@@ -1503,6 +1797,9 @@ export const AdminPanel: React.FC = React.memo(() => {
   } | null>(null);
   const [isSendingSms, setIsSendingSms] = useState(false);
   const [smsSuccess, setSmsSuccess] = useState(false);
+  const [reminderChannel, setReminderChannel] = useState<'whatsapp' | 'sms'>('whatsapp');
+  const [customWAContact, setCustomWAContact] = useState('');
+  const [selectedStaffPhone, setSelectedStaffPhone] = useState('');
 
   // Delete Confirmation Modal state
   const [deleteConf, setDeleteConf] = useState<{
@@ -1645,7 +1942,12 @@ export const AdminPanel: React.FC = React.memo(() => {
   const [newStudentPaymentType, setNewStudentPaymentType] = useState<'Daily' | 'Term'>('Daily');
   const [newStudentTermFee, setNewStudentTermFee] = useState<number>(350);
   const [newStudentLegacyDebt, setNewStudentLegacyDebt] = useState<number>(0);
+  const [newStudentEnrollmentDate, setNewStudentEnrollmentDate] = useState('');
   const [editStudentObj, setEditStudentObj] = useState<Student | null>(null);
+
+  // Image Cropping state
+  const [cropperSrc, setCropperSrc] = useState<string | null>(null);
+  const [onCropperComplete, setOnCropperComplete] = useState<((cropped: string) => void) | null>(null);
 
   // Arrears log collapse state
   const [isArrearsCollapsed, setIsArrearsCollapsed] = useState(true);
@@ -2016,6 +2318,7 @@ export const AdminPanel: React.FC = React.memo(() => {
   const [adminRegContractEndDate, setAdminRegContractEndDate] = useState('');
   const [adminRegRenewalOption, setAdminRegRenewalOption] = useState<'Automatic' | 'Manual Review' | 'Fixed Term' | 'Non-Renewable'>('Automatic');
   const [adminRegRenewalPeriod, setAdminRegRenewalPeriod] = useState('1 Year');
+  const [adminRegPersonalAddress, setAdminRegPersonalAddress] = useState('');
   const [editStaffObj, setEditStaffObj] = useState<any | null>(null);
 
   const teacherStats = useMemo(() => {
@@ -2087,7 +2390,8 @@ export const AdminPanel: React.FC = React.memo(() => {
       adminRegAppointmentDate || undefined,
       adminRegContractEndDate || undefined,
       adminRegRenewalOption || undefined,
-      adminRegRenewalPeriod || undefined
+      adminRegRenewalPeriod || undefined,
+      adminRegPersonalAddress.trim() || undefined
     );
 
     if (result.success) {
@@ -2106,6 +2410,7 @@ export const AdminPanel: React.FC = React.memo(() => {
       setAdminRegContractEndDate('');
       setAdminRegRenewalOption('Automatic');
       setAdminRegRenewalPeriod('1 Year');
+      setAdminRegPersonalAddress('');
       showToast('Staff register updated with new entry.');
     } else {
       showToast(result.error || 'Check administrator database permissions & connection.');
@@ -2138,7 +2443,10 @@ export const AdminPanel: React.FC = React.memo(() => {
       editStaffObj.appointmentDate,
       editStaffObj.contractEndDate,
       editStaffObj.renewalOption,
-      editStaffObj.renewalPeriod
+      editStaffObj.renewalPeriod,
+      undefined, // signatureUrl
+      undefined, // managementSignatureUrl
+      editStaffObj.personalAddress || undefined
     );
 
     if (result.success) {
@@ -2205,14 +2513,19 @@ export const AdminPanel: React.FC = React.memo(() => {
       const reader = new FileReader();
       reader.onloadend = () => {
         if (typeof reader.result === 'string') {
-          if (isEdit && editStudentObj) {
-            setEditStudentObj({
-              ...editStudentObj,
-              photoUrl: reader.result
-            });
-          } else {
-            setNewStudentPhoto(reader.result);
-          }
+          setCropperSrc(reader.result);
+          setOnCropperComplete(() => (cropped: string) => {
+            if (isEdit && editStudentObj) {
+              setEditStudentObj({
+                ...editStudentObj,
+                photoUrl: cropped
+              });
+            } else {
+              setNewStudentPhoto(cropped);
+            }
+            setCropperSrc(null);
+            setOnCropperComplete(null);
+          });
         }
       };
       reader.readAsDataURL(file);
@@ -2242,7 +2555,8 @@ export const AdminPanel: React.FC = React.memo(() => {
       newStudentGender,
       newStudentPaymentType,
       newStudentTermFee,
-      newStudentLegacyDebt
+      newStudentLegacyDebt,
+      newStudentEnrollmentDate || undefined
     );
     setNewStudentName('');
     setNewStudentPhone('');
@@ -2252,6 +2566,7 @@ export const AdminPanel: React.FC = React.memo(() => {
     setNewStudentPaymentType('Daily');
     setNewStudentTermFee(350);
     setNewStudentLegacyDebt(0);
+    setNewStudentEnrollmentDate('');
     showToast('Student successfully registered to the daily ledger catalog.');
   };
 
@@ -2265,6 +2580,7 @@ export const AdminPanel: React.FC = React.memo(() => {
     setNewStudentPaymentType('Daily');
     setNewStudentTermFee(350);
     setNewStudentLegacyDebt(0);
+    setNewStudentEnrollmentDate('');
     showToast('Student registration form cleared.');
   };
 
@@ -2467,6 +2783,20 @@ export const AdminPanel: React.FC = React.memo(() => {
             <span>{successMsg}</span>
           </div>
         </div>
+      )}
+
+      {/* IMAGE CROPPER MODAL */}
+      {cropperSrc && onCropperComplete && (
+        <ImageCropperModal
+          imageSrc={cropperSrc}
+          onCrop={(cropped) => {
+            onCropperComplete(cropped);
+          }}
+          onCancel={() => {
+            setCropperSrc(null);
+            setOnCropperComplete(null);
+          }}
+        />
       )}
 
       {/* BULK DATA IMPORT WIZARD MODAL */}
@@ -2861,17 +3191,7 @@ export const AdminPanel: React.FC = React.memo(() => {
             <UserCheck size={13} />
             Gate Assignments
           </button>
-          <button
-            onClick={() => setActiveTab('database')}
-            className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
-              activeTab === 'database'
-                ? 'bg-amber-400 text-black'
-                : 'text-neutral-500 hover:text-white'
-            }`}
-          >
-            <Database size={13} />
-            Database Connect
-          </button>
+
           <button
             onClick={() => setActiveTab('expenditures')}
             className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
@@ -2884,16 +3204,28 @@ export const AdminPanel: React.FC = React.memo(() => {
             Expenditures
           </button>
           <button
-            onClick={() => setActiveTab('adjustments')}
+            onClick={() => setActiveTab('ledger')}
             className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
-              activeTab === 'adjustments'
+              activeTab === 'ledger'
                 ? 'bg-amber-400 text-black'
                 : 'text-neutral-500 hover:text-white'
             }`}
           >
-            <RefreshCw size={13} />
-            Adjust Payments
+            <Scale size={13} />
+            General Ledger
           </button>
+          <button
+            onClick={() => setActiveTab('performance')}
+            className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
+              activeTab === 'performance'
+                ? 'bg-amber-400 text-black'
+                : 'text-neutral-500 hover:text-white'
+            }`}
+          >
+            <Award size={13} />
+            Performance
+          </button>
+
           <button
             onClick={() => setActiveTab('whatsapp')}
             className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
@@ -2929,17 +3261,20 @@ export const AdminPanel: React.FC = React.memo(() => {
             <Bot size={13} />
             AI Assistant
           </button>
+
           <button
-            onClick={() => setActiveTab('audit')}
+            id="admin-tab-database-btn"
+            onClick={() => setActiveTab('database')}
             className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
-              activeTab === 'audit'
+              activeTab === 'database'
                 ? 'bg-amber-400 text-black'
                 : 'text-neutral-500 hover:text-white'
             }`}
           >
-            <FileText size={13} />
-            Audit Trail
+            <Database size={13} />
+            Database Connect
           </button>
+
           <button
             onClick={() => setActiveTab('settings')}
             className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
@@ -3290,6 +3625,21 @@ export const AdminPanel: React.FC = React.memo(() => {
                     </div>
                   </div>
 
+                  <div>
+                    <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                      Pupil's First Day / Start Date
+                    </label>
+                    <input
+                      type="date"
+                      value={newStudentEnrollmentDate}
+                      onChange={(e) => setNewStudentEnrollmentDate(e.target.value)}
+                      className="w-full bg-neutral-950 border-2 border-neutral-800 py-3 px-4 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 font-mono"
+                    />
+                    <p className="text-[9px] font-mono text-neutral-500 mt-1 uppercase tracking-wide">
+                      Select date if new child to ignore previous dates as debt. Leave blank if old student to calculate full term debt.
+                    </p>
+                  </div>
+
                   {newStudentPaymentType === 'Term' ? (
                     <div>
                       <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
@@ -3434,6 +3784,36 @@ export const AdminPanel: React.FC = React.memo(() => {
                 </div>
 
                 <div className="space-y-4">
+                  {/* Active / Inactive Status Switch */}
+                  <div>
+                    <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                      Enrollment Status / Active Switch
+                    </label>
+                    <div className="flex items-center justify-between p-3 bg-neutral-950 border-2 border-neutral-800 rounded-xs">
+                      <div className="flex flex-col">
+                        <span className={`text-xs font-black uppercase tracking-tight ${editStudentObj.active ? 'text-emerald-400' : 'text-rose-500'}`}>
+                          {editStudentObj.active ? '● Active Student' : '○ Withdrawn / Inactive'}
+                        </span>
+                        <span className="text-[8px] font-mono text-neutral-500 uppercase mt-0.5">
+                          {editStudentObj.active ? 'Active on daily registers, receives billing/alerts.' : 'Excluded from lists & billing. Records are preserved.'}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setEditStudentObj({ ...editStudentObj, active: !editStudentObj.active })}
+                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                          editStudentObj.active ? 'bg-emerald-500' : 'bg-neutral-800'
+                        }`}
+                      >
+                        <span
+                          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition duration-200 ease-in-out ${
+                            editStudentObj.active ? 'translate-x-5' : 'translate-x-0'
+                          }`}
+                        />
+                      </button>
+                    </div>
+                  </div>
+
                   <div>
                     <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
                       Pupil Full Name (English Ledger)
@@ -3527,6 +3907,21 @@ export const AdminPanel: React.FC = React.memo(() => {
                         </button>
                       ))}
                     </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                      Pupil's First Day / Start Date
+                    </label>
+                    <input
+                      type="date"
+                      value={editStudentObj.enrollmentDate || ''}
+                      onChange={(e) => setEditStudentObj({ ...editStudentObj, enrollmentDate: e.target.value || undefined })}
+                      className="w-full bg-neutral-950 border-2 border-neutral-800 py-3 px-4 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 font-mono"
+                    />
+                    <p className="text-[9px] font-mono text-neutral-550 mt-1 uppercase tracking-wide">
+                      Select date if new child to ignore previous dates as debt. Leave blank if old student to calculate full term debt.
+                    </p>
                   </div>
 
                   {(editStudentObj.paymentType || 'Daily') === 'Term' ? (
@@ -3943,40 +4338,73 @@ export const AdminPanel: React.FC = React.memo(() => {
                   </button>
                 </div>
               </div>
-              <div className="flex flex-wrap gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setStudentFilter('all')}
-                  className={`px-3 py-1.5 text-[10px] font-mono font-black uppercase tracking-wider border-2 transition-all cursor-pointer ${
-                    studentFilter === 'all'
-                      ? 'bg-amber-400 text-black border-amber-405 shadow-[2px_2px_0px_0px_rgba(251,191,36,0.15)] font-black'
-                      : 'bg-neutral-950 border-neutral-800 text-neutral-450 hover:text-white hover:border-neutral-700 font-bold'
-                  }`}
-                >
-                  All ({students.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setStudentFilter('active')}
-                  className={`px-3 py-1.5 text-[10px] font-mono font-black uppercase tracking-wider border-2 transition-all cursor-pointer ${
-                    studentFilter === 'active'
-                      ? 'bg-emerald-555 border-emerald-500 bg-emerald-450 text-black shadow-[2px_2px_0px_0px_rgba(52,211,153,0.15)] font-black'
-                      : 'bg-neutral-950 border-neutral-800 text-neutral-455 hover:text-white hover:border-neutral-700 font-bold'
-                  }`}
-                >
-                  Active ({students.filter(s => s.active).length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setStudentFilter('inactive')}
-                  className={`px-3 py-1.5 text-[10px] font-mono font-black uppercase tracking-wider border-2 transition-all cursor-pointer ${
-                    studentFilter === 'inactive'
-                      ? 'bg-red-950/40 text-red-500 border-red-800 shadow-[2px_2px_0px_0px_rgba(239,68,68,0.15)] font-black'
-                      : 'bg-neutral-950 border-neutral-800 text-neutral-455 hover:text-white hover:border-neutral-700 font-bold'
-                  }`}
-                >
-                  Deactivated ({students.filter(s => !s.active).length})
-                </button>
+              <div className="flex flex-wrap items-center gap-4 shrink-0">
+                {/* Status Filters */}
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setStudentFilter('all')}
+                    className={`px-3 py-1.5 text-[10px] font-mono font-black uppercase tracking-wider border-2 transition-all cursor-pointer ${
+                      studentFilter === 'all'
+                        ? 'bg-amber-400 text-black border-amber-405 shadow-[2px_2px_0px_0px_rgba(251,191,36,0.15)] font-black'
+                        : 'bg-neutral-950 border-neutral-800 text-neutral-450 hover:text-white hover:border-neutral-700 font-bold'
+                    }`}
+                  >
+                    All ({students.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStudentFilter('active')}
+                    className={`px-3 py-1.5 text-[10px] font-mono font-black uppercase tracking-wider border-2 transition-all cursor-pointer ${
+                      studentFilter === 'active'
+                        ? 'bg-emerald-555 border-emerald-500 bg-emerald-450 text-black shadow-[2px_2px_0px_0px_rgba(52,211,153,0.15)] font-black'
+                        : 'bg-neutral-950 border-neutral-800 text-neutral-455 hover:text-white hover:border-neutral-700 font-bold'
+                    }`}
+                  >
+                    Active ({students.filter(s => s.active).length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStudentFilter('inactive')}
+                    className={`px-3 py-1.5 text-[10px] font-mono font-black uppercase tracking-wider border-2 transition-all cursor-pointer ${
+                      studentFilter === 'inactive'
+                        ? 'bg-red-950/40 text-red-500 border-red-800 shadow-[2px_2px_0px_0px_rgba(239,68,68,0.15)] font-black'
+                        : 'bg-neutral-950 border-neutral-800 text-neutral-455 hover:text-white hover:border-neutral-700 font-bold'
+                    }`}
+                  >
+                    Deactivated ({students.filter(s => !s.active).length})
+                  </button>
+                </div>
+
+                {/* View Toggles (List vs Album) */}
+                <div className="flex bg-neutral-950 border-2 border-neutral-850 p-1 gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setStudentViewStyle('list')}
+                    title="Switch to List view with categories and progress details"
+                    className={`px-3 py-1 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer flex items-center gap-1.5 border-2 ${
+                      studentViewStyle === 'list'
+                        ? 'bg-amber-400 text-black border-amber-400 font-black'
+                        : 'bg-neutral-950 border-transparent text-neutral-400 hover:text-white font-bold'
+                    }`}
+                  >
+                    <List size={11} className="stroke-[3.5]" />
+                    <span>List</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStudentViewStyle('album')}
+                    title="Switch to Album grid view for profile photo identification"
+                    className={`px-3 py-1 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer flex items-center gap-1.5 border-2 ${
+                      studentViewStyle === 'album'
+                        ? 'bg-amber-400 text-black border-amber-400 font-black'
+                        : 'bg-neutral-950 border-transparent text-neutral-400 hover:text-white font-bold'
+                    }`}
+                  >
+                    <LayoutGrid size={11} className="stroke-[3.5]" />
+                    <span>Album</span>
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -4019,87 +4447,140 @@ export const AdminPanel: React.FC = React.memo(() => {
               )}
             </div>
 
-            <div className="divide-y-2 divide-neutral-850 overflow-y-auto max-h-[480px]">
+            <div className={`overflow-y-auto max-h-[480px] ${studentViewStyle === 'list' ? 'divide-y-2 divide-neutral-850' : 'p-6 bg-neutral-950/20'}`}>
               {filteredStudentsForList.length === 0 ? (
                 <div className="p-12 text-center text-xs font-mono font-black uppercase text-neutral-500 tracking-wider">
                   📂 No students matching filters found or directory is empty.
                 </div>
-              ) : (
-                filteredStudentsForList.map(st => {
-                  const discountInfo = getDiscountedTermFee(st, payments, activeTerm, currentDate, systemSettings);
-                  const studentFee = discountInfo.termFee;
-                  const legacyDebt = st.legacyDebt || 0;
-                  const totalTarget = studentFee + legacyDebt;
-                  const studentPayments = payments.filter(p => p.studentId === st.id && !p.isAbsent);
-                  const totalPaid = studentPayments.reduce((sum, p) => sum + p.amount, 0);
-                  const percentDone = totalTarget > 0 ? Math.min(100, (totalPaid / totalTarget) * 100) : 0;
-                  const balanceDue = Math.max(0, totalTarget - totalPaid);
+              ) : studentViewStyle === 'album' ? (
+                /* Album Grid View */
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+                  {filteredStudentsForList.map(st => {
+                    const discountInfo = getDiscountedTermFee(st, payments, activeTerm, currentDate, systemSettings);
+                    const studentFee = discountInfo.termFee;
+                    const legacyDebt = st.legacyDebt || 0;
+                    const totalTarget = studentFee + legacyDebt;
+                    const studentPayments = payments.filter(p => p.studentId === st.id && !p.isAbsent);
+                    const totalPaid = studentPayments.reduce((sum, p) => sum + p.amount, 0);
+                    const percentDone = totalTarget > 0 ? Math.min(100, (totalPaid / totalTarget) * 100) : 0;
 
-                  return (
-                    <div key={st.id} className="p-6 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:bg-neutral-800/10">
-                      <div className="flex flex-col sm:flex-row sm:items-center gap-4 flex-1">
-                        {/* Student Avatar Widget */}
-                        <div className="shrink-0 w-11 h-11 relative">
+                    const todayPay = payments?.find(p => p.studentId === st.id && p.date === currentDate);
+                    const isAbsent = !!todayPay && !!todayPay.isAbsent;
+                    const isPaid = !!todayPay && !todayPay.isAbsent && todayPay.verified;
+
+                    return (
+                      <div 
+                        key={st.id} 
+                        className={`group bg-neutral-950 border-2 transition-all p-3 flex flex-col justify-between hover:scale-[1.01] active:scale-[0.99] ${
+                          st.active 
+                            ? 'border-neutral-850 hover:border-amber-400/60 shadow-[3px_3px_0px_0px_rgba(251,191,36,0.05)]' 
+                            : 'border-red-950/60 opacity-60 hover:opacity-100 hover:border-red-500/40'
+                        }`}
+                      >
+                        {/* Image Frame */}
+                        <div className="relative w-full aspect-[4/5] overflow-hidden bg-neutral-900 border border-neutral-800 rounded-sm mb-3">
+                          {/* Attendance Indicator pill */}
+                          <div className="absolute top-1.5 left-1.5 flex flex-col gap-1 z-10">
+                            <span className={`text-[8px] font-mono font-black uppercase px-1.5 py-0.5 border ${
+                              !st.active
+                                ? 'bg-neutral-950/95 border-neutral-800 text-neutral-500'
+                                : isPaid
+                                  ? 'bg-emerald-950/95 border-emerald-500/50 text-emerald-400'
+                                  : isAbsent
+                                    ? 'bg-red-950/95 border-red-500/50 text-red-400'
+                                    : 'bg-amber-950/95 border-amber-500/50 text-amber-400'
+                            }`}>
+                              {!st.active ? 'Inactive' : isPaid ? 'Present' : isAbsent ? 'Absent' : 'Unmarked'}
+                            </span>
+                          </div>
+
                           {st.photoUrl ? (
                             <img 
                               src={st.photoUrl} 
                               alt={st.name} 
-                              className="w-11 h-11 rounded-full object-cover border-2 border-neutral-800"
+                              className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
                               referrerPolicy="no-referrer"
                             />
                           ) : (
-                            <div className="w-11 h-11 rounded-full bg-neutral-950 border-2 border-neutral-850 flex items-center justify-center text-xs font-black text-amber-400 font-mono tracking-tighter uppercase">
-                              {st.name.slice(0, 2).toUpperCase()}
+                            <div className={`w-full h-full flex flex-col items-center justify-center font-mono uppercase transition-colors ${
+                              st.gender === 'Male'
+                                ? 'bg-gradient-to-br from-neutral-900 to-sky-950/30 text-sky-400'
+                                : st.gender === 'Female'
+                                  ? 'bg-gradient-to-br from-neutral-900 to-pink-950/30 text-pink-400'
+                                  : 'bg-gradient-to-br from-neutral-900 to-neutral-850 text-neutral-400'
+                            }`}>
+                              <span className="text-xl font-black tracking-widest">{st.name.slice(0, 2).toUpperCase()}</span>
+                              <span className="text-[8px] text-neutral-500 font-bold mt-1">{st.gender === 'Male' ? '👦 Boy' : st.gender === 'Female' ? '👧 Girl' : '👤 Pupil'}</span>
                             </div>
                           )}
-                        </div>
-                        
-                        <div className="space-y-2 flex-1 min-w-0">
-                          <p 
-                            onClick={() => setHistoryModalStudent(st)}
-                            className={`text-base font-black text-white hover:text-amber-400 cursor-pointer transition-colors uppercase tracking-tight decoration-amber-400 hover:underline flex items-center gap-1.5 ${!st.active ? 'line-through text-neutral-500' : ''}`}
-                            title="Click to view full registration history, financial ledger & pass credentials"
+
+                          {/* Upload Hover Overlay */}
+                          <label 
+                            className="absolute bottom-1.5 right-1.5 p-1.5 rounded-full bg-black/80 hover:bg-amber-400 hover:text-black text-neutral-400 hover:scale-110 cursor-pointer transition-all border border-neutral-800 opacity-0 group-hover:opacity-100 focus-within:opacity-100 z-10" 
+                            title="Upload new photo"
                           >
-                            {st.name}
-                            <span className="text-neutral-500 hover:text-amber-400 text-[10px] lowercase font-mono font-normal no-underline">(view history)</span>
-                          </p>
-                          <div className="flex flex-wrap gap-2.5 items-center text-[10px] text-neutral-400 font-mono font-bold uppercase tracking-wider">
-                            <span className="bg-neutral-955 border border-neutral-800 px-2.5 py-0.5 text-amber-400 font-black">{st.class}</span>
-                            {st.gender && (
-                              <>
-                                <span>•</span>
-                                <span className="bg-neutral-955 border border-neutral-800 px-2 py-0.5 text-neutral-300 font-extrabold flex items-center gap-0.5">
-                                  {st.gender === 'Male' ? '👦 M' : '👧 F'}
-                                </span>
-                              </>
-                            )}
-                            <span>•</span>
-                            <span>Category: {st.category}</span>
-                            <span>•</span>
-                            <span>ID: {st.rollNumber}</span>
-                            {st.discount !== undefined && st.discount > 0 && (
-                              <>
-                                <span>•</span>
-                                <span className="bg-amber-955 border border-amber-500/35 px-2 py-0.5 text-amber-400 font-black">
-                                  DISCOUNT: GHC {st.discount.toFixed(2)}/DAY
-                                </span>
-                              </>
-                            )}
+                            <Camera size={11} className="stroke-[2.5]" />
+                            <input 
+                              type="file" 
+                              accept="image/*" 
+                              className="sr-only" 
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  const reader = new FileReader();
+                                  reader.onloadend = () => {
+                                    if (typeof reader.result === 'string') {
+                                      setCropperSrc(reader.result);
+                                      setOnCropperComplete(() => (cropped: string) => {
+                                        updateStudent({
+                                          ...st,
+                                          photoUrl: cropped
+                                        });
+                                        showToast(`Photo updated for ${st.name}.`);
+                                        setCropperSrc(null);
+                                        setOnCropperComplete(null);
+                                      });
+                                    }
+                                  };
+                                  reader.readAsDataURL(file);
+                                }
+                              }}
+                            />
+                          </label>
+                        </div>
+
+                        {/* Name & Class info */}
+                        <div className="flex-1 min-w-0 flex flex-col justify-between">
+                          <div>
+                            <p 
+                              onClick={() => setHistoryModalStudent(st)}
+                              className={`text-xs font-black text-white hover:text-amber-400 cursor-pointer transition-colors uppercase tracking-tight truncate ${!st.active ? 'line-through text-neutral-500' : ''}`}
+                              title="Click to view history"
+                            >
+                              {st.name}
+                            </p>
+                            <div className="flex items-center justify-between text-[8px] font-mono font-black uppercase tracking-widest mt-1">
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-amber-400 bg-neutral-900 px-1.5 py-0.5 border border-neutral-850">{st.class}</span>
+                                {!st.active && (
+                                  <span className="text-[7.5px] font-mono font-black text-rose-500 bg-rose-950/30 px-1.5 py-0.5 border border-rose-900/40 tracking-wider">
+                                    WITHDRAWN
+                                  </span>
+                                )}
+                              </div>
+                              <span className="text-neutral-500">#{st.rollNumber}</span>
+                            </div>
                           </div>
 
-                          {/* Visual Fee-Payment Progress Bar */}
-                          <div className="pt-2 max-w-md w-full sm:w-[320px] md:w-[360px]">
-                            <div className="flex items-center justify-between text-[9px] font-mono uppercase tracking-wider mb-1">
-                              <span className="text-neutral-500 font-black">
-                                {st.paymentType === 'Term' ? 'Term Fee Scheme' : 'Daily Gate Scheme'}
-                              </span>
-                              <span className={`font-black ${percentDone >= 100 ? 'text-emerald-400' : percentDone > 50 ? 'text-amber-400' : 'text-rose-400'}`}>
-                                GHC {totalPaid.toFixed(2)} / GHC {totalTarget.toFixed(2)} ({percentDone.toFixed(0)}%)
-                              </span>
+                          {/* Miniature progress bar */}
+                          <div className="mt-2.5">
+                            <div className="flex justify-between items-center text-[7.5px] font-mono text-neutral-500 font-extrabold uppercase mb-1">
+                              <span>Settled</span>
+                              <span className={percentDone >= 100 ? 'text-emerald-400' : 'text-neutral-400'}>{percentDone.toFixed(0)}%</span>
                             </div>
-                            <div className="h-2 w-full bg-neutral-950 border border-neutral-850 p-[1px] rounded-none">
+                            <div className="h-1 w-full bg-neutral-900 border border-neutral-850 p-[1px]">
                               <div 
-                                className={`h-full transition-all duration-500 ${
+                                className={`h-full transition-all duration-350 ${
                                   percentDone >= 100 
                                     ? 'bg-emerald-500' 
                                     : percentDone > 50 
@@ -4109,85 +4590,377 @@ export const AdminPanel: React.FC = React.memo(() => {
                                 style={{ width: `${percentDone}%` }}
                               />
                             </div>
-                            {balanceDue > 0 ? (
-                              <div className="text-[8.5px] text-neutral-500 font-mono mt-1 flex items-center gap-1.5">
-                                <span>Balance Due:</span>
-                                <span className="font-bold text-neutral-300">GHC {balanceDue.toFixed(2)}</span>
-                              </div>
-                            ) : (
-                              <div className="text-[8.5px] text-emerald-500 font-mono mt-1 font-black uppercase flex items-center gap-1.5">
-                                <span>✓ Fully Cleared &amp; Settled</span>
-                              </div>
-                            )}
+                          </div>
+
+                          {/* Interactive button bar */}
+                          <div className="mt-3 pt-2 border-t border-neutral-850/50 grid grid-cols-4 gap-1">
+                            <button
+                              type="button"
+                              onClick={() => setHistoryModalStudent(st)}
+                              title="View pupil full ledger/history"
+                              className="p-1.5 border border-neutral-800 hover:border-amber-400 hover:text-amber-400 bg-neutral-950 text-neutral-400 transition-colors cursor-pointer flex items-center justify-center rounded-xs"
+                            >
+                              <FileText size={10} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedIdCardStudent(st)}
+                              title="Print physical ID Card"
+                              className="p-1.5 border border-neutral-800 hover:border-amber-400 hover:text-amber-400 bg-neutral-950 text-neutral-400 transition-colors cursor-pointer flex items-center justify-center rounded-xs"
+                            >
+                              <Printer size={10} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleStartEdit(st)}
+                              title="Edit details"
+                              className="p-1.5 border border-neutral-800 hover:border-neutral-600 bg-neutral-950 text-neutral-400 hover:text-white transition-colors cursor-pointer flex items-center justify-center rounded-xs"
+                            >
+                              <Edit2 size={10} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleStudentActive(st)}
+                              title={st.active ? 'Deactivate pupil' : 'Reactivate pupil'}
+                              className={`p-1.5 border transition-colors cursor-pointer flex items-center justify-center rounded-xs ${
+                                st.active 
+                                  ? 'border-neutral-800 text-neutral-400 hover:text-white hover:border-neutral-600 bg-neutral-950' 
+                                  : 'border-red-850 text-red-500 bg-red-950/20'
+                              }`}
+                            >
+                              {st.active ? <Check size={10} className="stroke-[3.5]" /> : <X size={10} className="stroke-[3.5]" />}
+                            </button>
                           </div>
                         </div>
                       </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                /* List View (Accordion Categories) */
+                ((['Pre-school', 'Primary', 'JHS'] as SchoolCategory[]).map(cat => {
+                  const categoryStudents = groupedFilteredStudents[cat] || [];
+                  if (categoryStudents.length === 0) return null;
 
-                      <div className="flex items-center gap-2 self-end md:self-center">
-                        {/* ID Card trigger */}
-                        <button
-                          type="button"
-                          onClick={() => setSelectedIdCardStudent(st)}
-                          title="Generate & Print Student ID Card with QR Code"
-                          className="p-2 border-2 border-neutral-800 hover:border-amber-400 hover:text-amber-400 bg-neutral-950 text-neutral-400 transition-colors cursor-pointer flex items-center justify-center gap-1 font-mono text-[9px] font-black uppercase tracking-wider"
-                        >
-                          <Printer size={13} className="stroke-[2.5]" />
-                          <span className="hidden sm:inline">Print ID</span>
-                        </button>
+                  const isExpanded = expandedRegistryCategories[cat];
+                  const categoryTitles: Record<SchoolCategory, string> = {
+                    'Pre-school': '🧸 PRE-SCHOOL GRADES (NURSERY, KG1 & KG2)',
+                    'Primary': '✏️ PRIMARY COHORT (B1 TO B6)',
+                    'JHS': '🎓 JUNIOR HIGH SCHOOL / JHS (B7 TO B9)'
+                  };
 
-                        {/* Active toggle */}
-                        <button
-                          onClick={() => handleToggleStudentActive(st)}
-                          title={st.active ? 'Deactivate from checkout register' : 'Reactivate into register'}
-                          className={`p-2 border-2 transition-colors cursor-pointer ${
-                            st.active 
-                              ? 'border-neutral-800 text-neutral-400 hover:text-white hover:border-neutral-600 bg-neutral-950' 
-                              : 'border-red-800 text-red-500 bg-red-950/20'
-                          }`}
-                        >
-                          {st.active ? <Check size={14} className="stroke-[3]" /> : <X size={14} className="stroke-[3]" />}
-                        </button>
+                  return (
+                    <div key={cat} className="border-b border-neutral-850 last:border-b-0">
+                      {/* Accordion Header Button */}
+                      <button
+                        type="button"
+                        onClick={() => setExpandedRegistryCategories(prev => ({ ...prev, [cat]: !prev[cat] }))}
+                        className="w-full px-6 py-4 bg-neutral-950/80 hover:bg-neutral-900/60 transition-all flex items-center justify-between cursor-pointer font-sans text-left border-b border-neutral-850/60"
+                      >
+                        <div className="flex items-center gap-3">
+                          <span className="text-xs font-black text-amber-400 uppercase tracking-wider font-mono">
+                            {categoryTitles[cat]}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3 shrink-0">
+                          <span className="text-[10px] font-mono font-black uppercase bg-neutral-900 border border-neutral-800 text-neutral-400 px-2 py-0.5 rounded-sm">
+                            {categoryStudents.length} {categoryStudents.length === 1 ? 'PUPIL' : 'PUPILS'}
+                          </span>
+                          <span className="text-neutral-500 hover:text-white transition-colors">
+                            {isExpanded ? (
+                              <ChevronDown size={14} className="stroke-[3]" />
+                            ) : (
+                              <ChevronRight size={14} className="stroke-[3]" />
+                            )}
+                          </span>
+                        </div>
+                      </button>
 
-                        {/* Edit trigger */}
-                        <button
-                          onClick={() => handleStartEdit(st)}
-                          className="p-2 border-2 border-neutral-800 hover:border-neutral-600 bg-neutral-950 text-neutral-400 hover:text-white transition-colors cursor-pointer"
-                        >
-                          <Edit2 size={13} />
-                        </button>
+                      {/* Accordion Content */}
+                      {isExpanded && (
+                        <div className="divide-y divide-neutral-850/60 bg-neutral-900/10">
+                          {categoryStudents.map(st => {
+                            const discountInfo = getDiscountedTermFee(st, payments, activeTerm, currentDate, systemSettings);
+                            const studentFee = discountInfo.termFee;
+                            const legacyDebt = st.legacyDebt || 0;
+                            const totalTarget = studentFee + legacyDebt;
+                            const studentPayments = payments.filter(p => p.studentId === st.id && !p.isAbsent);
+                            const totalPaid = studentPayments.reduce((sum, p) => sum + p.amount, 0);
+                            const percentDone = totalTarget > 0 ? Math.min(100, (totalPaid / totalTarget) * 100) : 0;
+                            const balanceDue = Math.max(0, totalTarget - totalPaid);
 
-                        {/* Delete trigger */}
-                        <button
-                          onClick={() => {
-                            if (currentUser?.role !== 'Administrator') {
-                              alert('Access Denied: Only Administrators are permitted to delete student records completely from the system.');
-                              return;
-                            }
-                            setDeleteConf({
-                              isOpen: true,
-                              type: 'student',
-                              targetId: st.id,
-                              targetName: st.name,
-                              userInput: '',
-                              onConfirm: () => {
-                                deleteStudent(st.id);
-                                showToast('Pupil record purged.');
+                            const isStudentExpanded = !!expandedStudentIds[st.id];
+                            const studentAllPayments = payments.filter(p => p.studentId === st.id);
+                            const formattedEnrollmentDate = st.enrollmentDate ? (() => {
+                              try {
+                                return new Date(`${st.enrollmentDate}T00:00:00`).toLocaleDateString("en-US", {
+                                  year: 'numeric',
+                                  month: 'long',
+                                  day: 'numeric'
+                                });
+                              } catch (e) {
+                                return st.enrollmentDate;
                               }
-                            });
-                          }}
-                          className={`p-2 border-2 transition-colors cursor-pointer ${
-                            currentUser?.role === 'Administrator'
-                              ? 'border-red-900 bg-neutral-950 text-red-500 hover:bg-red-950/30'
-                              : 'border-neutral-855 bg-neutral-950 text-neutral-600 cursor-not-allowed opacity-50'
-                          }`}
-                          title={currentUser?.role !== 'Administrator' ? 'Administrator Only (Access Denied)' : 'Delete Student / Purge'}
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      </div>
+                            })() : 'Not Specified';
+
+                            return (
+                              <div key={st.id} className="border-b border-neutral-850/40 last:border-0 bg-neutral-900/10">
+                                {/* Student Header Row */}
+                                <div className="p-6 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:bg-neutral-800/10 transition-colors">
+                                  <div 
+                                    className="flex flex-col sm:flex-row sm:items-center gap-4 flex-1 cursor-pointer select-none"
+                                    onClick={() => setExpandedStudentIds(prev => ({ ...prev, [st.id]: !prev[st.id] }))}
+                                  >
+                                    {/* Student Avatar Widget */}
+                                    <div className="shrink-0 w-11 h-11 relative">
+                                      {st.photoUrl ? (
+                                        <img 
+                                          src={st.photoUrl} 
+                                          alt={st.name} 
+                                          className="w-11 h-11 rounded-full object-cover border-2 border-neutral-800"
+                                          referrerPolicy="no-referrer"
+                                        />
+                                      ) : (
+                                        <div className="w-11 h-11 rounded-full bg-neutral-950 border-2 border-neutral-850 flex items-center justify-center text-xs font-black text-amber-400 font-mono tracking-tighter uppercase">
+                                          {st.name.slice(0, 2).toUpperCase()}
+                                        </div>
+                                      )}
+                                    </div>
+                                    
+                                    <div className="space-y-2 flex-1 min-w-0">
+                                      <p 
+                                        className={`text-base font-black text-white hover:text-amber-400 transition-colors uppercase tracking-tight flex items-center gap-1.5 ${!st.active ? 'line-through text-neutral-500' : ''}`}
+                                        title="Click to toggle detailed payment history & enrollment info"
+                                      >
+                                        {isStudentExpanded ? (
+                                          <ChevronDown size={16} className="text-amber-400 shrink-0 stroke-[3]" />
+                                        ) : (
+                                          <ChevronRight size={16} className="text-neutral-500 hover:text-white shrink-0 stroke-[3]" />
+                                        )}
+                                        <span>{st.name}</span>
+                                        <span className="text-neutral-500 hover:text-amber-400 text-[10px] lowercase font-mono font-normal no-underline">
+                                          ({isStudentExpanded ? 'click to collapse' : 'click to expand details'})
+                                        </span>
+                                      </p>
+                                      <div className="flex flex-wrap gap-2.5 items-center text-[10px] text-neutral-400 font-mono font-bold uppercase tracking-wider">
+                                        <span className="bg-neutral-955 border border-neutral-800 px-2.5 py-0.5 text-amber-400 font-black">{st.class}</span>
+                                        {st.gender && (
+                                          <>
+                                            <span>•</span>
+                                            <span className="bg-neutral-955 border border-neutral-800 px-2 py-0.5 text-neutral-300 font-extrabold flex items-center gap-0.5">
+                                              {st.gender === 'Male' ? '👦 M' : '👧 F'}
+                                            </span>
+                                          </>
+                                        )}
+                                        <span>•</span>
+                                        <span>Category: {st.category}</span>
+                                        <span>•</span>
+                                        <span>ID: {st.rollNumber}</span>
+                                        {st.discount !== undefined && st.discount > 0 && (
+                                          <>
+                                            <span>•</span>
+                                            <span className="bg-amber-955 border border-amber-500/35 px-2 py-0.5 text-amber-400 font-black">
+                                              DISCOUNT: GHC {st.discount.toFixed(2)}/DAY
+                                            </span>
+                                          </>
+                                        )}
+                                      </div>
+
+                                      {/* Visual Fee-Payment Progress Bar */}
+                                      <div className="pt-2 max-w-md w-full sm:w-[320px] md:w-[360px]">
+                                        <div className="flex items-center justify-between text-[9px] font-mono uppercase tracking-wider mb-1">
+                                          <span className="text-neutral-500 font-black">
+                                            {st.paymentType === 'Term' ? 'Term Fee Scheme' : 'Daily Gate Scheme'}
+                                          </span>
+                                          <span className={`font-black ${percentDone >= 100 ? 'text-emerald-400' : percentDone > 50 ? 'text-amber-400' : 'text-rose-400'}`}>
+                                            GHC {totalPaid.toFixed(2)} / GHC {totalTarget.toFixed(2)} ({percentDone.toFixed(0)}%)
+                                          </span>
+                                        </div>
+                                        <div className="h-2 w-full bg-neutral-950 border border-neutral-850 p-[1px] rounded-none">
+                                          <div 
+                                            className={`h-full transition-all duration-500 ${
+                                              percentDone >= 100 
+                                                ? 'bg-emerald-500' 
+                                                : percentDone > 50 
+                                                  ? 'bg-amber-400' 
+                                                  : 'bg-rose-500'
+                                            }`}
+                                            style={{ width: `${percentDone}%` }}
+                                          />
+                                        </div>
+                                        {balanceDue > 0 ? (
+                                          <div className="text-[8.5px] text-neutral-500 font-mono mt-1 flex items-center gap-1.5">
+                                            <span>Balance Due:</span>
+                                            <span className="font-bold text-neutral-300">GHC {balanceDue.toFixed(2)}</span>
+                                          </div>
+                                        ) : (
+                                          <div className="text-[8.5px] text-emerald-500 font-mono mt-1 font-black uppercase flex items-center gap-1.5">
+                                            <span>✓ Fully Cleared &amp; Settled</span>
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center gap-2 self-end md:self-center">
+                                    {/* ID Card trigger */}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setSelectedIdCardStudent(st);
+                                      }}
+                                      title="Generate & Print Student ID Card with QR Code"
+                                      className="p-2 border-2 border-neutral-800 hover:border-amber-400 hover:text-amber-400 bg-neutral-950 text-neutral-400 transition-colors cursor-pointer flex items-center justify-center gap-1 font-mono text-[9px] font-black uppercase tracking-wider"
+                                    >
+                                      <Printer size={13} className="stroke-[2.5]" />
+                                      <span className="hidden sm:inline">Print ID</span>
+                                    </button>
+
+                                    {/* Active toggle */}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleToggleStudentActive(st);
+                                      }}
+                                      title={st.active ? 'Deactivate from checkout register' : 'Reactivate into register'}
+                                      className={`p-2 border-2 transition-colors cursor-pointer ${
+                                        st.active 
+                                          ? 'border-neutral-800 text-neutral-400 hover:text-white hover:border-neutral-600 bg-neutral-950' 
+                                          : 'border-red-800 text-red-500 bg-red-950/20'
+                                      }`}
+                                    >
+                                      {st.active ? <Check size={14} className="stroke-[3]" /> : <X size={14} className="stroke-[3]" />}
+                                    </button>
+
+                                    {/* Edit trigger */}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleStartEdit(st);
+                                      }}
+                                      className="p-2 border-2 border-neutral-800 hover:border-neutral-600 bg-neutral-950 text-neutral-400 hover:text-white transition-colors cursor-pointer"
+                                    >
+                                      <Edit2 size={13} />
+                                    </button>
+
+                                    {/* Delete trigger */}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        if (currentUser?.role !== 'Administrator') {
+                                          alert('Access Denied: Only Administrators are permitted to delete student records completely from the system.');
+                                          return;
+                                        }
+                                        setDeleteConf({
+                                          isOpen: true,
+                                          type: 'student',
+                                          targetId: st.id,
+                                          targetName: st.name,
+                                          userInput: '',
+                                          onConfirm: () => {
+                                            deleteStudent(st.id);
+                                            showToast('Pupil record purged.');
+                                          }
+                                        });
+                                      }}
+                                      className={`p-2 border-2 transition-colors cursor-pointer ${
+                                        currentUser?.role === 'Administrator'
+                                          ? 'border-red-900 bg-neutral-950 text-red-500 hover:bg-red-950/30'
+                                          : 'border-neutral-855 bg-neutral-950 text-neutral-600 cursor-not-allowed opacity-50'
+                                      }`}
+                                      title={currentUser?.role !== 'Administrator' ? 'Administrator Only (Access Denied)' : 'Delete Student / Purge'}
+                                    >
+                                      <Trash2 size={13} />
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {/* Expanded Sub-Accordion Content */}
+                                {isStudentExpanded && (
+                                  <div className="px-6 pb-6 pt-2 bg-neutral-950/40 border-t border-neutral-850/20 animate-fade-in">
+                                    <div className="p-4 bg-neutral-950 border border-neutral-850 rounded-sm space-y-4 font-sans">
+                                      {/* Sub-header detailing date parameters */}
+                                      <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-neutral-850 pb-2.5 gap-2.5">
+                                        <div className="flex items-center gap-2">
+                                          <CalendarDays size={14} className="text-amber-400" />
+                                          <span className="text-[11px] font-mono font-bold text-neutral-350">
+                                            📅 Pupil Enrollment Date: <strong className="text-amber-400">{formattedEnrollmentDate}</strong>
+                                          </span>
+                                        </div>
+                                        <div className="text-left sm:text-right font-mono text-[10px]">
+                                          <span className="text-neutral-400 block font-bold">
+                                            Total Logged Payments: <strong className="text-emerald-400 font-mono">GHC {totalPaid.toFixed(2)}</strong>
+                                          </span>
+                                          <span className="text-neutral-500 text-[9px] block">
+                                            Active Term: {activeTerm?.name || 'Unspecified'}
+                                          </span>
+                                        </div>
+                                      </div>
+
+                                      {/* Chronological Presence & Payment History Timeline */}
+                                      <div className="space-y-2">
+                                        <span className="text-[9.5px] font-mono font-black text-neutral-400 uppercase tracking-widest block font-bold">
+                                          Detailed Payment history ({studentAllPayments.length} entries)
+                                        </span>
+
+                                        <div className="bg-neutral-900/30 border border-neutral-850 rounded-sm overflow-hidden divide-y divide-neutral-900 max-h-[180px] overflow-y-auto">
+                                          {studentAllPayments.length === 0 ? (
+                                            <div className="p-6 text-center text-[10.5px] font-mono font-bold uppercase text-neutral-500 tracking-wide">
+                                              No payment history logs or daily transactions recorded for this student.
+                                            </div>
+                                          ) : (
+                                            [...studentAllPayments].sort((a,b) => b.date.localeCompare(a.date)).map((pay) => (
+                                              <div key={pay.id} className="p-3 flex items-center justify-between hover:bg-neutral-900/40 text-xs font-mono">
+                                                <div className="flex items-center gap-2.5">
+                                                  <div className={`w-2 h-2 rounded-full ${pay.isAbsent ? 'bg-red-500' : 'bg-emerald-400'}`} />
+                                                  <div>
+                                                    <span className="text-white font-black block text-[11px]">{pay.date}</span>
+                                                    <span className="text-[9.5px] text-neutral-500 block">
+                                                      Collector: {pay.collectedBy || 'Staff Registrar'}
+                                                    </span>
+                                                  </div>
+                                                </div>
+
+                                                <div className="flex items-center gap-3">
+                                                  {pay.isAbsent ? (
+                                                    <span className="text-[9px] bg-red-950/70 text-red-400 border border-red-900/40 px-2 py-0.5 text-right font-black uppercase rounded-xs">
+                                                      Absent
+                                                    </span>
+                                                  ) : (
+                                                    <div className="text-right">
+                                                      <span className="text-[10.5px] text-emerald-400 font-black block">
+                                                        GHC {pay.amount.toFixed(2)}
+                                                      </span>
+                                                      <span className="text-[8px] text-neutral-550 block uppercase tracking-wide">
+                                                        {pay.paymentMethod ? `${pay.paymentMethod}` : 'Present / Paid'}
+                                                      </span>
+                                                    </div>
+                                                  )}
+
+                                                  <span className={`text-[8.5px] select-none font-bold px-1.5 py-0.2 border rounded-sm uppercase ${pay.verified ? 'bg-emerald-950/40 text-emerald-400 border-emerald-900/50' : 'bg-amber-951 text-amber-300 border-amber-900/30'}`}>
+                                                    {pay.verified ? 'Verified' : 'Pending'}
+                                                  </span>
+                                                </div>
+                                              </div>
+                                            ))
+                                          )}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   );
-                })
+                }))
               )}
             </div>
           </div>
@@ -4555,6 +5328,19 @@ export const AdminPanel: React.FC = React.memo(() => {
                           />
                         </div>
                       </div>
+
+                      <div className="mt-3">
+                        <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                          Teacher Personal Address (for contract/appointment letters)
+                        </label>
+                        <input
+                          type="text"
+                          value={editStaffObj.personalAddress || ''}
+                          onChange={(e) => setEditStaffObj({ ...editStaffObj, personalAddress: e.target.value })}
+                          placeholder="e.g. P. O. Box GP 1234, Accra, Ghana"
+                          className="w-full bg-neutral-900 border-2 border-neutral-800 py-2.5 px-3.5 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600"
+                        />
+                      </div>
                     </div>
                   </div>
 
@@ -4846,6 +5632,19 @@ export const AdminPanel: React.FC = React.memo(() => {
                             className="w-full bg-neutral-900 border-2 border-neutral-800 py-2.5 px-3.5 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600"
                           />
                         </div>
+                      </div>
+
+                      <div className="mt-3">
+                        <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                          Teacher Personal Address (for contract/appointment letters)
+                        </label>
+                        <input
+                          type="text"
+                          value={adminRegPersonalAddress}
+                          onChange={(e) => setAdminRegPersonalAddress(e.target.value)}
+                          placeholder="e.g. P. O. Box GP 1234, Accra, Ghana"
+                          className="w-full bg-neutral-900 border-2 border-neutral-800 py-2.5 px-3.5 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600"
+                        />
                       </div>
                     </div>
                   </div>
@@ -5218,821 +6017,517 @@ export const AdminPanel: React.FC = React.memo(() => {
           </div>
         </div>
       ) : activeTab === 'database' ? (
-        <div className="space-y-6">
-          <div className="bg-neutral-900 border-4 border-neutral-800 p-8 space-y-6">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center pb-4 border-b-2 border-neutral-800 gap-4">
-              <div className="flex items-center gap-3">
-                <Database size={24} className="text-amber-400" />
-                <h3 className="text-xl font-black uppercase text-white tracking-tight">Firebase Firestore Status</h3>
-              </div>
-              
-              <div className="flex items-center gap-2">
-                <span className={`w-3 h-3 rounded-full ${firebaseConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
-                <span className={`text-xs font-black uppercase tracking-widest font-mono ${firebaseConnected ? 'text-emerald-400' : 'text-amber-400'}`}>
-                  {firebaseConnected ? 'FIREBASE CLOUD ACTIVE' : 'LOCAL LEDGER OFFLINE-MODE'}
-                </span>
-              </div>
-            </div>
-
-            {/* Ledger Mode Selection Controller */}
-            <div className="p-4 bg-neutral-950 border-2 border-neutral-800 flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4">
-              <div className="space-y-1">
-                <h4 className="text-sm font-black uppercase text-white tracking-wider font-mono">Select Database Ledger Mode</h4>
-                <p className="text-[11px] text-neutral-400 leading-normal max-w-2xl font-medium">
-                  Choose <span className="text-amber-400 font-extrabold">📁 Local Ledger Only</span> to bypass cloud lookups entirely for instantaneous execution and zero network timeouts. Choose <span className="text-emerald-400 font-extrabold">☁️ Firestore Cloud Sync</span> to link with Google Cloud Firestore database.
-                </p>
-              </div>
-              <div className="flex gap-2.5 w-full xl:w-auto">
-                <button
-                  type="button"
-                  id="btn-ledger-local"
-                  onClick={() => {
-                    setStorageMode('local');
-                    showToast('Switched to Standard Local Ledger mode. Blazing-fast and light!');
-                  }}
-                  className={`flex-1 xl:flex-initial px-4 py-2.5 text-xs font-black uppercase tracking-wider font-mono transition-all border-2 cursor-pointer ${
-                    storageMode === 'local'
-                      ? 'bg-amber-500 text-black border-amber-500 font-extrabold'
-                      : 'bg-transparent text-neutral-400 border-neutral-700 hover:text-white hover:border-neutral-500'
-                  }`}
-                >
-                  📁 Local Ledger Only
-                </button>
-                <button
-                  type="button"
-                  id="btn-ledger-cloud"
-                  onClick={() => {
-                    if (storageMode === 'local') {
-                      setShowLedgerSwitchModal(true);
-                    } else {
-                      setStorageMode('cloud');
-                      showToast('Switched to Cloud Database Sync mode.');
-                    }
-                  }}
-                  className={`flex-1 xl:flex-initial px-4 py-2.5 text-xs font-black uppercase tracking-wider font-mono transition-all border-2 cursor-pointer ${
-                    storageMode === 'cloud'
-                      ? 'bg-emerald-500 text-black border-emerald-500 font-extrabold'
-                      : 'bg-transparent text-neutral-400 border-neutral-700 hover:text-white hover:border-neutral-500'
-                  }`}
-                >
-                  ☁️ Firestore Cloud Sync
-                </button>
-              </div>
-            </div>
-
-            {/* Periodic Background Sync Settings */}
-            <div className={`p-4 border-2 transition-all ${
-              bgSyncEnabled && storageMode === 'cloud'
-                ? 'bg-emerald-950/20 border-emerald-900/60'
-                : 'bg-neutral-950/50 border-neutral-850'
-            } flex flex-col md:flex-row justify-between items-start md:items-center gap-4`}>
-              <div className="space-y-1.5 flex-1">
-                <div className="flex items-center gap-3">
-                  <h4 className="text-sm font-black uppercase text-white tracking-wider font-mono flex items-center gap-2">
-                    🔄 Periodic Background Sync
-                  </h4>
-                  {storageMode === 'cloud' && (
-                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-mono leading-none border uppercase tracking-wider font-bold ${
-                      bgSyncEnabled
-                        ? 'bg-emerald-950 text-emerald-400 border-emerald-900 animate-pulse'
-                        : 'bg-neutral-900 text-neutral-500 border-neutral-800'
-                    }`}>
-                      {bgSyncEnabled ? 'ENABLED' : 'DISABLED'}
-                    </span>
-                  )}
-                </div>
-                <p className="text-[11px] text-neutral-400 leading-relaxed font-semibold">
-                  Refresh pupil rosters, student details, and cash check-ins automatically in the background (every 30 seconds) while online. Ensures multi-device changes persist in near-realtime.
-                </p>
-                
-                {bgSyncEnabled && storageMode === 'cloud' && (
-                  <div className="flex items-center gap-3 text-[10px] font-mono font-bold uppercase tracking-wider text-neutral-500">
-                    <span className="flex items-center gap-1.5">
-                      Status: 
-                      {bgSyncStatus === 'syncing' ? (
-                        <span className="text-amber-400 animate-pulse flex items-center gap-1">
-                          <span className="inline-block animate-spin">⌛</span> Syncing...
-                        </span>
-                      ) : bgSyncStatus === 'success' ? (
-                        <span className="text-emerald-400">✓ Sync Active & Clean</span>
-                      ) : bgSyncStatus === 'error' ? (
-                        <span className="text-red-400">✗ Sync Timeout / Error</span>
-                      ) : (
-                        <span className="text-neutral-400">Idle</span>
-                      )}
-                    </span>
-                    {lastBgSyncTime && (
-                      <span className="border-l border-neutral-800 pl-3">
-                        Last Active Handshake: <strong className="text-neutral-300">{lastBgSyncTime}</strong>
-                      </span>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              <div className="flex items-center gap-3 shrink-0 self-end md:self-auto">
-                <label className="relative inline-flex items-center cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={bgSyncEnabled}
-                    onChange={(e) => {
-                      if (storageMode !== 'cloud' && e.target.checked) {
-                        showToast('Please enable Firestore Cloud Sync first to trigger background syncing.');
-                        return;
-                      }
-                      setBgSyncEnabled(e.target.checked);
-                      showToast(
-                        e.target.checked
-                          ? 'Background sync enabled. The system will sync with Firebase every 30 seconds.'
-                          : 'Background sync disabled. Switched back to manual-only synchronization.'
-                      );
-                    }}
-                    disabled={storageMode !== 'cloud'}
-                    className="sr-only peer"
-                    id="toggle-background-sync"
-                  />
-                  <div className={`w-11 h-6 bg-neutral-800 rounded-full peer peer-focus:ring-0 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-neutral-400 after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500 peer-checked:after:bg-white peer-disabled:opacity-50 peer-disabled:cursor-not-allowed ${
-                    storageMode !== 'cloud' ? 'opacity-40' : ''
-                  }`}></div>
-                  <span className={`ml-3 text-xs font-black uppercase tracking-wider font-mono ${
-                    storageMode !== 'cloud' ? 'text-neutral-600' : 'text-neutral-300'
-                  }`}>
-                    {bgSyncEnabled && storageMode === 'cloud' ? 'ON' : 'OFF'}
-                  </span>
-                </label>
-              </div>
-            </div>
-
-            {/* System Audio & Feedback Chime Settings */}
-            <div className={`p-4 border-2 transition-all ${
-              !audioMuted
-                ? 'bg-amber-950/20 border-amber-900/60'
-                : 'bg-neutral-950/50 border-neutral-850'
-            } flex flex-col md:flex-row justify-between items-start md:items-center gap-4`}>
-              <div className="space-y-1.5 flex-1">
-                <div className="flex items-center gap-3">
-                  <h4 className="text-sm font-black uppercase text-white tracking-wider font-mono flex items-center gap-2">
-                    🔊 Portal Sound Effects
-                  </h4>
-                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-mono leading-none border uppercase tracking-wider font-bold ${
-                    !audioMuted
-                      ? 'bg-amber-950 text-amber-400 border-amber-900'
-                      : 'bg-neutral-900 text-neutral-500 border-neutral-800'
-                  }`}>
-                    {audioMuted ? 'MUTED' : 'ACTIVE'}
-                  </span>
-                </div>
-                <p className="text-[11px] text-neutral-400 leading-relaxed font-semibold">
-                  Mute/unmute all auditory signals, including successful pupil check-ins (high-register chime), registration duplicate conflicts (low-register buzzer), or QR scan alerts.
-                </p>
-              </div>
-
-              <div className="flex items-center gap-3 shrink-0 self-end md:self-auto">
-                <label className="relative inline-flex items-center cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={!audioMuted}
-                    onChange={(e) => {
-                      setAudioMuted(!e.target.checked);
-                      showToast(
-                        e.target.checked
-                          ? 'Auditory feedback check-in sound cues ENABLED!'
-                          : 'Auditory feedback cues MUTED (Silent mode Active).'
-                      );
-                    }}
-                    className="sr-only peer"
-                    id="toggle-system-audio"
-                  />
-                  <div className="w-11 h-6 bg-neutral-800 rounded-full peer peer-focus:ring-0 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-neutral-400 after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-400 peer-checked:after:bg-black"></div>
-                  <span className="ml-3 text-xs font-black uppercase tracking-wider font-mono text-neutral-300">
-                    {!audioMuted ? 'ON' : 'OFF'}
-                  </span>
-                </label>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 pb-2">
-              <div className="lg:col-span-2 space-y-3">
-                <p className="text-xs text-neutral-400 leading-relaxed font-bold">
-                  FEETRACK is armed with real-time cloud database syncing powered by Google Cloud Firebase Firestore. By default, records are safely cached in local memory and browser storage. Launching Firebase turns this daily school portal into a durable multi-device cloud system!
-                </p>
-                {firebaseConnected ? (
-                  <div className="p-4 bg-emerald-950/20 border-2 border-emerald-900 text-xs text-neutral-300 leading-relaxed font-medium">
-                    <p className="text-emerald-400 font-black mb-1 font-mono">🎉 CLOUD SYNC: VERIFIED ACTIVE</p>
-                    Your active student enrollments, staff user credentials, daily check-in payments, and staff roles are communicating live with Firestore. No setup or copy/paste is required.
-                  </div>
-                ) : (
-                  <div className="p-4 bg-amber-950/10 border-2 border-amber-900/60 text-xs text-neutral-300 leading-relaxed font-semibold">
-                    <p className="text-amber-400 font-extrabold mb-1">📂 OFFLINE-MODE fallback</p>
-                    We detected that your Cloud connection is offline. Connect your browser online or re-initialize to regain real-time Firestore database sync.
-                    {firebaseError && (
-                      <div className="mt-2.5 p-2 bg-black/40 border border-amber-900/50 rounded text-[10px] text-red-400 font-mono select-text break-words leading-normal">
-                        <span className="font-extrabold text-amber-500 mr-1">Error trace:</span>
-                        {firebaseError}
-                      </div>
-                    )}
-                    <div className="mt-3">
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          showToast('Re-testing collection links...');
-                          await retryFirebaseConnection();
-                          showToast('Real-time sync test finalized.');
-                        }}
-                        className="px-3 py-1.5 bg-amber-500 hover:bg-amber-450 text-black font-black uppercase text-[10px] tracking-wider transition-colors inline-flex items-center gap-1.5 cursor-pointer font-mono"
-                      >
-                        <RefreshCw size={10} className="animate-spin" style={{ animationDuration: '3s' }} />
-                        Retry Sync Detection
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="bg-neutral-950 border-2 border-neutral-850 p-6 flex flex-col justify-between gap-4">
-                <span className="text-[10px] font-black tracking-widest uppercase font-mono text-neutral-500">Cloud Seeding Bridge</span>
-                <h4 className="text-sm font-black uppercase text-white leading-tight">Bootstrap Local Seeds to Firestore</h4>
-                <p className="text-[11px] text-neutral-400 leading-normal font-medium">
-                  Push your offline register records, pupil directories, and recorded payment books immediately into your active Cloud Firebase Firestore database.
-                </p>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    try {
-                      showToast('Triggering Firebase firestore sync sequence...');
-                      const response = await seedFirebaseFromLocal();
-                      showToast(response.message);
-                    } catch (err) {
-                      const msg = err instanceof Error ? err.message : String(err);
-                      console.error('Firebase seeding failed:', err);
-                      try {
-                        const parsed = JSON.parse(msg);
-                        showToast(`Failed: ${parsed.error || 'Check database permissions / rules.'}`);
-                      } catch {
-                        showToast(`Failed: ${msg.slice(0, 80)}`);
-                      }
-                    }
-                  }}
-                  className="w-full py-2.5 text-xs font-black bg-amber-400 hover:bg-amber-350 text-black uppercase tracking-widest cursor-pointer transition-colors flex items-center justify-center gap-2"
-                >
-                  <RefreshCw size={14} />
-                  Publish To Firestore
-                </button>
-              </div>
-            </div>
-
-            {/* Local Offline Backups & Recovery Hub */}
-            <div className="bg-neutral-950 border-2 border-neutral-800 p-6 space-y-5">
-              <div className="flex flex-col md:flex-row justify-between items-start md:items-center pb-4 border-b border-neutral-850 gap-4">
-                <div className="space-y-1">
-                  <span className="text-[10px] font-black tracking-widest uppercase font-mono text-amber-500 flex items-center gap-1.5">
-                    <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                    Recurring 30-Minute Task Active
-                  </span>
-                  <h4 className="text-base font-black uppercase text-white leading-tight font-mono flex items-center gap-2 block">
-                    <Database size={18} className="text-amber-400" />
-                    Offline Local Backup & Recovery Hub
-                  </h4>
-                  <p className="text-xs text-neutral-400 leading-relaxed font-semibold">
-                    Automated background task captures state snapshots every 30 minutes. Securely guards directories, terms, and billing logs against data loss in Offline mode.
-                  </p>
-                </div>
-
-                <div className="flex flex-row md:flex-col items-end gap-1.5 bg-neutral-900 border border-neutral-850 px-4 py-2.5 font-mono select-none shrink-0 w-full md:w-auto text-right">
-                  <div className="text-[10px] uppercase text-neutral-500 font-bold tracking-wider">Next Auto Backup In</div>
-                  <div className="text-lg font-black text-white leading-none">
-                    {Math.floor(localTimeLeft / 60)}m {(localTimeLeft % 60).toString().padStart(2, '0')}s
-                  </div>
-                </div>
-              </div>
-
-              {/* Create Manual Backup Trigger bar */}
-              <div className="bg-neutral-900 border border-neutral-850 p-4 flex flex-col md:flex-row items-center gap-4">
-                <div className="relative flex-1 w-full">
-                  <input
-                    type="text"
-                    placeholder="Enter manual backup label (e.g., Before class merge)..."
-                    value={backupLabel}
-                    onChange={(e) => setBackupLabel(e.target.value)}
-                    maxLength={60}
-                    className="w-full bg-neutral-950 border-2 border-neutral-800 px-4 py-2 text-xs font-mono font-bold text-white uppercase placeholder-neutral-600 focus:outline-none focus:border-amber-400"
-                  />
-                </div>
-                <div className="flex flex-col sm:flex-row gap-2.5 w-full md:w-auto shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      createBackup(backupLabel.trim() || undefined, false);
-                      setBackupLabel('');
-                      showToast('Captured fresh local database snapshot.');
-                    }}
-                    className="flex-1 sm:flex-initial px-5 py-2.5 bg-neutral-850 hover:bg-neutral-800 text-white font-black text-xs uppercase tracking-widest font-mono transition-colors cursor-pointer border-2 border-neutral-750"
-                  >
-                    Create Snapshot
-                  </button>
-                  <button
-                    type="button"
-                    onClick={downloadDatabaseBackup}
-                    className="flex-1 sm:flex-initial px-5 py-2.5 bg-amber-400 hover:bg-amber-350 text-black font-black text-xs uppercase tracking-widest font-mono transition-colors cursor-pointer border-2 border-amber-500 flex items-center justify-center gap-2"
-                  >
-                    <Download size={13} />
-                    Download Backup JSON
-                  </button>
-                </div>
-              </div>
-
-              {/* Backups List */}
-              <div className="space-y-3">
-                <div className="flex justify-between items-center">
-                  <span className="text-[10px] font-black tracking-widest uppercase font-mono text-neutral-500">
-                    Stored Snapshots ({backups.length}/10 slots used)
-                  </span>
-                  {backups.length > 0 && (
-                    <div className="shrink-0">
-                      {showBackupPurgeConfirm ? (
-                        <div className="flex items-center gap-2">
-                          <span className="text-[9px] font-mono font-bold uppercase text-red-400 animate-pulse">WIPE ALL?</span>
-                          <button
-                            type="button"
-                            onClick={() => setShowBackupPurgeConfirm(false)}
-                            className="text-[9px] font-bold uppercase text-neutral-400 hover:text-white underline font-mono cursor-pointer"
-                          >
-                            CANCEL
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              clearAllBackups();
-                              setShowBackupPurgeConfirm(false);
-                              showToast('Cleared all local backups.');
-                            }}
-                            className="text-[9px] font-bold uppercase text-red-500 hover:text-red-400 underline font-mono cursor-pointer"
-                          >
-                            CONFIRM
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => setShowBackupPurgeConfirm(true)}
-                          className="text-[9px] font-bold uppercase text-neutral-500 hover:text-red-400 underline font-mono transition-colors cursor-pointer"
-                        >
-                          Purge Backup Cache
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                {backups.length === 0 ? (
-                  <div className="border border-dashed border-neutral-800 p-8 text-center text-neutral-500 space-y-1.5 font-mono select-none">
-                    <Database size={24} className="mx-auto text-neutral-700 stroke-[1.5]" />
-                    <p className="text-xs uppercase font-extrabold tracking-wider text-neutral-400">No backup records saved</p>
-                    <p className="text-[10px] font-medium leading-relaxed max-w-lg mx-auto uppercase">
-                      The automated timer will automatically capture database state. Try creating a manual snapshot above to protect changes dynamically.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="max-h-[300px] overflow-y-auto space-y-3.5 pr-2 custom-scrollbar">
-                    {backups.map(b => (
-                      <div key={b.id} className="bg-neutral-900 border border-neutral-850 p-4.5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 hover:border-neutral-700 transition">
-                        <div className="space-y-1.5 flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-mono text-xs font-black uppercase text-white truncate max-w-[280px]">
-                              {b.label}
-                            </span>
-                            <span className={`text-[9px] font-black tracking-widest uppercase font-mono px-2 py-0.5 border leading-none shrink-0 ${
-                              b.isAuto 
-                                ? 'bg-amber-950/20 border-amber-500/20 text-amber-500' 
-                                : 'bg-blue-950/20 border-blue-500/20 text-blue-400'
-                            }`}>
-                              {b.isAuto ? 'AUTO' : 'MANUAL'}
-                            </span>
-                          </div>
-                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 font-mono text-[10px] leading-none text-neutral-400 font-semibold uppercase">
-                            <span>Students: <strong className="text-white">{b.counts.students}</strong></span>
-                            <span className="border-l border-neutral-800 h-2.5"></span>
-                            <span>Payments: <strong className="text-white">{b.counts.payments}</strong></span>
-                            <span className="border-l border-neutral-800 h-2.5"></span>
-                            <span>Terms: <strong className="text-white">{b.counts.terms}</strong></span>
-                            <span className="border-l border-neutral-800 h-2.5"></span>
-                            <span className="text-neutral-500 font-bold">{b.timestamp}</span>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-3 shrink-0 self-end sm:self-auto">
-                          {showRestoreConfirmId === b.id ? (
-                            <div className="flex items-center gap-2 font-mono">
-                              <span className="text-[10px] font-black uppercase tracking-wider text-amber-500 animate-pulse">ROLLBACK?</span>
-                              <button
-                                type="button"
-                                onClick={() => setShowRestoreConfirmId(null)}
-                                className="px-2.5 py-1.5 border border-neutral-800 hover:border-neutral-750 text-[10px] font-black uppercase tracking-wider text-neutral-400 hover:text-white transition cursor-pointer"
-                              >
-                                CANCEL
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  restoreBackup(b.id);
-                                  setShowRestoreConfirmId(null);
-                                  showToast(`Restored base state from snapshot: "${b.label}"`);
-                                }}
-                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white border-2 border-emerald-500 text-[10px] font-black uppercase tracking-wider transition cursor-pointer"
-                              >
-                                CONFIRM
-                              </button>
-                            </div>
-                          ) : (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() => setShowRestoreConfirmId(b.id)}
-                                className="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-black text-[10px] uppercase font-mono tracking-widest border border-neutral-700 transition cursor-pointer"
-                              >
-                                Restore
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  deleteBackup(b.id);
-                                  showToast('Selected backup snapshot deleted.');
-                                }}
-                                className="p-2 text-neutral-500 hover:text-red-400 hover:bg-neutral-800/40 rounded transition cursor-pointer"
-                                title="Delete backup"
-                              >
-                                <X size={14} className="stroke-[3]" />
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Clear Sample / Start Live Data System Utility */}
-            <div className="bg-neutral-950 border-2 border-red-950/60 p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-6 relative">
-              <div className="space-y-1.5 max-w-2xl">
-                <span className="text-[10px] font-black tracking-widest uppercase font-mono text-red-500">System Initialization Ledger Tools</span>
-                <h4 className="text-base font-black uppercase text-white leading-tight font-mono flex items-center gap-2">
-                  <Trash2 size={16} className="text-red-500" />
-                  Wipe Simulation / Demo Student Ledger
-                </h4>
-                <p className="text-xs text-neutral-400 leading-relaxed font-medium">
-                  Ready to enroll real pupils and open active school semesters? Permanently delete all sample school registers, student names, classes, and fake historic payment logs. All system accounts (administrator and teacher credentials) remain untouched for secure login.
-                </p>
-              </div>
-              <div className="w-full md:w-auto shrink-0">
-                {students.length === 0 ? (
-                  <div className="px-5 py-3 border border-emerald-900 bg-emerald-950/15 text-emerald-400 text-xs font-mono font-black uppercase tracking-wider text-center">
-                    🟢 Register Cleared & Ready!
-                  </div>
-                ) : showClearConfirm ? (
-                  <div className="space-y-2.5">
-                    <p className="text-[10px] uppercase font-mono font-black text-red-400 text-center animate-pulse">⚠️ ARE YOU ABSOLUTELY SURE?</p>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setShowClearConfirm(false)}
-                        className="py-2.5 px-4 text-xs font-black uppercase text-neutral-400 hover:text-white border border-neutral-800 hover:border-neutral-700 bg-neutral-900 cursor-pointer"
-                      >
-                        CANCEL
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          clearSampleStudents();
-                          setShowClearConfirm(false);
-                          showToast('Sample students database and past transactions cleared successfully.');
-                        }}
-                        className="py-2.5 px-5 text-xs font-black uppercase bg-red-600 hover:bg-red-500 text-white cursor-pointer transition-colors"
-                      >
-                        CONFIRM WIPE
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setShowClearConfirm(true)}
-                    className="w-full md:w-auto py-3 px-6 text-xs font-black bg-neutral-905 hover:bg-red-600 hover:text-white text-red-500 border border-red-950 hover:border-red-600 uppercase tracking-widest cursor-pointer transition-all font-mono"
-                  >
-                    WIPE ALL SAMPLE DATA
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Reset App Ledger / Factory Reset System Utility */}
-            <div className="bg-neutral-950 border-2 border-amber-950/60 p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-6 relative">
-              <div className="space-y-1.5 max-w-2xl">
-                <span className="text-[10px] font-black tracking-widest uppercase font-mono text-amber-500">System Reset Tools</span>
-                <h4 className="text-base font-black uppercase text-white leading-tight font-mono flex items-center gap-2">
-                  <RefreshCw size={16} className="text-amber-550" />
-                  Factory Reset / Rebuild App Ledger
-                </h4>
-                <p className="text-xs text-neutral-400 leading-relaxed font-semibold">
-                  Rebuild the system to system factory seeds. This option completely purges the cache and resets students, staff logins, and daily payments to default starting presets.
-                </p>
-              </div>
-              <div className="w-full md:w-auto shrink-0">
-                {showResetConfirm ? (
-                  <div className="space-y-2.5">
-                    <p className="text-[10px] uppercase font-mono font-black text-amber-400 text-center animate-pulse">⚠️ PURGE & RESTORE DEFAULTS?</p>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setShowResetConfirm(false)}
-                        className="py-2.5 px-4 text-xs font-black uppercase text-neutral-400 hover:text-white border border-neutral-800 hover:border-neutral-700 bg-neutral-900 cursor-pointer"
-                      >
-                        CANCEL
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          resetData();
-                          setShowResetConfirm(false);
-                          showToast('System rebuilt to factory seeds. Reloading...');
-                          setTimeout(() => {
-                            window.location.reload();
-                          }, 1000);
-                        }}
-                        className="py-2.5 px-5 text-xs font-black uppercase bg-amber-550 hover:bg-amber-500 text-black cursor-pointer transition-colors"
-                      >
-                        CONFIRM RESET
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setShowResetConfirm(true)}
-                    className="w-full md:w-auto py-3 px-6 text-xs font-black bg-neutral-905 hover:bg-amber-500 hover:text-black text-amber-500 border border-amber-950 hover:border-amber-500 uppercase tracking-widest cursor-pointer transition-all font-mono"
-                  >
-                    RESET APP LEDGER
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Staff Setup and Access Instructions */}
-            <div className="bg-neutral-950 border-2 border-neutral-800 p-6 space-y-5">
-              <div className="flex items-center gap-3 border-b border-neutral-850 pb-3">
-                <Share2 className="text-amber-400" size={18} />
-                <h4 className="text-xs font-black uppercase text-white tracking-widest font-mono">
-                  STAFF ACCOUNTS & MULTI-USER ACCESS INSTANT SETUP
-                </h4>
-              </div>
-              
-              <p className="text-xs text-neutral-400 leading-normal font-medium">
-                Want to make this application available to other staff members? Follow this simple 3-step checklist to coordinate class fee logs across all devices:
-              </p>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs font-medium">
-                {/* Step 1 */}
-                <div className="bg-neutral-900 border border-neutral-850 p-4 space-y-2 flex flex-col justify-between">
-                  <div className="space-y-2">
-                    <span className="text-[10px] font-black text-amber-500 font-mono block">STEP 01: SHARE PORTAL LINK</span>
-                    <p className="text-neutral-400 text-[11px] leading-relaxed">
-                      Provide other staff members with the live web address of this school fee tracker. They can open it on any mobile phone, tablet, or classroom computer.
-                    </p>
-                    <div className="bg-neutral-950 p-2 border border-neutral-800 rounded font-mono text-[9px] text-amber-400 break-all select-all font-bold">
-                      {(() => {
-                        const raw = getSafeOrigin();
-                        if (raw.includes("localhost") || raw.includes("127.0.0.1")) return raw;
-                        let clean = raw.replace(/^(https?:\/\/)\d+-/, "$1");
-                        if (clean.includes("-dev-")) clean = clean.replace("-dev-", "-pre-");
-                        return clean.replace(/:\d+$/, "");
-                      })()}
-                    </div>
-                  </div>
-                  <div className="pt-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        try {
-                          const rawOrigin = getSafeOrigin();
-                          let cleanOrigin = rawOrigin;
-                          if (!rawOrigin.includes("localhost") && !rawOrigin.includes("127.0.0.1")) {
-                            cleanOrigin = rawOrigin.replace(/^(https?:\/\/)\d+-/, "$1");
-                            if (cleanOrigin.includes("-dev-")) {
-                              cleanOrigin = cleanOrigin.replace("-dev-", "-pre-");
-                            }
-                            cleanOrigin = cleanOrigin.replace(/:\d+$/, "");
-                          }
-                          navigator.clipboard.writeText(cleanOrigin);
-                          setCopiedAddress(true);
-                          showToast("Copied portal address to clipboard!");
-                          setTimeout(() => setCopiedAddress(false), 2000);
-                        } catch (err) {
-                          const rawOrigin = getSafeOrigin();
-                          let cleanOrigin = rawOrigin;
-                          if (!rawOrigin.includes("localhost") && !rawOrigin.includes("127.0.0.1")) {
-                            cleanOrigin = rawOrigin.replace(/^(https?:\/\/)\d+-/, "$1");
-                            if (cleanOrigin.includes("-dev-")) {
-                              cleanOrigin = cleanOrigin.replace("-dev-", "-pre-");
-                            }
-                            cleanOrigin = cleanOrigin.replace(/:\d+$/, "");
-                          }
-                          alert(`Portal Address: ${cleanOrigin}`);
-                        }
-                      }}
-                      className="w-full py-2 bg-neutral-950 hover:bg-neutral-850 border border-neutral-800 hover:border-neutral-600 text-[10px] font-black uppercase tracking-widest text-amber-400 transition-all flex items-center justify-center gap-2 cursor-pointer font-mono"
-                    >
-                      <Copy size={12} />
-                      {copiedAddress ? "COPIED DETAILS!" : "COPY SHARABLE URL"}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Step 2 */}
-                <div className="bg-neutral-900 border border-neutral-850 p-4 space-y-2 flex flex-col justify-between">
-                  <div className="space-y-2">
-                    <span className="text-[10px] font-black text-amber-500 font-mono block">STEP 02: AUTHORIZE THE EMAIL</span>
-                    <p className="text-neutral-400 text-[11px] leading-relaxed">
-                      Navigate to the <span className="text-amber-400 font-bold">RBAC & MFA Hub</span> tab above. Register their email, select their class/role, and let them sign in securely.
-                    </p>
-                  </div>
-                  <div className="pt-2">
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab('mfa')}
-                      className="w-full py-2 bg-neutral-950 hover:bg-neutral-850 border border-neutral-800 hover:border-neutral-600 text-[10px] font-black uppercase tracking-widest text-neutral-300 transition-colors flex items-center justify-center gap-2 cursor-pointer font-mono"
-                    >
-                      <Users size={12} />
-                      GOTO SECURITY HUB
-                    </button>
-                  </div>
-                </div>
-
-                {/* Step 3 */}
-                <div className="bg-neutral-900 border border-neutral-850 p-4 space-y-2 flex flex-col justify-between">
-                  <div className="space-y-2">
-                    <span className="text-[10px] font-black text-amber-500 font-mono block">STEP 03: TURN ON CLOUD SYNC</span>
-                    <p className="text-neutral-400 text-[11px] leading-relaxed">
-                      Make sure database mode is set to <span className="text-emerald-400 font-bold">Cloud Sync</span> on all devices so updates register instantly for all staff teachers in real-time.
-                    </p>
-                  </div>
-                  <div className="bg-neutral-950 px-2.5 py-1.5 border border-neutral-850 text-center text-[10px] uppercase font-bold text-neutral-500 font-mono">
-                    STATUS: {storageMode === 'cloud' ? '🟢 SYNCING LIVE' : '⚠️ ISOLATED LOCAL'}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : activeTab === 'adjustments' ? (
-        <AdjustmentsTab />
+        <DatabaseTab showToast={showToast} setActiveTab={setActiveTab} />
+      ) : activeTab === 'performance' ? (
+        <PerformanceTab />
       ) : activeTab === 'whatsapp' ? (
         <WhatsAppLogsTab />
-      ) : activeTab === 'audit' ? (
-        <AuditTrailTab />
       ) : activeTab === 'settings' ? (
         <SettingsPanel />
       ) : activeTab === 'idcards' ? (
         <IdCardsGeneratorTab />
+      ) : activeTab === 'ledger' ? (
+        <LedgerTab />
       ) : activeTab === 'ai_assistant' ? (
         <AiAssistantTab />
       ) : (
         <ExpendituresTab />
       )}
       {/* SMS Urgent notification Modal Overlay */}
-      {smsTarget && (
-        <div className="fixed inset-0 bg-neutral-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-neutral-900 border-4 border-red-500 max-w-md w-full p-8 shadow-[8px_8px_0px_0px_rgba(239,68,68,0.25)] space-y-6">
-            <div className="flex items-center gap-3 pb-3 border-b-2 border-neutral-800">
-              <ShieldAlert size={20} className="text-red-500 animate-pulse" />
-              <h3 className="text-sm font-black uppercase tracking-widest text-white font-mono">Send Urgent Arrears SMS</h3>
-            </div>
+      {smsTarget && (() => {
+        const waMessage = `*SAAKO HOLY CHILD ACADEMY*\n*URGENT DAILY ARREARS ALERT*\n\n` +
+          `*Beneficiary/Pupil:* ${smsTarget.student.name}\n` +
+          `*Class:* ${smsTarget.student.class}\n` +
+          `*Missed Days:* ${smsTarget.consecutiveDays} days\n` +
+          `*Outstanding Amount:* GHC ${(smsTarget.consecutiveDays * 5).toFixed(2)}\n\n` +
+          `Dear Parent/Guardian,\n` +
+          `Our registers show that your child has missed daily gate check-in fee collections for ${smsTarget.consecutiveDays} consecutive school days (Dates: ${smsTarget.unpaidDates.join(', ')}). Outstanding: GHC ${(smsTarget.consecutiveDays * 5).toFixed(2)}.\n\n` +
+          `Kindly make payments at the gate register to avoid access disruption. Thank you.\n\n` +
+          `_Authorized Administration System_`;
 
-            <div className="space-y-4">
-              <p className="text-xs text-neutral-400 font-bold leading-relaxed">
-                Send/copy immediate high-priority check-in arrears notification for pupil: <span className="font-extrabold text-white">{smsTarget.student.name}</span>
-              </p>
-              
-              <div className="space-y-2">
-                <div className="flex justify-between items-center">
-                  <label className="block text-[8.5px] font-black text-neutral-400 uppercase tracking-widest font-mono">
-                    Receiver Guardian Phone Number
-                  </label>
-                  {smsTarget.student.guardianPhone && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        navigator.clipboard.writeText(smsTarget.student.guardianPhone || '');
-                        showToast(`Copied Guardian Phone: ${smsTarget.student.guardianPhone}`);
-                      }}
-                      className="text-[9px] hover:text-white text-amber-400 px-2 py-0.5 border border-amber-500/30 hover:border-amber-400 bg-neutral-950 font-mono uppercase tracking-wider font-extrabold flex items-center gap-1 transition"
-                      title="Copy Guardian Contact"
-                    >
-                      <Copy size={9} />
-                      <span>Copy Number</span>
-                    </button>
-                  )}
-                </div>
-                <input
-                  type="text"
-                  value={smsTarget.student.guardianPhone || ''}
-                  onChange={(e) => {
-                    const nextPhone = e.target.value.replace(/\D/g, '');
-                    setSmsTarget({
-                      ...smsTarget,
-                      student: { ...smsTarget.student, guardianPhone: nextPhone }
-                    });
-                  }}
-                  placeholder="Type or verify phone number e.g. 0541234567"
-                  className="w-full bg-neutral-950 border border-neutral-800 py-2.5 px-3 font-mono text-xs text-white focus:outline-none focus:border-red-500 placeholder:text-neutral-700 font-bold"
-                />
-              </div>
+        const smsMessage = `Hello. URGENT ALERT: Our registers show that ${smsTarget.student.name} has missed gate check-in fee collections for ${smsTarget.consecutiveDays} consecutive school days (Dates: ${smsTarget.unpaidDates.join(', ')}). Outstanding: GHC ${(smsTarget.consecutiveDays * 5).toFixed(2)}. Make payments at the gate register to avoid access disruption. - Yakubu Hakeem (Administrator)`;
 
-              <div className="relative group">
-                <div className="bg-neutral-950 text-red-405 font-mono text-[10.5px] p-4 border-2 border-neutral-850 leading-relaxed space-y-2 select-text">
-                  <div className="text-emerald-400">
-                    <span className="text-neutral-500 font-bold uppercase tracking-wider block">Sender Mask: SAAKOCHECK (URGENT)</span>
-                    <p className="border-t border-neutral-800/80 my-2 pt-2" />
-                    <p>Hello. URGENT ALERT: Our registers show that {smsTarget.student.name} has missed gate check-in fee collections for {smsTarget.consecutiveDays} consecutive school days (Dates: {smsTarget.unpaidDates.join(', ')}). Outstanding: GHC {(smsTarget.consecutiveDays * 5).toFixed(2)}. Make payments at the gate register to avoid access disruption. - Yakubu Hakeem (Administrator)</p>
-                  </div>
-                </div>
+        const currentMsgText = reminderChannel === 'whatsapp' ? waMessage : smsMessage;
+        const defaultPhone = smsTarget.student.guardianPhone || '';
 
-                <div className="absolute right-2.5 bottom-2.5">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const msg = `Hello. URGENT ALERT: Our registers show that ${smsTarget.student.name} has missed gate check-in fee collections for ${smsTarget.consecutiveDays} consecutive school days (Dates: ${smsTarget.unpaidDates.join(', ')}). Outstanding: GHC ${(smsTarget.consecutiveDays * 5).toFixed(2)}. Make payments at the gate register to avoid access disruption. - Yakubu Hakeem (Administrator)`;
-                      navigator.clipboard.writeText(msg);
-                      showToast(`Copied urgent arrears SMS log text!`);
-                    }}
-                    className="text-[9px] text-amber-400 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 rounded px-2.5 py-1 font-mono font-bold tracking-wider flex items-center gap-1.5 cursor-pointer transition-all active:scale-95"
-                    title="Copy full urgent message text"
-                  >
-                    <Copy size={10} />
-                    <span>Copy Full Message</span>
-                  </button>
-                </div>
-              </div>
-
-              {!smsTarget.student.guardianPhone && (
-                <p className="text-[10px] text-amber-500 font-bold font-mono uppercase bg-amber-950/20 border border-amber-900/60 p-2 rounded">
-                  ⚠️ Alert: No active contact registered. Please enter a verified phone number above.
-                </p>
-              )}
-            </div>
-
-            <div className="flex flex-col gap-2.5 pt-2">
-              <div className="flex gap-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const msg = `Hello. URGENT ALERT: Our registers show that ${smsTarget.student.name} has missed gate check-in fee collections for ${smsTarget.consecutiveDays} consecutive school days (Dates: ${smsTarget.unpaidDates.join(', ')}). Outstanding: GHC ${(smsTarget.consecutiveDays * 5).toFixed(2)}. Make payments at the gate register to avoid access disruption. - Yakubu Hakeem (Administrator)`;
-                    navigator.clipboard.writeText(msg);
-                    showToast("Copied SMS text to clipboard!");
-                  }}
-                  className="flex-1 text-xs bg-neutral-950 border-2 border-amber-500 hover:bg-neutral-800 text-amber-400 py-3 font-mono font-black flex items-center justify-center gap-2 uppercase tracking-widest transition-all cursor-pointer rounded-none hover:-translate-y-0.5 active:translate-y-0"
-                >
-                  <Copy size={13} />
-                  <span>Copy Text (Local API)</span>
-                </button>
-                <button
-                  type="button"
-                  disabled={isSendingSms || !smsTarget.student.guardianPhone}
-                  onClick={() => {
-                    setIsSendingSms(true);
-                    setTimeout(() => {
-                      setIsSendingSms(false);
-                      setSmsSuccess(true);
-                      showToast(`SMS Dispatch Token registered for ${smsTarget.student.name}'s guardian.`);
-                      setTimeout(() => {
-                        setSmsTarget(null);
-                      }, 1200);
-                    }, 1500);
-                  }}
-                  className="flex-1 text-xs bg-red-650 hover:bg-red-600 disabled:bg-neutral-800 disabled:border-neutral-850 disabled:text-neutral-500 border-2 border-red-500 text-white py-3 font-mono font-black flex items-center justify-center gap-2 uppercase tracking-widest transition-all cursor-pointer"
-                >
-                  {isSendingSms ? (
-                    <span className="animate-pulse">DISPATCHING...</span>
-                  ) : smsSuccess ? (
-                    <>
-                      <Check size={14} className="text-emerald-300 stroke-[3]" /> DISPATCHED
-                    </>
-                  ) : (
-                    <span>DISPATCH SIMULATED SMS</span>
-                  )}
-                </button>
-              </div>
+        return (
+          <div id="daily-payer-reminder-modal" className="fixed inset-0 z-50 bg-neutral-950/90 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto no-print">
+            <div className="relative w-full max-w-md bg-neutral-900 border-4 border-red-500 p-6 md:p-8 space-y-6 shadow-[8px_8px_0px_0px_rgba(239,68,68,0.25)] text-white">
               <button
                 type="button"
-                onClick={() => setSmsTarget(null)}
-                className="w-full text-[10px] bg-neutral-950 border border-neutral-850 hover:border-neutral-750 text-neutral-500 hover:text-neutral-300 py-2 font-black transition-colors uppercase tracking-widest cursor-pointer"
+                onClick={() => {
+                  setSmsTarget(null);
+                  setCustomWAContact('');
+                  setSelectedStaffPhone('');
+                  setReminderChannel('whatsapp');
+                }}
+                className="absolute top-4 right-4 text-neutral-400 hover:text-white font-mono text-xs p-1 cursor-pointer font-black border border-neutral-800 hover:border-red-500 hover:text-red-500 px-1.5 py-0.5 transition-all"
               >
-                Close Gateway Overlay
+                ✕ ESC
               </button>
+
+              <div className="space-y-1">
+                <span className="text-[9px] font-mono font-black uppercase tracking-widest text-amber-400">
+                  {reminderChannel === 'whatsapp' ? 'WhatsApp Reminder Dispatch' : 'SMS Reminder Dispatch'}
+                </span>
+                <h3 className="text-base font-black uppercase tracking-tight font-mono text-white">
+                  Remind: {smsTarget.student.name}
+                </h3>
+              </div>
+
+              {/* Communication Channel Tabs */}
+              <div className="flex border-2 border-neutral-800 p-1 bg-neutral-950/85">
+                <button
+                  type="button"
+                  onClick={() => setReminderChannel('whatsapp')}
+                  className={`flex-1 py-2 text-center font-mono text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer ${
+                    reminderChannel === 'whatsapp'
+                      ? 'bg-emerald-950 border border-emerald-800 text-emerald-400 shadow-sm'
+                      : 'text-neutral-500 hover:text-neutral-300'
+                  }`}
+                >
+                  💬 WhatsApp Mode
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReminderChannel('sms')}
+                  className={`flex-1 py-2 text-center font-mono text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer ${
+                    reminderChannel === 'sms'
+                      ? 'bg-amber-955 border border-amber-800 text-amber-400 shadow-sm'
+                      : 'text-neutral-500 hover:text-neutral-300'
+                  }`}
+                >
+                  📱 SMS Mode
+                </button>
+              </div>
+
+              {/* Message Preview */}
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-mono font-black uppercase tracking-wider text-neutral-400 block">Message Preview (Auto-generated)</label>
+                <textarea
+                  readOnly
+                  value={currentMsgText}
+                  className="w-full h-28 bg-neutral-950 border border-neutral-800 p-3 text-[10.5px] font-mono rounded-none text-neutral-350 resize-none select-all focus:outline-none"
+                />
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(currentMsgText);
+                    showToast("Message text copied to clipboard!");
+                  }}
+                  className="w-full bg-neutral-950 hover:bg-neutral-850 text-neutral-400 hover:text-amber-400 border border-neutral-800 py-1.5 text-[9px] font-mono font-black uppercase tracking-wider transition-all rounded-xs cursor-pointer"
+                >
+                  📋 Copy Text to Clipboard
+                </button>
+              </div>
+
+              <div className="border-t border-neutral-850 my-2 pt-2 space-y-3">
+                <span className="text-[10px] font-mono font-black uppercase tracking-wider text-amber-400 block">
+                  {reminderChannel === 'whatsapp' ? 'Choose WhatsApp Contact Option:' : 'Choose SMS Contact Option:'}
+                </span>
+
+                {reminderChannel === 'whatsapp' ? (
+                  <>
+                    {/* Option 1: Open WhatsApp Contact Picker */}
+                    <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-emerald-500/40 transition-all rounded-xs space-y-2">
+                      <div>
+                        <h4 className="text-xs font-black uppercase font-mono text-emerald-400">1. WhatsApp Contact Picker (Universal Share)</h4>
+                        <p className="text-[9.5px] text-neutral-400 font-bold leading-tight">
+                          Launches WhatsApp so you can search and choose ANY contact or group directly from your WhatsApp chats.
+                        </p>
+                      </div>
+                      <button
+                        onClick={async () => {
+                          const urlText = encodeURIComponent(currentMsgText);
+                          const waUrl = `https://api.whatsapp.com/send?text=${urlText}`;
+                          if (typeof window !== 'undefined') {
+                            window.open(waUrl, '_blank', 'noopener,noreferrer');
+                            showToast("WhatsApp Contact Picker opened!");
+                          }
+                          // Trigger background logging
+                          try {
+                            if (sendautomatedWhatsApp) {
+                              await sendautomatedWhatsApp(
+                                'Universal Share Picker',
+                                currentMsgText,
+                                smsTarget.student.id,
+                                smsTarget.student.name,
+                                'daily-arrears-alert'
+                              );
+                            }
+                          } catch (e) {}
+                          setSmsTarget(null);
+                          setCustomWAContact('');
+                          setSelectedStaffPhone('');
+                        }}
+                        className="w-full bg-emerald-950 hover:bg-emerald-900 text-emerald-400 hover:text-emerald-300 border border-emerald-800 py-2 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded-xs flex items-center justify-center gap-1.5"
+                      >
+                        <MessageSquare size={12} />
+                        <span>Choose Contact & Send on WhatsApp</span>
+                      </button>
+                    </div>
+
+                    {/* Option 2: Send to Guardian */}
+                    {defaultPhone && (
+                      <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
+                        <div>
+                          <h4 className="text-xs font-black uppercase font-mono text-white">2. Registered Parent/Guardian</h4>
+                          <p className="text-[9.5px] text-neutral-400 font-bold leading-tight">
+                            Registered Number: <span className="text-amber-400 font-black">{defaultPhone}</span>
+                          </p>
+                        </div>
+                        <button
+                          onClick={async () => {
+                            let targetPhone = defaultPhone.replace(/\D/g, "");
+                            if (targetPhone.startsWith("0") && targetPhone.length === 10) {
+                              targetPhone = "233" + targetPhone.substring(1);
+                            }
+                            const urlText = encodeURIComponent(currentMsgText);
+                            const waUrl = `https://api.whatsapp.com/send?phone=${targetPhone}&text=${urlText}`;
+                            if (typeof window !== 'undefined') {
+                              window.open(waUrl, '_blank', 'noopener,noreferrer');
+                              showToast(`WhatsApp opened with Guardian (${defaultPhone})!`);
+                            }
+                            // Trigger background logging
+                            try {
+                              if (sendautomatedWhatsApp) {
+                                await sendautomatedWhatsApp(
+                                  defaultPhone,
+                                  currentMsgText,
+                                  smsTarget.student.id,
+                                  smsTarget.student.name,
+                                  'daily-arrears-alert'
+                                );
+                              }
+                            } catch (e) {}
+                            setSmsTarget(null);
+                            setCustomWAContact('');
+                            setSelectedStaffPhone('');
+                          }}
+                          className="w-full bg-neutral-950 hover:bg-neutral-850 text-white hover:text-amber-400 border border-neutral-800 py-2 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded-xs"
+                        >
+                          💬 Send directly to Guardian ({defaultPhone})
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Option 3: Send to school staff/teacher */}
+                    {users && users.length > 0 && (
+                      <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
+                        <h4 className="text-xs font-black uppercase font-mono text-white">3. School Staff / Class Teacher</h4>
+                        <div className="flex gap-2">
+                          <select
+                            value={selectedStaffPhone}
+                            onChange={(e) => setSelectedStaffPhone(e.target.value)}
+                            className="bg-neutral-950 border border-neutral-800 rounded-xs text-[10px] font-mono font-bold text-white px-2 py-1.5 flex-1 focus:outline-none focus:border-amber-400"
+                          >
+                            <option value="">-- SELECT STAFF MEMBER --</option>
+                            {users.map(u => (
+                              u.phone ? <option key={u.id} value={u.phone}>{u.name} ({u.role || 'Staff'}) - {u.phone}</option> : null
+                            ))}
+                          </select>
+                          <button
+                            disabled={!selectedStaffPhone}
+                            onClick={async () => {
+                              let targetPhone = selectedStaffPhone.replace(/\D/g, "");
+                              if (targetPhone.startsWith("0") && targetPhone.length === 10) {
+                                targetPhone = "233" + targetPhone.substring(1);
+                              }
+                              const urlText = encodeURIComponent(currentMsgText);
+                              const waUrl = `https://api.whatsapp.com/send?phone=${targetPhone}&text=${urlText}`;
+                              if (typeof window !== 'undefined') {
+                                window.open(waUrl, '_blank', 'noopener,noreferrer');
+                                showToast(`WhatsApp opened with Staff member!`);
+                              }
+                              // Trigger background logging
+                              try {
+                                if (sendautomatedWhatsApp) {
+                                  await sendautomatedWhatsApp(
+                                    selectedStaffPhone,
+                                    currentMsgText,
+                                    smsTarget.student.id,
+                                    smsTarget.student.name,
+                                    'daily-arrears-alert'
+                                  );
+                                }
+                              } catch (e) {}
+                              setSmsTarget(null);
+                              setCustomWAContact('');
+                              setSelectedStaffPhone('');
+                            }}
+                            className="bg-amber-400 hover:bg-amber-500 disabled:opacity-40 disabled:hover:bg-amber-400 text-black px-4 py-1.5 text-[10px] font-mono font-black uppercase rounded-xs cursor-pointer"
+                          >
+                            Send
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Option 4: Custom Number */}
+                    <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
+                      <h4 className="text-xs font-black uppercase font-mono text-white">4. Type Custom Phone Number</h4>
+                      <div className="flex gap-2">
+                        <input
+                          type="tel"
+                          value={customWAContact}
+                          onChange={(e) => setCustomWAContact(e.target.value)}
+                          placeholder="e.g. 0244000000"
+                          className="bg-neutral-950 border border-neutral-800 rounded-xs text-[10px] font-mono font-bold text-white px-2 py-1.5 flex-1 focus:outline-none focus:border-amber-400"
+                        />
+                        <button
+                          disabled={!customWAContact.trim()}
+                          onClick={async () => {
+                            let targetPhone = customWAContact.replace(/\D/g, "");
+                            if (targetPhone.startsWith("0") && targetPhone.length === 10) {
+                              targetPhone = "233" + targetPhone.substring(1);
+                            }
+                            const urlText = encodeURIComponent(currentMsgText);
+                            const waUrl = `https://api.whatsapp.com/send?phone=${targetPhone}&text=${urlText}`;
+                            if (typeof window !== 'undefined') {
+                              window.open(waUrl, '_blank', 'noopener,noreferrer');
+                              showToast(`WhatsApp opened with custom recipient!`);
+                            }
+                            // Trigger background logging
+                            try {
+                              if (sendautomatedWhatsApp) {
+                                await sendautomatedWhatsApp(
+                                  customWAContact,
+                                  currentMsgText,
+                                  smsTarget.student.id,
+                                  smsTarget.student.name,
+                                  'daily-arrears-alert'
+                                );
+                              }
+                            } catch (e) {}
+                            setSmsTarget(null);
+                            setCustomWAContact('');
+                            setSelectedStaffPhone('');
+                          }}
+                          className="bg-amber-400 hover:bg-amber-500 disabled:opacity-40 disabled:hover:bg-amber-400 text-black px-4 py-1.5 text-[10px] font-mono font-black uppercase rounded-xs cursor-pointer"
+                        >
+                          Send
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    {/* Option 1: Universal SMS Picker */}
+                    <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-500/40 transition-all rounded-xs space-y-2">
+                      <div>
+                        <h4 className="text-xs font-black uppercase font-mono text-amber-400">1. SMS Client App Picker (Universal)</h4>
+                        <p className="text-[9.5px] text-neutral-400 font-bold leading-tight">
+                          Launches your device's native SMS messaging app prefilled with the outstanding debt alert text.
+                        </p>
+                      </div>
+                      <button
+                        onClick={async () => {
+                          const smsUrl = `sms:?body=${encodeURIComponent(currentMsgText)}`;
+                          if (typeof window !== 'undefined') {
+                            window.open(smsUrl, '_blank');
+                            showToast("Native SMS picker launched!");
+                          }
+                          // Copy message automatically for safety
+                          navigator.clipboard.writeText(currentMsgText);
+                          // Trigger background logging
+                          try {
+                            if (sendautomatedWhatsApp) {
+                              await sendautomatedWhatsApp(
+                                'Universal SMS Picker',
+                                currentMsgText,
+                                smsTarget.student.id,
+                                smsTarget.student.name,
+                                'sms-daily-arrears'
+                              );
+                            }
+                          } catch (e) {}
+                          setSmsTarget(null);
+                          setCustomWAContact('');
+                          setSelectedStaffPhone('');
+                          setReminderChannel('whatsapp');
+                        }}
+                        className="w-full bg-amber-955 hover:bg-amber-900 text-amber-400 hover:text-amber-300 border border-amber-850 py-2 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded-xs flex items-center justify-center gap-1.5"
+                      >
+                        <Smartphone size={12} />
+                        <span>Choose Contact & Send via Native SMS</span>
+                      </button>
+                    </div>
+
+                    {/* Option 2: Send SMS directly to Guardian */}
+                    {defaultPhone && (
+                      <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
+                        <div>
+                          <h4 className="text-xs font-black uppercase font-mono text-white">2. Registered Parent/Guardian (SMS)</h4>
+                          <p className="text-[9.5px] text-neutral-400 font-bold leading-tight">
+                            Registered Phone: <span className="text-amber-400 font-black">{defaultPhone}</span>
+                          </p>
+                        </div>
+                        <div className="flex flex-col sm:flex-row gap-2">
+                          <button
+                            onClick={async () => {
+                              let cleanPhone = defaultPhone.replace(/\D/g, "");
+                              const smsUrl = `sms:${cleanPhone}?body=${encodeURIComponent(currentMsgText)}`;
+                              if (typeof window !== 'undefined') {
+                                window.open(smsUrl, '_blank');
+                                showToast(`SMS App launched for ${defaultPhone}!`);
+                              }
+                              navigator.clipboard.writeText(currentMsgText);
+                              // Trigger background logging
+                              try {
+                                if (sendautomatedWhatsApp) {
+                                  await sendautomatedWhatsApp(
+                                    defaultPhone,
+                                    currentMsgText,
+                                    smsTarget.student.id,
+                                    smsTarget.student.name,
+                                    'sms-daily-arrears'
+                                  );
+                                }
+                              } catch (e) {}
+                              setSmsTarget(null);
+                              setCustomWAContact('');
+                              setSelectedStaffPhone('');
+                              setReminderChannel('whatsapp');
+                            }}
+                            className="flex-1 bg-neutral-950 hover:bg-neutral-850 text-white hover:text-amber-400 border border-neutral-800 py-2 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded-xs"
+                          >
+                            📱 Open Native SMS
+                          </button>
+
+                          <button
+                            onClick={async () => {
+                              showToast("Dispatching via cloud SMS carrier gateway...");
+                              try {
+                                if (sendautomatedWhatsApp) {
+                                  const res = await sendautomatedWhatsApp(
+                                    defaultPhone,
+                                    currentMsgText,
+                                    smsTarget.student.id,
+                                    smsTarget.student.name,
+                                    'sms-daily-arrears'
+                                  );
+                                  if (res.success) {
+                                    showToast("SMS dispatch token registered & logged successfully!");
+                                  } else {
+                                    showToast("Logged (Simulation Mode) successfully.");
+                                  }
+                                }
+                              } catch (e) {
+                                showToast("Logged (Simulation Mode).");
+                              }
+                              setSmsTarget(null);
+                              setCustomWAContact('');
+                              setSelectedStaffPhone('');
+                              setReminderChannel('whatsapp');
+                            }}
+                            className="bg-amber-400 hover:bg-amber-500 text-black px-4 py-2 text-[10px] font-mono font-black uppercase rounded-xs cursor-pointer text-center"
+                          >
+                            Send via Cloud API
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Option 3: Send SMS to school staff/teacher */}
+                    {users && users.length > 0 && (
+                      <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
+                        <h4 className="text-xs font-black uppercase font-mono text-white">3. School Staff / Class Teacher (SMS)</h4>
+                        <div className="flex gap-2">
+                          <select
+                            value={selectedStaffPhone}
+                            onChange={(e) => setSelectedStaffPhone(e.target.value)}
+                            className="bg-neutral-950 border border-neutral-800 rounded-xs text-[10px] font-mono font-bold text-white px-2 py-1.5 flex-1 focus:outline-none focus:border-amber-400"
+                          >
+                            <option value="">-- SELECT STAFF MEMBER --</option>
+                            {users.map(u => (
+                              u.phone ? <option key={u.id} value={u.phone}>{u.name} ({u.role || 'Staff'}) - {u.phone}</option> : null
+                            ))}
+                          </select>
+                          <button
+                            disabled={!selectedStaffPhone}
+                            onClick={async () => {
+                              let cleanPhone = selectedStaffPhone.replace(/\D/g, "");
+                              const smsUrl = `sms:${cleanPhone}?body=${encodeURIComponent(currentMsgText)}`;
+                              if (typeof window !== 'undefined') {
+                                window.open(smsUrl, '_blank');
+                                showToast(`SMS App launched for ${selectedStaffPhone}!`);
+                              }
+                              navigator.clipboard.writeText(currentMsgText);
+                              // Trigger background logging
+                              try {
+                                if (sendautomatedWhatsApp) {
+                                  await sendautomatedWhatsApp(
+                                    selectedStaffPhone,
+                                    currentMsgText,
+                                    smsTarget.student.id,
+                                    smsTarget.student.name,
+                                    'sms-daily-arrears'
+                                  );
+                                }
+                              } catch (e) {}
+                              setSmsTarget(null);
+                              setCustomWAContact('');
+                              setSelectedStaffPhone('');
+                              setReminderChannel('whatsapp');
+                            }}
+                            className="bg-amber-400 hover:bg-amber-500 disabled:opacity-40 disabled:hover:bg-amber-400 text-black px-4 py-1.5 text-[10px] font-mono font-black uppercase rounded-xs cursor-pointer"
+                          >
+                            Send SMS
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Option 4: Custom Number (SMS) */}
+                    <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
+                      <h4 className="text-xs font-black uppercase font-mono text-white">4. Type Custom Phone Number (SMS)</h4>
+                      <div className="flex gap-2">
+                        <input
+                          type="tel"
+                          value={customWAContact}
+                          onChange={(e) => setCustomWAContact(e.target.value)}
+                          placeholder="e.g. 0244000000"
+                          className="bg-neutral-950 border border-neutral-800 rounded-xs text-[10px] font-mono font-bold text-white px-2 py-1.5 flex-1 focus:outline-none focus:border-amber-400"
+                        />
+                        <button
+                          disabled={!customWAContact.trim()}
+                          onClick={async () => {
+                            let cleanPhone = customWAContact.replace(/\D/g, "");
+                            const smsUrl = `sms:${cleanPhone}?body=${encodeURIComponent(currentMsgText)}`;
+                            if (typeof window !== 'undefined') {
+                              window.open(smsUrl, '_blank');
+                              showToast(`SMS App launched for ${customWAContact}!`);
+                            }
+                            navigator.clipboard.writeText(currentMsgText);
+                            // Trigger background logging
+                            try {
+                              if (sendautomatedWhatsApp) {
+                                await sendautomatedWhatsApp(
+                                  customWAContact,
+                                  currentMsgText,
+                                  smsTarget.student.id,
+                                  smsTarget.student.name,
+                                  'sms-daily-arrears'
+                                );
+                              }
+                            } catch (e) {}
+                            setSmsTarget(null);
+                            setCustomWAContact('');
+                            setSelectedStaffPhone('');
+                            setReminderChannel('whatsapp');
+                          }}
+                          className="bg-amber-400 hover:bg-amber-500 disabled:opacity-40 disabled:hover:bg-amber-400 text-black px-4 py-1.5 text-[10px] font-mono font-black uppercase rounded-xs cursor-pointer"
+                        >
+                          Send SMS
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Interactive Student Portfolio Ledger and Registration History Modal */}
       {historyModalStudent && (() => {
@@ -6048,9 +6543,15 @@ export const AdminPanel: React.FC = React.memo(() => {
               {/* Header section */}
               <div className="flex justify-between items-start border-b border-neutral-800 pb-4">
                 <div className="flex items-start gap-3">
-                  <div className="p-2.5 bg-amber-400/10 border border-amber-400 text-amber-300 shrink-0">
-                    <Users size={20} />
-                  </div>
+                  {historyModalStudent.photoUrl ? (
+                    <div className="w-12 h-12 bg-neutral-950 border-2 border-amber-400 overflow-hidden shrink-0">
+                      <img src={historyModalStudent.photoUrl} alt={historyModalStudent.name} className="w-full h-full object-cover" />
+                    </div>
+                  ) : (
+                    <div className="p-2.5 bg-amber-400/10 border border-amber-400 text-amber-300 shrink-0">
+                      <Users size={20} />
+                    </div>
+                  )}
                   <div>
                     <span className="text-[9px] text-amber-400 font-mono tracking-widest font-black uppercase block">Student Portfolio Ledger</span>
                     <h3 className="text-base font-black uppercase tracking-tight">{historyModalStudent.name}</h3>
@@ -6071,38 +6572,171 @@ export const AdminPanel: React.FC = React.memo(() => {
               {/* Stats overview bento grid */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 
-                {/* Academic credentials */}
+                {/* Academic credentials or Quick Edit */}
                 <div className="bg-neutral-950 p-4 border border-neutral-800 rounded-sm space-y-3">
-                  <span className="text-[9px] font-mono text-neutral-500 uppercase font-black block tracking-widest border-b border-neutral-900 pb-1">Academic Status</span>
-                  
-                  <div className="grid grid-cols-2 gap-2 text-xs font-mono">
-                    <div>
-                      <span className="text-[9.5px] text-neutral-450 block uppercase font-bold">Grade Level</span>
-                      <strong className="text-white text-[13px]">{historyModalStudent.class}</strong>
-                    </div>
-                    <div>
-                      <span className="text-[9.5px] text-neutral-455 block uppercase font-bold">Category</span>
-                      <strong className="text-amber-400 text-[11px]">{historyModalStudent.category}</strong>
-                    </div>
+                  <div className="flex justify-between items-center border-b border-neutral-900 pb-1">
+                    <span className="text-[9px] font-mono text-neutral-500 uppercase font-black block tracking-widest">
+                      {isEditingPortfolio ? 'Quick Edit Profile' : 'Academic Status'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingPortfolio(!isEditingPortfolio)}
+                      className="text-[9px] font-mono uppercase font-black text-amber-400 hover:text-amber-300 flex items-center gap-1 cursor-pointer"
+                    >
+                      <Edit2 size={10} />
+                      <span>{isEditingPortfolio ? 'View Status' : 'Edit Profile'}</span>
+                    </button>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2 text-xs font-mono">
-                    <div>
-                      <span className="text-[9.5px] text-neutral-450 block uppercase font-bold">Identity Code</span>
-                      <strong className="text-white text-[11px]">{historyModalStudent.rollNumber || 'N/A'}</strong>
-                    </div>
-                    <div>
-                      <span className="text-[9.5px] text-neutral-455 block uppercase font-bold">Enrollment</span>
-                      <span className={`text-[10px] font-black px-1.5 py-0.2 uppercase rounded ${historyModalStudent.active ? 'bg-emerald-950 text-emerald-400 border border-emerald-900/30' : 'bg-red-955 text-red-500 border border-red-900/30'}`}>
-                        {historyModalStudent.active ? 'Active' : 'Suspended'}
-                      </span>
-                    </div>
-                  </div>
+                  {isEditingPortfolio ? (
+                    <div className="space-y-3 font-mono">
+                      {/* Name Input */}
+                      <div className="space-y-1">
+                        <span className="text-[9px] text-neutral-450 uppercase font-bold block">Student Name</span>
+                        <input
+                          type="text"
+                          value={portfolioEditName}
+                          onChange={(e) => setPortfolioEditName(e.target.value)}
+                          className="w-full bg-neutral-900 border border-neutral-800 px-2 py-1.5 text-xs text-white focus:outline-none focus:border-amber-400"
+                          placeholder="Full Name"
+                        />
+                      </div>
 
-                  <div className="text-xs font-mono pt-1">
-                    <span className="text-[9.5px] text-neutral-500 block uppercase font-bold">Guardian Verified Contact</span>
-                    <strong className="text-neutral-300 tracking-tight font-extrabold">{historyModalStudent.guardianPhone || 'No registered mobile'}</strong>
-                  </div>
+                      {/* Contact Input */}
+                      <div className="space-y-1">
+                        <span className="text-[9px] text-neutral-455 uppercase font-bold block">Guardian Contact</span>
+                        <input
+                          type="text"
+                          value={portfolioEditPhone}
+                          onChange={(e) => setPortfolioEditPhone(e.target.value.replace(/\D/g, ''))}
+                          className="w-full bg-neutral-900 border border-neutral-800 px-2 py-1.5 text-xs text-white focus:outline-none focus:border-amber-400"
+                          placeholder="e.g. 0240000000"
+                        />
+                      </div>
+
+                      {/* Photo Upload Input */}
+                      <div className="space-y-1">
+                        <span className="text-[9px] text-neutral-450 uppercase font-bold block">Profile Picture</span>
+                        <div className="flex items-center gap-3 bg-neutral-900 p-2 border border-neutral-800">
+                          {portfolioEditPhoto ? (
+                            <div className="relative w-12 h-12 border border-neutral-700 bg-neutral-950 overflow-hidden shrink-0">
+                              <img src={portfolioEditPhoto} alt="Preview" className="w-full h-full object-cover" />
+                              <button
+                                type="button"
+                                onClick={() => setPortfolioEditPhoto(undefined)}
+                                className="absolute inset-0 bg-black/70 hover:bg-black/90 flex items-center justify-center text-red-500 opacity-0 hover:opacity-100 transition-opacity"
+                                title="Remove photo"
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="w-12 h-12 bg-neutral-950 border border-neutral-800 flex items-center justify-center text-neutral-500 text-[10px] shrink-0 font-bold">
+                              No Photo
+                            </div>
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <label className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-neutral-950 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-700 text-[10px] text-amber-400 cursor-pointer transition-all uppercase font-black tracking-wider">
+                              <Camera size={10} />
+                              <span>Upload</span>
+                              <input
+                                type="file"
+                                accept="image/*"
+                                className="sr-only"
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0];
+                                  if (file) {
+                                    const reader = new FileReader();
+                                    reader.onloadend = () => {
+                                      if (typeof reader.result === 'string') {
+                                        setCropperSrc(reader.result);
+                                        setOnCropperComplete(() => (cropped: string) => {
+                                          setPortfolioEditPhoto(cropped);
+                                          setCropperSrc(null);
+                                          setOnCropperComplete(null);
+                                        });
+                                      }
+                                    };
+                                    reader.readAsDataURL(file);
+                                  }
+                                }}
+                              />
+                            </label>
+                            <p className="text-[8px] text-neutral-500 mt-1 uppercase tracking-wider">JPG or PNG image</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Action buttons */}
+                      <div className="flex gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!portfolioEditName.trim()) {
+                              showToast('Student name is required.');
+                              return;
+                            }
+                            const updated: Student = {
+                              ...historyModalStudent,
+                              name: portfolioEditName.trim(),
+                              guardianPhone: portfolioEditPhone.trim(),
+                              photoUrl: portfolioEditPhoto
+                            };
+                            updateStudent(updated);
+                            setHistoryModalStudent(updated);
+                            setIsEditingPortfolio(false);
+                            showToast('Pupil profile saved successfully!');
+                          }}
+                          className="flex-1 py-1.5 px-3 bg-emerald-500 hover:bg-emerald-450 text-black font-black text-[10px] uppercase tracking-wider transition-all cursor-pointer text-center"
+                        >
+                          Save Profile
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPortfolioEditName(historyModalStudent.name || '');
+                            setPortfolioEditPhone(historyModalStudent.guardianPhone || '');
+                            setPortfolioEditPhoto(historyModalStudent.photoUrl);
+                            setIsEditingPortfolio(false);
+                          }}
+                          className="py-1.5 px-3 bg-neutral-900 hover:bg-neutral-850 text-neutral-400 hover:text-white font-black text-[10px] border border-neutral-800 hover:border-neutral-750 uppercase tracking-wider transition-all cursor-pointer text-center"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+                        <div>
+                          <span className="text-[9.5px] text-neutral-450 block uppercase font-bold">Grade Level</span>
+                          <strong className="text-white text-[13px]">{historyModalStudent.class}</strong>
+                        </div>
+                        <div>
+                          <span className="text-[9.5px] text-neutral-455 block uppercase font-bold">Category</span>
+                          <strong className="text-amber-400 text-[11px]">{historyModalStudent.category}</strong>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+                        <div>
+                          <span className="text-[9.5px] text-neutral-450 block uppercase font-bold">Identity Code</span>
+                          <strong className="text-white text-[11px]">{historyModalStudent.rollNumber || 'N/A'}</strong>
+                        </div>
+                        <div>
+                          <span className="text-[9.5px] text-neutral-455 block uppercase font-bold">Enrollment</span>
+                          <span className={`text-[10px] font-black px-1.5 py-0.2 uppercase rounded ${historyModalStudent.active ? 'bg-emerald-950 text-emerald-400 border border-emerald-900/30' : 'bg-red-955 text-red-500 border border-red-900/30'}`}>
+                            {historyModalStudent.active ? 'Active' : 'Suspended'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="text-xs font-mono pt-1">
+                        <span className="text-[9.5px] text-neutral-500 block uppercase font-bold">Guardian Verified Contact</span>
+                        <strong className="text-neutral-300 tracking-tight font-extrabold">{historyModalStudent.guardianPhone || 'No registered mobile'}</strong>
+                      </div>
+                    </>
+                  )}
                 </div>
 
                 {/* Term Financial ledger stats */}
@@ -6231,6 +6865,75 @@ export const AdminPanel: React.FC = React.memo(() => {
         const isNearingExpiry = daysRemaining > 0 && daysRemaining <= 14;
 
         const handleDirectPrint = () => {
+          const schoolName = systemSettings?.schoolName || 'SAAKO HOLY CHILD ACADEMY';
+          const getLogoSvgHtml = (size = 18, forceFallback = false): string => {
+            if (systemSettings?.schoolLogoUrl && !forceFallback) {
+              const fallbackSvg = getLogoSvgHtml(size, true);
+              return `
+                <div style="display: inline-block; width: ${size}px; height: ${size}px; position: relative; vertical-align: middle;">
+                  <img src="${systemSettings.schoolLogoUrl}" style="width: ${size}px; height: ${size}px; object-fit: contain; border-radius: 50%;" onerror="this.style.display='none'; this.nextElementSibling.style.display='inline-block';" />
+                  <span style="display: none; width: ${size}px; height: ${size}px; vertical-align: top;">
+                    ${fallbackSvg}
+                  </span>
+                </div>
+              `;
+            }
+            const sName = schoolName.toUpperCase();
+            const sLoc = systemSettings?.customLocation || 'Sawla';
+            const sMotto = systemSettings?.customMotto || 'Holiness Is Our Key';
+            return `
+              <svg width="${size}" height="${size}" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg" style="border-radius: 50%;">
+                <defs>
+                  <path id="academy-text-arc" d="M 52 205 A 148 148 0 1 1 348 205" fill="none" />
+                </defs>
+                <circle cx="200" cy="200" r="190" fill="#ffffff" stroke="#04563a" strokeWidth="11" />
+                <circle cx="200" cy="200" r="146" fill="none" stroke="#04563a" strokeWidth="3.5" />
+                <text>
+                  <textPath href="#academy-text-arc" startOffset="50%" textAnchor="middle" fill="#04563a" fontWeight="900" fontSize="23" letterSpacing="1px" fontFamily="system-ui, -apple-system, sans-serif">
+                    ${sName}
+                  </textPath>
+                </text>
+                <g id="central-heraldic-shield">
+                  <path d="M 98 185 A 102 102 0 0 1 302 185 Z" fill="#009e60" stroke="#04563a" strokeWidth="3" />
+                  <path d="M 98 185 A 102 102 0 0 0 200 287 L 200 185 Z" fill="#024227" stroke="#04563a" strokeWidth="3" />
+                  <path d="M 200 185 L 200 287 A 102 102 0 0 0 302 185 Z" fill="#fbf7f4" stroke="#04563a" strokeWidth="3" />
+                </g>
+                <g id="upper-hemisphere-book-pen">
+                  <path d="M 134 180 C 168 174, 192 174, 200 181 C 208 174, 232 174, 266 180" fill="none" stroke="#ffffff" strokeWidth="6" strokeLinecap="round" />
+                  <path d="M 200 180 C 185 160, 163 160, 138 168 L 138 141 C 163 133, 185 133, 200 153 Z" fill="#d0f2e5" stroke="#ffffff" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M 200 180 C 215 160, 237 160, 262 168 L 262 141 C 237 133, 215 133, 200 153 Z" fill="#d0f2e5" stroke="#ffffff" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M 241 114 L 189 171 L 184 172 L 187 167 L 235 110 Z" fill="#ffffff" stroke="#04563a" strokeWidth="1.5" />
+                  <line x1="225" y1="126" x2="201" y2="152" stroke="#04563a" strokeWidth="1.5" />
+                </g>
+                <g id="lower-left-farming-tools">
+                  <path d="M 125 240 Q 120 230 131 228 L 150 242 L 139 254 Z" fill="#b0bec5" stroke="#37474f" strokeWidth="1.5" strokeLinejoin="round" />
+                  <line x1="127" y1="239" x2="187" y2="208" stroke="#cca480" strokeWidth="4" strokeLinecap="round" />
+                  <path d="M 179 248 C 170 230, 155 212, 140 204 L 144 200 C 160 209, 175 228, 184 246 Z" fill="#eceff1" stroke="#455a64" strokeWidth="1.5" strokeLinecap="round" />
+                </g>
+                <g id="lower-right-hearth-broom">
+                  <path d="M 222 205 L 232 200 L 236 211 L 226 216 Z" fill="#212121" stroke="#000000" strokeWidth="1" />
+                  <line x1="227" y1="205" x2="263" y2="263" stroke="#424242" strokeWidth="2.5" strokeLinecap="round" />
+                  <line x1="227" y1="205" x2="251" y2="267" stroke="#333333" strokeWidth="2.0" strokeLinecap="round" />
+                  <line x1="227" y1="205" x2="274" y2="257" stroke="#424242" strokeWidth="2.0" strokeLinecap="round" />
+                  <line x1="227" y1="205" x2="241" y2="268" stroke="#212121" strokeWidth="2.5" strokeLinecap="round" />
+                  <line x1="227" y1="205" x2="281" y2="249" stroke="#555555" strokeWidth="1.5" strokeLinecap="round" />
+                  <line x1="227" y1="205" x2="232" y2="269" stroke="#555555" strokeWidth="1.5" strokeLinecap="round" />
+                  <rect x="225" y="209" width="9" height="3" rx="0.5" fill="#fbc02d" />
+                  <rect x="227" y="215" width="10" height="3.5" rx="0.5" fill="#fbc02d" transform="rotate(-15 227 215)" />
+                </g>
+                <g id="bottom-crest-banner">
+                  <circle cx="106" cy="303" r="18" fill="#024227" stroke="#04563a" strokeWidth="2.5" />
+                  <text x="106" y="308" textAnchor="middle" fill="#ffffff" fontWeight="900" fontSize="13" fontFamily="system-ui, -apple-system, sans-serif">20</text>
+                  <circle cx="294" cy="303" r="18" fill="#024227" stroke="#04563a" strokeWidth="2.5" />
+                  <text x="294" y="308" textAnchor="middle" fill="#ffffff" fontWeight="900" fontSize="13" fontFamily="system-ui, -apple-system, sans-serif">03</text>
+                  <path d="M 120 307 Q 200 334 280 307 L 277 285 Q 200 312 123 285 Z" fill="#024227" stroke="#04563a" strokeWidth="3.5" strokeLinejoin="round" />
+                  <text x="200" y="304" textAnchor="middle" fill="#ffffff" fontWeight="900" fontSize="14" letterSpacing="1px" fontFamily="system-ui, -apple-system, sans-serif">${sLoc}</text>
+                </g>
+                <text x="200" y="346" textAnchor="middle" fill="#024227" fontWeight="900" fontSize="13" letterSpacing="0.8px" fontFamily="Georgia, serif">${sMotto}</text>
+              </svg>
+            `;
+          };
+
           let printIframe = document.getElementById('idcard-print-iframe') as HTMLIFrameElement;
           if (!printIframe) {
             printIframe = document.createElement('iframe');
@@ -6625,8 +7328,8 @@ export const AdminPanel: React.FC = React.memo(() => {
         <div class="accent-top"></div>
         <div class="header">
           <div class="header-logo-container">
-            <div class="logo-badge">SH</div>
-            <div class="logo-text">SHCA-SAWLA</div>
+            ${getLogoSvgHtml(18)}
+            <div class="logo-text">${schoolName.toUpperCase()}</div>
           </div>
           <div>
             <span class="${isExpired ? 'expired-pass-badge' : 'active-pass-badge'}">
@@ -8235,6 +8938,17 @@ export const AdminPanel: React.FC = React.memo(() => {
                         />
                       </div>
                     </div>
+
+                    <div>
+                      <label className="text-[10px] font-mono font-black text-neutral-400 uppercase block mb-1">Teacher Personal Address</label>
+                      <textarea
+                        rows={2}
+                        value={appPersonalAddress}
+                        onChange={(e) => setAppPersonalAddress(e.target.value)}
+                        placeholder="e.g. P.O. Box GP 1234, Accra, Ghana"
+                        className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-500 text-white font-mono text-xs p-2 focus:outline-none resize-none"
+                      />
+                    </div>
                   </div>
 
                   <div className="bg-neutral-900/40 p-4 border border-neutral-850 space-y-4">
@@ -8339,60 +9053,80 @@ export const AdminPanel: React.FC = React.memo(() => {
                   </div>
 
                   {/* Letter Blueprint Visual Board */}
-                  <div className="border border-neutral-800 bg-white p-6 text-neutral-900 rounded-sm shadow-inner min-h-[460px] overflow-y-auto max-h-[480px] font-serif text-xs leading-relaxed select-none">
-                    <div className="text-center border-b border-neutral-300 pb-3 mb-4">
-                      <h4 className="text-sm font-bold uppercase font-sans tracking-wide m-0">{systemSettings?.schoolName || 'SAWLA COMPREHENSIVE ACADEMY'}</h4>
-                      <p className="text-[9px] italic text-neutral-600 m-0">{systemSettings?.schoolSlogan || systemSettings?.customMotto || 'Holiness is our key'}</p>
-                      <p className="text-[8px] font-sans text-neutral-500 m-0">{systemSettings?.schoolBoxAddress || 'P. O. Box ls 15, Sawla, Savannah Region, Ghana'}</p>
+                  <div className="border border-neutral-800 bg-[#fbfbf9] p-6 text-neutral-900 rounded-sm shadow-inner min-h-[460px] overflow-y-auto max-h-[480px] font-serif text-xs leading-relaxed select-none relative">
+                    {/* Faint Watermark inside the React visual preview */}
+                    <div className="absolute inset-0 flex items-center justify-center opacity-[0.03] pointer-events-none select-none z-0 rotate-[-12deg]">
+                      <SchoolLogo size={280} lightBackground={true} />
                     </div>
 
-                    <div className="text-right font-sans font-bold text-[9px] mb-4">
-                      Date: {new Date(appLetterDate || new Date()).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
-                    </div>
-
-                    <div className="mb-4 text-[10px]">
-                      To:<br/>
-                      <strong className="text-[11px]">{appointmentModalUser.name}</strong><br/>
-                      {appDepartment}<br/>
-                      {systemSettings?.schoolName || 'SAWLA COMPREHENSIVE ACADEMY'}
-                    </div>
-
-                    <div className="text-center font-bold underline my-3 text-[10px] uppercase">
-                      RE: LETTER OF APPOINTMENT AS {appJobTitle || 'STAFF MEMBER'}
-                    </div>
-
-                    <div className="text-justify space-y-2 text-[10px]">
-                      <p>Dear {appointmentModalUser.name.split(' ')[0] || 'Sir/Madam'},</p>
-                      <p>On behalf of the School Management, I am pleased to offer you a formal appointment as <strong>{appJobTitle || 'Staff Member'}</strong> in the <strong>{appDepartment || 'Academic Department'}</strong>, effective from <strong>{new Date(appStartDate || new Date()).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</strong>.</p>
-                      <p>You will receive a basic monthly stipend of <strong>GHC {parseFloat(appSalary || '0').toFixed(2)}</strong>. This appointment runs until <strong>{new Date(appEndDate || new Date()).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</strong>, under our standard <strong>{appRenewalOpt}</strong> renewal options clause.</p>
-                      <p>Your duties shall include student instruction, assessment bookkeeping audits, gate safety assignments, and upholding our professional code of ethics.</p>
-                      <p>Please return a signed copy of this letter to acknowledge your acceptance.</p>
-                    </div>
-
-                    <div className="mt-8 flex justify-between items-end text-[9px] pt-4 border-t border-dashed border-neutral-200">
-                      <div>
-                        For School Management:<br/>
-                        {appManagementSignature ? (
-                          <div className="h-10 flex items-center justify-start my-1 bg-amber-50/10 rounded border border-neutral-100 p-0.5">
-                            <img src={appManagementSignature} alt="Authorized Signatory" className="max-h-10 object-contain max-w-[120px]" />
-                          </div>
-                        ) : (
-                          <div className="h-5" />
-                        )}
-                        <strong>{appSignatoryName}</strong><br/>
-                        <span className="text-neutral-500">{appSignatoryTitle}</span>
+                    <div className="relative z-10">
+                      <div className="flex items-center justify-between border-b-2 border-emerald-800/20 pb-3 mb-4">
+                        <div className="w-[60px] h-[60px] shrink-0">
+                          <SchoolLogo size={60} lightBackground={true} />
+                        </div>
+                        <div className="text-right flex-grow pl-3">
+                          <h4 className="text-[13px] font-extrabold uppercase font-sans tracking-wide m-0 text-emerald-950">{systemSettings?.schoolName || 'SAWLA COMPREHENSIVE ACADEMY'}</h4>
+                          <p className="text-[9px] italic text-amber-600 font-bold m-0">{systemSettings?.schoolSlogan || systemSettings?.customMotto || 'Holiness is our key'}</p>
+                          <p className="text-[8px] font-sans text-neutral-500 m-0">{systemSettings?.schoolBoxAddress || 'P. O. Box LS 15, Sawla Savannah Region • Sawla, Jelinkon street, Savannah Region, Ghana'}</p>
+                        </div>
                       </div>
-                      <div className="text-right flex flex-col items-end">
-                        <span className="block">Employee Acceptance:</span>
-                        {appStaffSignature ? (
-                          <div className="h-10 flex items-center justify-end my-1 bg-amber-50/10 rounded border border-neutral-100 p-0.5">
-                            <img src={appStaffSignature} alt="Employee Acceptance" className="max-h-10 object-contain max-w-[120px]" />
+
+                      <div className="text-right font-sans font-bold text-[9px] mb-4 text-neutral-600">
+                        Date: {new Date(appLetterDate || new Date()).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
+                      </div>
+
+                      <div className="mb-4 text-[10px] text-neutral-700 leading-normal">
+                        To:<br/>
+                        <strong className="text-[11px] text-emerald-950 font-sans block mb-1">{appointmentModalUser.name}</strong>
+                        {appPersonalAddress ? (
+                          <div className="whitespace-pre-line text-neutral-600 font-mono text-[9px] leading-relaxed bg-neutral-100/40 p-2 border border-neutral-200/60 rounded max-w-sm">
+                            {appPersonalAddress}
                           </div>
                         ) : (
-                          <div className="h-5" />
+                          <>
+                            <span className="font-mono text-[9px] bg-neutral-100 px-1 py-0.5 rounded">{appDepartment}</span><br/>
+                            <span className="text-neutral-400 italic text-[9px]">Personal Address Not Set</span>
+                          </>
                         )}
-                        <strong>{appointmentModalUser.name}</strong><br/>
-                        <span className="text-neutral-500">Signature & Date</span>
+                      </div>
+
+                      <div className="text-center font-bold underline my-3 text-[10px] uppercase text-emerald-900 tracking-wide font-sans">
+                        RE: LETTER OF APPOINTMENT AS {appJobTitle || 'STAFF MEMBER'}
+                      </div>
+
+                      <div className="text-justify space-y-2 text-[10px] text-neutral-800">
+                        <p>Dear {appointmentModalUser.name.split(' ')[0] || 'Sir/Madam'},</p>
+                        <p>On behalf of the School Management, I am pleased to offer you a formal appointment as <strong className="text-emerald-950">{appJobTitle || 'Staff Member'}</strong> in the <strong>{appDepartment || 'Academic Department'}</strong>, effective from <strong>{new Date(appStartDate || new Date()).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</strong>.</p>
+                        <p>You will receive a basic monthly stipend of <strong>GHC {parseFloat(appSalary || '0').toFixed(2)}</strong>. This appointment runs until <strong>{new Date(appEndDate || new Date()).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</strong>, under our standard <strong>{appRenewalOpt}</strong> renewal options clause.</p>
+                        <p>Your duties shall include student instruction, assessment bookkeeping audits, gate safety assignments, and upholding our professional code of ethics.</p>
+                        <p>Please return a signed copy of this letter to acknowledge your acceptance.</p>
+                      </div>
+
+                      <div className="mt-8 flex justify-between items-end text-[9px] pt-4 border-t border-dashed border-neutral-200">
+                        <div>
+                          For School Management:<br/>
+                          {appManagementSignature ? (
+                            <div className="h-10 flex items-center justify-start my-1 bg-amber-50/10 rounded border border-neutral-100 p-0.5">
+                              <img src={appManagementSignature} alt="Authorized Signatory" className="max-h-10 object-contain max-w-[120px]" />
+                            </div>
+                          ) : (
+                            <div className="h-5" />
+                          )}
+                          <strong>{appSignatoryName}</strong><br/>
+                          <span className="text-neutral-500">{appSignatoryTitle}</span>
+                        </div>
+                        <div className="text-right flex flex-col items-end">
+                          <span className="block">Employee Acceptance:</span>
+                          {appStaffSignature ? (
+                            <div className="h-10 flex items-center justify-end my-1 bg-amber-50/10 rounded border border-neutral-100 p-0.5">
+                              <img src={appStaffSignature} alt="Employee Acceptance" className="max-h-10 object-contain max-w-[120px]" />
+                            </div>
+                          ) : (
+                            <div className="h-5" />
+                          )}
+                          <strong>{appointmentModalUser.name}</strong><br/>
+                          <span className="text-neutral-500">Signature & Date</span>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -8564,60 +9298,80 @@ export const AdminPanel: React.FC = React.memo(() => {
                   </div>
 
                   {/* Letter Blueprint Visual Board */}
-                  <div className="border border-neutral-800 bg-white p-6 text-neutral-900 rounded-sm shadow-inner min-h-[460px] overflow-y-auto max-h-[480px] font-serif text-xs leading-relaxed select-none">
-                    <div className="text-center border-b border-neutral-300 pb-3 mb-4">
-                      <h4 className="text-sm font-bold uppercase font-sans tracking-wide m-0">{systemSettings?.schoolName || 'SAWLA COMPREHENSIVE ACADEMY'}</h4>
-                      <p className="text-[9px] italic text-neutral-600 m-0">{systemSettings?.schoolSlogan || systemSettings?.customMotto || 'Holiness is our key'}</p>
-                      <p className="text-[8px] font-sans text-neutral-500 m-0">{systemSettings?.schoolBoxAddress || 'P. O. Box ls 15, Sawla, Savannah Region, Ghana'}</p>
+                  <div className="border border-neutral-800 bg-[#fbfbf9] p-6 text-neutral-900 rounded-sm shadow-inner min-h-[460px] overflow-y-auto max-h-[480px] font-serif text-xs leading-relaxed select-none relative">
+                    {/* Faint Watermark inside the React visual preview */}
+                    <div className="absolute inset-0 flex items-center justify-center opacity-[0.03] pointer-events-none select-none z-0 rotate-[-12deg]">
+                      <SchoolLogo size={280} lightBackground={true} />
                     </div>
 
-                    <div className="text-right font-sans font-bold text-[9px] mb-4">
-                      Date: {new Date(appLetterDate || new Date()).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
-                    </div>
-
-                    <div className="mb-4 text-[10px]">
-                      To:<br/>
-                      <strong className="text-[11px]">{appointmentModalUser.name}</strong><br/>
-                      {appDepartment || 'Academic Registry'}<br/>
-                      {systemSettings?.schoolName || 'SAWLA COMPREHENSIVE ACADEMY'}
-                    </div>
-
-                    <div className="text-center font-bold underline my-3 text-[10px] uppercase">
-                      RE: RENEWAL & EXTENSION OF APPOINTMENT CONTRACT
-                    </div>
-
-                    <div className="text-justify space-y-2 text-[10px]">
-                      <p>Dear {appointmentModalUser.name.split(' ')[0] || 'Sir/Madam'},</p>
-                      <p>Following a review of your academic and administrative service registers, we are pleased to inform you that your employment contract with <strong>{systemSettings?.schoolName || 'SAWLA COMPREHENSIVE ACADEMY'}</strong> has been formally renewed.</p>
-                      <p>Your contract has been extended for a renewal period of <strong>{appRenewalPeriod}</strong>, and is now scheduled to conclude on <strong>{new Date(appEndDate || new Date()).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</strong>.</p>
-                      <p>In appreciation of your service, your adjusted basic monthly stipend is set to <strong>GHC {parseFloat(appSalary || '0').toFixed(2)}</strong>. All other terms and conditions specified in your original letter of appointment remain in full force.</p>
-                      <p>Please indicate your acceptance by signing and returning this duplicate letter.</p>
-                    </div>
-
-                    <div className="mt-8 flex justify-between items-end text-[9px] pt-4 border-t border-dashed border-neutral-200">
-                      <div>
-                        For School Management:<br/>
-                        {appManagementSignature ? (
-                          <div className="h-10 flex items-center justify-start my-1 bg-amber-50/10 rounded border border-neutral-100 p-0.5">
-                            <img src={appManagementSignature} alt="Authorized Signatory" className="max-h-10 object-contain max-w-[120px]" />
-                          </div>
-                        ) : (
-                          <div className="h-5" />
-                        )}
-                        <strong>{appSignatoryName}</strong><br/>
-                        <span className="text-neutral-500">{appSignatoryTitle}</span>
+                    <div className="relative z-10">
+                      <div className="flex items-center justify-between border-b-2 border-emerald-800/20 pb-3 mb-4">
+                        <div className="w-[60px] h-[60px] shrink-0">
+                          <SchoolLogo size={60} lightBackground={true} />
+                        </div>
+                        <div className="text-right flex-grow pl-3">
+                          <h4 className="text-[13px] font-extrabold uppercase font-sans tracking-wide m-0 text-emerald-950">{systemSettings?.schoolName || 'SAWLA COMPREHENSIVE ACADEMY'}</h4>
+                          <p className="text-[9px] italic text-amber-600 font-bold m-0">{systemSettings?.schoolSlogan || systemSettings?.customMotto || 'Holiness is our key'}</p>
+                          <p className="text-[8px] font-sans text-neutral-500 m-0">{systemSettings?.schoolBoxAddress || 'P. O. Box LS 15, Sawla Savannah Region • Sawla, Jelinkon street, Savannah Region, Ghana'}</p>
+                        </div>
                       </div>
-                      <div className="text-right flex flex-col items-end">
-                        <span className="block">Employee Acceptance:</span>
-                        {appStaffSignature ? (
-                          <div className="h-10 flex items-center justify-end my-1 bg-amber-50/10 rounded border border-neutral-100 p-0.5">
-                            <img src={appStaffSignature} alt="Employee Acceptance" className="max-h-10 object-contain max-w-[120px]" />
+
+                      <div className="text-right font-sans font-bold text-[9px] mb-4 text-neutral-600">
+                        Date: {new Date(appLetterDate || new Date()).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
+                      </div>
+
+                      <div className="mb-4 text-[10px] text-neutral-700 leading-normal">
+                        To:<br/>
+                        <strong className="text-[11px] text-emerald-950 font-sans block mb-1">{appointmentModalUser.name}</strong>
+                        {appPersonalAddress ? (
+                          <div className="whitespace-pre-line text-neutral-600 font-mono text-[9px] leading-relaxed bg-neutral-100/40 p-2 border border-neutral-200/60 rounded max-w-sm">
+                            {appPersonalAddress}
                           </div>
                         ) : (
-                          <div className="h-5" />
+                          <>
+                            <span className="font-mono text-[9px] bg-neutral-100 px-1 py-0.5 rounded">{appDepartment || 'Academic Registry'}</span><br/>
+                            <span className="text-neutral-400 italic text-[9px]">Personal Address Not Set</span>
+                          </>
                         )}
-                        <strong>{appointmentModalUser.name}</strong><br/>
-                        <span className="text-neutral-500">Signature & Date</span>
+                      </div>
+
+                      <div className="text-center font-bold underline my-3 text-[10px] uppercase text-emerald-900 tracking-wide font-sans">
+                        RE: RENEWAL & EXTENSION OF APPOINTMENT CONTRACT
+                      </div>
+
+                      <div className="text-justify space-y-2 text-[10px] text-neutral-800">
+                        <p>Dear {appointmentModalUser.name.split(' ')[0] || 'Sir/Madam'},</p>
+                        <p>Following a review of your academic and administrative service registers, we are pleased to inform you that your employment contract with <strong className="text-emerald-950">{systemSettings?.schoolName || 'SAWLA COMPREHENSIVE ACADEMY'}</strong> has been formally renewed.</p>
+                        <p>Your contract has been extended for a renewal period of <strong className="text-amber-700">{appRenewalPeriod}</strong>, and is now scheduled to conclude on <strong>{new Date(appEndDate || new Date()).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</strong>.</p>
+                        <p>In appreciation of your service, your adjusted basic monthly stipend is set to <strong className="text-emerald-800">GHC {parseFloat(appSalary || '0').toFixed(2)}</strong>. All other terms and conditions specified in your original letter of appointment remain in full force.</p>
+                        <p>Please indicate your acceptance by signing and returning this duplicate letter.</p>
+                      </div>
+
+                      <div className="mt-8 flex justify-between items-end text-[9px] pt-4 border-t border-dashed border-neutral-200">
+                        <div>
+                          For School Management:<br/>
+                          {appManagementSignature ? (
+                            <div className="h-10 flex items-center justify-start my-1 bg-amber-50/10 rounded border border-neutral-100 p-0.5">
+                              <img src={appManagementSignature} alt="Authorized Signatory" className="max-h-10 object-contain max-w-[120px]" />
+                            </div>
+                          ) : (
+                            <div className="h-5" />
+                          )}
+                          <strong>{appSignatoryName}</strong><br/>
+                          <span className="text-neutral-500">{appSignatoryTitle}</span>
+                        </div>
+                        <div className="text-right flex flex-col items-end">
+                          <span className="block">Employee Acceptance:</span>
+                          {appStaffSignature ? (
+                            <div className="h-10 flex items-center justify-end my-1 bg-amber-50/10 rounded border border-neutral-100 p-0.5">
+                              <img src={appStaffSignature} alt="Employee Acceptance" className="max-h-10 object-contain max-w-[120px]" />
+                            </div>
+                          ) : (
+                            <div className="h-5" />
+                          )}
+                          <strong>{appointmentModalUser.name}</strong><br/>
+                          <span className="text-neutral-500">Signature & Date</span>
+                        </div>
                       </div>
                     </div>
                   </div>

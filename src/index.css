@@ -67,8 +67,29 @@
   #print-friendly-area,
   #print-friendly-area *,
   #print-single-invoice-area-upgrade,
-  #print-single-invoice-area-upgrade * {
+  #print-single-invoice-area-upgrade *,
+  #print-payslip-area,
+  #print-payslip-area *,
+  #print-hardcopy-area,
+  #print-hardcopy-area * {
     visibility: visible !important;
+  }
+
+  /* Preserve high-fidelity for on-screen styled payslip and hardcopy worksheets */
+  #print-payslip-area,
+  #print-hardcopy-area {
+    width: 100% !important;
+    max-width: 190mm !important;
+    margin: 5mm auto !important;
+    padding: 30px !important;
+    border: 8px solid #cbd5e1 !important;
+    border-radius: 8px !important;
+    background-color: #ffffff !important;
+    color: #000000 !important;
+    box-shadow: none !important;
+    display: block !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
   }
 
   /* Specific column-width constraints and roomier padding to prevent table content congestion */

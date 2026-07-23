@@ -32,6 +32,10 @@ import {
   X,
   ZoomIn,
   ZoomOut,
+  Mic,
+  Volume2,
+  VolumeX,
+  Copy,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { VoiceSearchButton } from "./VoiceSearchButton";
@@ -48,6 +52,35 @@ import {
   Tooltip as RechartsTooltip,
   Legend,
 } from "recharts";
+
+const containerVariants = {
+  hidden: { opacity: 0 },
+  show: {
+    opacity: 1,
+    transition: {
+      staggerChildren: 0.08,
+      delayChildren: 0.05
+    }
+  },
+  exit: {
+    opacity: 0,
+    y: -15,
+    transition: { duration: 0.15 }
+  }
+};
+
+const cardVariants = {
+  hidden: { opacity: 0, y: 25 },
+  show: {
+    opacity: 1,
+    y: 0,
+    transition: {
+      type: "spring",
+      stiffness: 85,
+      damping: 15
+    }
+  }
+};
 
 export const Dashboard: React.FC = React.memo(() => {
   const {
@@ -192,6 +225,335 @@ export const Dashboard: React.FC = React.memo(() => {
   React.useEffect(() => {
     setDateFilter(currentDate);
   }, [currentDate]);
+
+  // Vocal Summary Assistant States
+  const [isVocalSummaryOpen, setIsVocalSummaryOpen] = useState(false);
+  const [isVocalListening, setIsVocalListening] = useState(false);
+  const [vocalTranscript, setVocalTranscript] = useState('');
+  const [vocalFeedback, setVocalFeedback] = useState<{ text: string; type: 'success' | 'warning' | 'error' } | null>(null);
+  const [vocalHistory, setVocalHistory] = useState<{ id: string; command: string; result: string; success: boolean }[]>([]);
+  const [generatedReport, setGeneratedReport] = useState<{ text: string; spokenText: string; date: string } | null>(null);
+  const [isSpeakingReport, setIsSpeakingReport] = useState(false);
+
+  const dateFilterRef = React.useRef(dateFilter);
+  React.useEffect(() => {
+    dateFilterRef.current = dateFilter;
+  }, [dateFilter]);
+
+  const playLocalBeep = (type: 'success' | 'warning' | 'error' = 'success') => {
+    try {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContextClass) return;
+      const ctx = new AudioContextClass();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      if (type === 'success') {
+        osc.frequency.setValueAtTime(880, ctx.currentTime);
+        gain.gain.setValueAtTime(0.1, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.15);
+      } else if (type === 'warning') {
+        osc.frequency.setValueAtTime(440, ctx.currentTime);
+        gain.gain.setValueAtTime(0.1, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.2);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.2);
+      } else {
+        osc.frequency.setValueAtTime(220, ctx.currentTime);
+        gain.gain.setValueAtTime(0.15, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.35);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.35);
+      }
+    } catch (e) {
+      // Ignore audio context errors
+    }
+  };
+
+  const generateAttendanceReport = (dateStr: string) => {
+    const dStats = getDailyStats(dateStr);
+    const formattedDate = new Date(`${dateStr}T00:00:00`).toLocaleDateString("en-US", {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+
+    const totalCollected = dStats.totalCollected;
+    const totalExpected = dStats.totalExpected;
+    const paidCount = dStats.paidCount;
+    const absentCount = dStats.absentCount || 0;
+    const pendingCount = dStats.pendingCount;
+    const collectionRate = dStats.collectionRate;
+
+    const classEntries = Object.entries(dStats.byClass) as [StudentClass, number][];
+    const activeClasses = classEntries.filter(([_, amount]) => amount > 0);
+    activeClasses.sort((a, b) => b[1] - a[1]);
+
+    let topClassesSentence = "";
+    if (activeClasses.length > 0) {
+      const topThree = activeClasses.slice(0, 3).map(([cls, amount]) => `${cls} with GHC ${amount.toFixed(0)}`);
+      topClassesSentence = `The leading classes by revenue today are: ${topThree.join(', ')}. `;
+    }
+
+    const text = `Attendance & Collection Report for ${formattedDate}:
+• Date: ${dateStr}
+• Total Present: ${paidCount} pupil${paidCount === 1 ? '' : 's'}
+• Total Absent: ${absentCount} pupil${absentCount === 1 ? '' : 's'}
+• Outstanding Check-Ins: ${pendingCount}
+• Collection Rate: ${collectionRate.toFixed(1)}%
+• Total Revenue Collected: GHC ${totalCollected.toFixed(2)}
+• Total Expected Revenue: GHC ${totalExpected.toFixed(2)}
+${activeClasses.length > 0 ? `\nTop Performing Classrooms:\n` + activeClasses.slice(0, 3).map(([cls, amt]) => `• ${cls}: GHC ${amt.toFixed(2)}`).join('\n') : ''}`;
+
+    const spokenText = `Here is the attendance and fee collection summary for ${formattedDate}. ` +
+      `Today, we recorded ${paidCount} present pupils, and ${absentCount} pupils marked as absent. ` +
+      `There are currently ${pendingCount} outstanding check-ins remaining. ` +
+      `Our fee collection rate stands at ${collectionRate.toFixed(0)} percent, resulting in a total revenue of ${totalCollected.toFixed(0)} Ghana Cedis collected today, ` +
+      `against an expected total of ${totalExpected.toFixed(0)} Cedis. ` +
+      `${topClassesSentence}` +
+      `This concludes the daily report for Saako Holy Child Academy.`;
+
+    return { text, spokenText, date: dateStr };
+  };
+
+  const speakReportText = (text: string) => {
+    if (!("speechSynthesis" in window)) {
+      setVocalFeedback({
+        text: "Speech synthesis is not supported in this browser.",
+        type: "error",
+      });
+      return;
+    }
+
+    window.speechSynthesis.cancel();
+    setIsSpeakingReport(true);
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 0.95; // Slightly slower, highly professional pacing
+    utterance.pitch = 1.0;
+    utterance.lang = "en-US";
+
+    utterance.onend = () => {
+      setIsSpeakingReport(false);
+    };
+
+    utterance.onerror = (e) => {
+      console.error("SpeechSynthesis error:", e);
+      setIsSpeakingReport(false);
+    };
+
+    try {
+      const voices = window.speechSynthesis.getVoices();
+      const preferred = voices.find(
+        (v) =>
+          v.lang.startsWith("en-") &&
+          (v.name.includes("Google") || v.name.includes("Natural")),
+      );
+      if (preferred) {
+        utterance.voice = preferred;
+      }
+    } catch (e) {
+      // Ignore voice selection error
+    }
+
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const handleStopSpeaking = () => {
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
+    setIsSpeakingReport(false);
+  };
+
+  const processVocalCommand = (rawPhrase: string) => {
+    const clean = rawPhrase.trim().toLowerCase();
+    if (!clean) return;
+
+    const isSummaryCommand = 
+      clean.includes("summarize") || 
+      clean.includes("summary") || 
+      clean.includes("report") || 
+      clean.includes("vocalize") || 
+      clean.includes("read attendance") || 
+      clean.includes("check-ins") ||
+      clean.includes("check in");
+
+    if (isSummaryCommand) {
+      setIsVocalListening(false);
+
+      let targetDate = dateFilterRef.current;
+      let label = "currently selected date";
+
+      if (clean.includes("yesterday")) {
+        targetDate = getQuickDateStr("yesterday");
+        setDateFilter(targetDate);
+        setCurrentDate(targetDate);
+        label = "yesterday";
+      } else if (clean.includes("today")) {
+        targetDate = getQuickDateStr("today");
+        setDateFilter(targetDate);
+        setCurrentDate(targetDate);
+        label = "today";
+      }
+
+      const report = generateAttendanceReport(targetDate);
+      setGeneratedReport(report);
+      setVocalFeedback({
+        text: `Generated attendance summary for ${label}.`,
+        type: "success",
+      });
+      playLocalBeep("success");
+
+      setVocalHistory((prev) =>
+        [
+          {
+            id: Math.random().toString(),
+            command: rawPhrase,
+            result: `Generated summary for ${targetDate}`,
+            success: true,
+          },
+          ...prev,
+        ].slice(0, 5),
+      );
+
+      setTimeout(() => {
+        speakReportText(report.spokenText);
+      }, 200);
+
+    } else if (clean.includes("close") || clean.includes("exit") || clean.includes("shutdown")) {
+      setIsVocalListening(false);
+      setIsVocalSummaryOpen(false);
+      handleStopSpeaking();
+      playLocalBeep("warning");
+    } else {
+      const fbMsg = `Unrecognized command: "${rawPhrase}". Try 'Summarize today's check-ins'`;
+      setVocalFeedback({ text: fbMsg, type: "warning" });
+      playLocalBeep("warning");
+      setVocalHistory((prev) =>
+        [
+          {
+            id: Math.random().toString(),
+            command: rawPhrase,
+            result: "Command not recognized",
+            success: false,
+          },
+          ...prev,
+        ].slice(0, 5),
+      );
+    }
+  };
+
+  React.useEffect(() => {
+    if (!isVocalListening || !isVocalSummaryOpen) return;
+
+    const SpeechRecognition =
+      (window as any).SpeechRecognition ||
+      (window as any).webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      setVocalFeedback({
+        text: "Speech recognition is not supported in this browser.",
+        type: "error",
+      });
+      setIsVocalListening(false);
+      return;
+    }
+
+    let recognition: any = null;
+    let shouldRestart = true;
+
+    const startRecognition = () => {
+      try {
+        recognition = new SpeechRecognition();
+        recognition.continuous = false;
+        recognition.interimResults = true;
+        recognition.lang = "en-US";
+
+        recognition.onstart = () => {
+          setVocalFeedback({
+            text: 'Listening... Say e.g. "Summarize today\'s check-ins"',
+            type: "warning",
+          });
+        };
+
+        recognition.onresult = (event: any) => {
+          let interimTranscript = "";
+          let finalTranscript = "";
+
+          for (let i = event.resultIndex; i < event.results.length; ++i) {
+            if (event.results[i].isFinal) {
+              finalTranscript += event.results[i][0].transcript;
+            } else {
+              interimTranscript += event.results[i][0].transcript;
+            }
+          }
+
+          const currentTranscript = finalTranscript || interimTranscript;
+          setVocalTranscript(currentTranscript);
+
+          if (finalTranscript) {
+            processVocalCommand(finalTranscript.trim());
+          }
+        };
+
+        recognition.onerror = (event: any) => {
+          console.error("Vocal summary speech recognition error:", event.error);
+          if (event.error === "no-speech") {
+            // Silently swallow
+          } else {
+            setVocalFeedback({
+              text: `Microphone error: ${event.error}`,
+              type: "error",
+            });
+          }
+        };
+
+        recognition.onend = () => {
+          if (shouldRestart && isVocalListening && isVocalSummaryOpen) {
+            setTimeout(() => {
+              if (shouldRestart && isVocalListening && isVocalSummaryOpen) {
+                try {
+                  recognition.start();
+                } catch (e) {
+                  // Ignore
+                }
+              }
+            }, 300);
+          } else {
+            setIsVocalListening(false);
+          }
+        };
+
+        recognition.start();
+      } catch (err: any) {
+        console.error("Failed to start speech recognition:", err);
+        setVocalFeedback({
+          text: "Microphone permission or start failure.",
+          type: "error",
+        });
+        setIsVocalListening(false);
+      }
+    };
+
+    startRecognition();
+
+    return () => {
+      shouldRestart = false;
+      if (recognition) {
+        try {
+          recognition.abort();
+        } catch (e) {
+          // Ignore
+        }
+      }
+    };
+  }, [isVocalListening, isVocalSummaryOpen]);
 
   // Memoized daily list of duty roster assignments
   const dutyRoster = useMemo(() => {
@@ -741,9 +1103,10 @@ export const Dashboard: React.FC = React.memo(() => {
       const formattedDate = parts[2] && parts[1] ? `${parts[2]}/${parts[1]}` : dayStr;
       
       const dayPayments = payments.filter(p => p.date === dayStr);
-      const presentCount = dayPayments.filter(p => !p.isAbsent).length;
+      const paidCount = dayPayments.filter(p => !p.isAbsent).length;
       const absentCount = dayPayments.filter(p => p.isAbsent).length;
-      const unmarkedCount = Math.max(0, totalActiveCount - presentCount - absentCount);
+      const unmarkedCount = Math.max(0, totalActiveCount - paidCount - absentCount);
+      const presentCount = totalActiveCount - absentCount;
       
       const attendanceRate = totalActiveCount > 0 ? (presentCount / totalActiveCount) * 100 : 0;
       
@@ -1483,14 +1846,13 @@ export const Dashboard: React.FC = React.memo(() => {
           // Holiday is neither present nor absent
           return;
         }
-        if (rec) {
-          if (rec.isAbsent) {
-            absentCount++;
-          } else {
-            presentCount++;
-          }
+        if (rec && rec.isAbsent) {
+          absentCount++;
         } else {
-          unmarkedCount++;
+          presentCount++;
+          if (!rec) {
+            unmarkedCount++;
+          }
         }
       });
 
@@ -1646,6 +2008,21 @@ export const Dashboard: React.FC = React.memo(() => {
                   <span>Reset to Today</span>
                 </button>
               )}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsVocalSummaryOpen(true);
+                  setIsVocalListening(true);
+                  setVocalTranscript('');
+                  setVocalFeedback(null);
+                  setGeneratedReport(null);
+                }}
+                className="px-3 py-1.5 text-[10px] font-black uppercase tracking-wider font-mono border-2 border-emerald-500 bg-emerald-500 hover:bg-emerald-400 text-black hover:scale-105 active:scale-95 transition-all duration-200 transform cursor-pointer flex items-center gap-1.5 shadow-[2px_2px_0px_0px_rgba(255,255,255,0.15)]"
+                title="Open Voice Summary Assistant to generate a vocalized attendance report"
+              >
+                <Mic size={11} className="stroke-[3]" />
+                <span>Voice Summary</span>
+              </button>
             </div>
             {/* Quick Date buttons */}
             <div className="flex items-center gap-1">
@@ -2472,14 +2849,14 @@ export const Dashboard: React.FC = React.memo(() => {
         {activeLayout === "bento" && (
           <motion.div
             key="bento-layout"
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -15 }}
-            transition={{ duration: 0.2 }}
+            variants={containerVariants}
+            initial="hidden"
+            animate="show"
+            exit="exit"
             className="space-y-6"
           >
             {/* Monthly Fee Collection & Projections Bento Banner */}
-            <div className="bg-neutral-900 border-4 border-neutral-800 p-8 space-y-6">
+            <motion.div variants={cardVariants} className="bg-neutral-900 border-4 border-neutral-800 p-8 space-y-6">
               <div className="flex flex-col md:flex-row justify-between md:items-center pb-4 border-b-2 border-neutral-850 gap-4">
                 <div>
                   <span className="text-[9px] text-amber-500 font-mono tracking-widest font-black uppercase bg-amber-400/10 border border-amber-400/30 px-2.5 py-1 rounded-xs">
@@ -2495,7 +2872,7 @@ export const Dashboard: React.FC = React.memo(() => {
                   </p>
                 </div>
                 <div className="flex items-center gap-3 text-[10px] font-mono font-bold uppercase text-neutral-400">
-                  <span className="bg-neutral-950 border border-neutral-805 px-3 py-1.5 flex items-center gap-1.5">
+                  <span className="bg-neutral-950 border border-neutral-850 px-3 py-1.5 flex items-center gap-1.5">
                     <Calendar size={12} className="text-amber-400" />
                     <span>{monthSchoolDays.length} Active School Days</span>
                   </span>
@@ -2503,9 +2880,20 @@ export const Dashboard: React.FC = React.memo(() => {
               </div>
 
               {/* Sub-grid of Stats Cards */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <motion.div
+                variants={{
+                  hidden: { opacity: 0 },
+                  show: {
+                    opacity: 1,
+                    transition: {
+                      staggerChildren: 0.05,
+                    }
+                  }
+                }}
+                className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4"
+              >
                 {/* 1. ACTUAL MONTHLY REVENUE COLLECTED */}
-                <div className="bg-neutral-950 border-2 border-neutral-850 p-5 space-y-2">
+                <motion.div variants={cardVariants} className="bg-neutral-950 border-2 border-neutral-850 p-5 space-y-2">
                   <span className="text-[9px] text-neutral-500 font-mono uppercase tracking-widest font-extrabold block">
                     Collected Revenue (Verified)
                   </span>
@@ -2521,10 +2909,10 @@ export const Dashboard: React.FC = React.memo(() => {
                     All processed gate payments successfully signed by educators
                     this month.
                   </p>
-                </div>
+                </motion.div>
 
                 {/* 2. PROJECTED ENROLMENT TARGET POTENTIAL */}
-                <div className="bg-neutral-950 border-2 border-neutral-850 p-5 space-y-2">
+                <motion.div variants={cardVariants} className="bg-neutral-950 border-2 border-neutral-850 p-5 space-y-2">
                   <span className="text-[9px] text-neutral-500 font-mono uppercase tracking-widest font-extrabold block">
                     Full Enrollment Target
                   </span>
@@ -2538,10 +2926,10 @@ export const Dashboard: React.FC = React.memo(() => {
                     Potential collections if 100% of the active student roll
                     paid every single day.
                   </p>
-                </div>
+                </motion.div>
 
                 {/* 3. CONFIGURED COLLECTION GOAL TARGET */}
-                <div className="bg-neutral-950 border-2 border-neutral-850 p-5 space-y-2">
+                <motion.div variants={cardVariants} className="bg-neutral-950 border-2 border-neutral-850 p-5 space-y-2">
                   <span className="text-[9px] text-neutral-500 font-mono uppercase tracking-widest font-extrabold block">
                     Configured Custom Goal
                   </span>
@@ -2555,10 +2943,10 @@ export const Dashboard: React.FC = React.memo(() => {
                     The custom milestone established for collections across
                     critical gate check-ins.
                   </p>
-                </div>
+                </motion.div>
 
                 {/* 4. PERFORMANCE RATIOS */}
-                <div className="bg-neutral-950 border-2 border-neutral-850 p-5 flex flex-col justify-between space-y-2">
+                <motion.div variants={cardVariants} className="bg-neutral-950 border-2 border-neutral-850 p-5 flex flex-col justify-between space-y-2">
                   <div>
                     <span className="text-[9px] text-neutral-500 font-mono uppercase tracking-widest font-extrabold block">
                       Target Coverage Ratio
@@ -2578,8 +2966,8 @@ export const Dashboard: React.FC = React.memo(() => {
                       {enrollmentProgressPercent.toFixed(1)}%
                     </strong>
                   </div>
-                </div>
-              </div>
+                </motion.div>
+              </motion.div>
 
               {/* Progress Indicator Tracks */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
@@ -2595,11 +2983,11 @@ export const Dashboard: React.FC = React.memo(() => {
                     </span>
                   </div>
                   <div className="w-full bg-neutral-950 h-3 border border-neutral-850 rounded-xs overflow-hidden">
-                    <div
-                      className="bg-amber-400 h-full transition-all duration-500"
-                      style={{
-                        width: `${Math.min(100, goalProgressPercent)}%`,
-                      }}
+                    <motion.div
+                      className="bg-amber-400 h-full"
+                      initial={{ width: 0 }}
+                      animate={{ width: `${Math.min(100, goalProgressPercent)}%` }}
+                      transition={{ duration: 1, ease: "easeOut" }}
                     />
                   </div>
                   <div className="flex justify-between text-[9px] text-neutral-500 font-mono uppercase">
@@ -2622,11 +3010,11 @@ export const Dashboard: React.FC = React.memo(() => {
                     </span>
                   </div>
                   <div className="w-full bg-neutral-950 h-3 border border-neutral-850 rounded-xs overflow-hidden">
-                    <div
-                      className="bg-emerald-400 h-full transition-all duration-500"
-                      style={{
-                        width: `${Math.min(100, enrollmentProgressPercent)}%`,
-                      }}
+                    <motion.div
+                      className="bg-emerald-400 h-full"
+                      initial={{ width: 0 }}
+                      animate={{ width: `${Math.min(100, enrollmentProgressPercent)}%` }}
+                      transition={{ duration: 1, ease: "easeOut" }}
                     />
                   </div>
                   <div className="flex justify-between text-[9px] text-neutral-500 font-mono uppercase">
@@ -2638,12 +3026,12 @@ export const Dashboard: React.FC = React.memo(() => {
                   </div>
                 </div>
               </div>
-            </div>
+            </motion.div>
 
             {/* Top row: Trend Graphics & Category split Bento block */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               {/* Cash Flow Trends Graph Block */}
-              <div className="bg-neutral-900 border-4 border-neutral-800 p-8 col-span-1 lg:col-span-2 space-y-6">
+              <motion.div variants={cardVariants} className="bg-neutral-900 border-4 border-neutral-800 p-8 col-span-1 lg:col-span-2 space-y-6">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   <div>
                     <h3 className="text-xl font-black uppercase italic text-white tracking-tight">
@@ -2914,10 +3302,10 @@ export const Dashboard: React.FC = React.memo(() => {
                     </div>
                   )}
                 </div>
-              </div>
+              </motion.div>
 
               {/* Category Collections split bento card */}
-              <div className="bg-neutral-900 border-4 border-neutral-800 p-8 flex flex-col justify-between space-y-6">
+              <motion.div variants={cardVariants} className="bg-neutral-900 border-4 border-neutral-800 p-8 flex flex-col justify-between space-y-6">
                 <div>
                   <h3 className="text-xl font-black uppercase italic text-white tracking-tight">
                     Balanced Cohort Ratios
@@ -2953,10 +3341,12 @@ export const Dashboard: React.FC = React.memo(() => {
                             </span>
                           </div>
 
-                          <div className="w-full bg-neutral-900 h-2 border border-neutral-850">
-                            <div
-                              className={`h-full ${cat === "Pre-school" ? "bg-amber-400" : cat === "Primary" ? "bg-white" : "bg-neutral-500"} transition-all duration-500`}
-                              style={{ width: `${percent}%` }}
+                          <div className="w-full bg-neutral-900 h-2 border border-neutral-850 overflow-hidden">
+                            <motion.div
+                              className={`h-full ${cat === "Pre-school" ? "bg-amber-400" : cat === "Primary" ? "bg-white" : "bg-neutral-500"}`}
+                              initial={{ width: 0 }}
+                              animate={{ width: `${percent}%` }}
+                              transition={{ duration: 1, ease: "easeOut" }}
                             />
                           </div>
                           <div className="flex justify-between text-[9px] text-neutral-500 font-mono uppercase mt-1">
@@ -2976,13 +3366,13 @@ export const Dashboard: React.FC = React.memo(() => {
                     Total: GHC {stats.totalCollected.toFixed(2)}
                   </p>
                 </div>
-              </div>
+              </motion.div>
             </div>
 
             {/* Bottom Row: Checkpoints preview and alert priorities */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               {/* Class Performance Tracker table overview */}
-              <div className="bg-neutral-900 border-4 border-neutral-800 p-8 col-span-1 lg:col-span-2 space-y-6">
+              <motion.div variants={cardVariants} className="bg-neutral-900 border-4 border-neutral-800 p-8 col-span-1 lg:col-span-2 space-y-6">
                 <div className="flex justify-between items-center pb-2 border-b-2 border-neutral-850">
                   <div>
                     <h3 className="text-xl font-black uppercase italic text-white tracking-tight">
@@ -3047,10 +3437,10 @@ export const Dashboard: React.FC = React.memo(() => {
                     </tbody>
                   </table>
                 </div>
-              </div>
+              </motion.div>
 
               {/* Alert Center preview list */}
-              <div className="bg-neutral-900 border-4 border-neutral-800 p-8 flex flex-col justify-between space-y-6">
+              <motion.div variants={cardVariants} className="bg-neutral-900 border-4 border-neutral-800 p-8 flex flex-col justify-between space-y-6">
                 <div className="space-y-1 pb-2 border-b-2 border-neutral-850">
                   <h3 className="text-xl font-black uppercase italic text-white tracking-tight flex items-center gap-2">
                     <span className="w-2.5 h-2.5 bg-red-500 shrink-0" />{" "}
@@ -3120,11 +3510,11 @@ export const Dashboard: React.FC = React.memo(() => {
                 >
                   View All Alerts Desk
                 </button>
-              </div>
+              </motion.div>
             </div>
 
             {/* Classroom Registration Fee Summary Overview */}
-            <div className="bg-neutral-900 border-4 border-neutral-800 p-8 space-y-6">
+            <motion.div variants={cardVariants} className="bg-neutral-900 border-4 border-neutral-800 p-8 space-y-6">
               <div className="flex flex-col sm:flex-row justify-between sm:items-center pb-4 border-b-2 border-neutral-850 gap-4">
                 <div>
                   <span className="text-[9px] text-emerald-500 font-mono tracking-widest font-black uppercase bg-emerald-400/10 border border-emerald-400/30 px-2.5 py-1 rounded-xs">
@@ -3197,7 +3587,7 @@ export const Dashboard: React.FC = React.memo(() => {
                             <div className="flex items-center justify-center gap-2">
                               <span className="text-[10px] text-neutral-400 font-black min-w-[32px] text-right">{Math.round(clsItem.rate)}%</span>
                               <div className="w-24 bg-neutral-955 h-1.5 border border-neutral-850 overflow-hidden">
-                                <div
+                                <motion.div
                                   className={`h-full ${
                                     clsItem.rate > 89
                                       ? "bg-emerald-400"
@@ -3205,7 +3595,9 @@ export const Dashboard: React.FC = React.memo(() => {
                                         ? "bg-amber-400"
                                         : "bg-red-500"
                                   }`}
-                                  style={{ width: `${Math.min(100, clsItem.rate)}%` }}
+                                  initial={{ width: 0 }}
+                                  animate={{ width: `${Math.min(100, clsItem.rate)}%` }}
+                                  transition={{ duration: 1, ease: "easeOut" }}
                                 />
                               </div>
                             </div>
@@ -3221,10 +3613,10 @@ export const Dashboard: React.FC = React.memo(() => {
                   </tbody>
                 </table>
               </div>
-            </div>
+            </motion.div>
 
             {/* Duty Roster Visual Card */}
-            <div className="bg-neutral-900 border-4 border-neutral-800 p-8 space-y-6">
+            <motion.div variants={cardVariants} className="bg-neutral-900 border-4 border-neutral-800 p-8 space-y-6">
               <div className="flex flex-col sm:flex-row justify-between sm:items-center pb-4 border-b-2 border-neutral-850 gap-4 font-sans">
                 <div>
                   <span className="text-[9px] text-amber-500 font-mono tracking-widest font-black uppercase bg-amber-400/10 border border-amber-400/30 px-2.5 py-1 rounded-xs">
@@ -3441,10 +3833,10 @@ export const Dashboard: React.FC = React.memo(() => {
                   ))}
                 </div>
               )}
-            </div>
+            </motion.div>
 
             {/* Recent Activity Feed */}
-            <div className="bg-neutral-900 border-4 border-neutral-800 p-8 space-y-6">
+            <motion.div variants={cardVariants} className="bg-neutral-900 border-4 border-neutral-800 p-8 space-y-6">
               <div className="flex flex-col sm:flex-row justify-between sm:items-center pb-2 border-b-2 border-neutral-850 gap-2">
                 <div>
                   <h3 className="text-xl font-black uppercase italic text-white tracking-tight flex items-center gap-2">
@@ -3547,7 +3939,7 @@ export const Dashboard: React.FC = React.memo(() => {
                   })
                 )}
               </div>
-            </div>
+            </motion.div>
           </motion.div>
         )}
 
@@ -3555,10 +3947,10 @@ export const Dashboard: React.FC = React.memo(() => {
         {activeLayout === "class-perf" && (
           <motion.div
             key="class-perf-layout"
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -15 }}
-            transition={{ duration: 0.2 }}
+            variants={containerVariants}
+            initial="hidden"
+            animate="show"
+            exit="exit"
             className="bg-neutral-900 border-4 border-neutral-800 p-8 space-y-6"
           >
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-4 border-b-2 border-neutral-800">
@@ -3604,9 +3996,7 @@ export const Dashboard: React.FC = React.memo(() => {
                   return (
                     <motion.div
                       key={met.className}
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.15 }}
+                      variants={cardVariants}
                       className="bg-neutral-950 border-2 border-neutral-850 p-6 flex flex-col justify-between gap-5 hover:border-neutral-700 transition"
                     >
                       <div className="flex justify-between items-start">
@@ -3657,16 +4047,18 @@ export const Dashboard: React.FC = React.memo(() => {
                           <span>Progress Gauge</span>
                           <span>{met.rate.toFixed(1)}% Completed</span>
                         </div>
-                        <div className="w-full bg-neutral-900 h-2 border border-neutral-850">
-                          <div
-                            className={`h-full transition-all duration-500 ${
+                        <div className="w-full bg-neutral-900 h-2 border border-neutral-850 overflow-hidden">
+                          <motion.div
+                            className={`h-full ${
                               met.rate > 85
                                 ? "bg-emerald-400"
                                 : met.rate > 50
                                   ? "bg-amber-400"
                                   : "bg-red-500"
                             }`}
-                            style={{ width: `${met.rate}%` }}
+                            initial={{ width: 0 }}
+                            animate={{ width: `${met.rate}%` }}
+                            transition={{ duration: 1, ease: "easeOut" }}
                           />
                         </div>
                       </div>
@@ -4231,7 +4623,7 @@ export const Dashboard: React.FC = React.memo(() => {
             {/* Collections Trend Line / Bar Chart Row */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 animate-fade-in">
               {/* Daily Inflow Velocity */}
-              <div className="bg-neutral-950 border-2 border-neutral-850 p-6 space-y-4">
+              <motion.div variants={cardVariants} className="bg-neutral-950 border-2 border-neutral-850 p-6 space-y-4">
                 <div>
                   <h4 className="text-xs font-black text-white uppercase tracking-wider font-mono">
                     Daily Inflow Velocity
@@ -4282,10 +4674,10 @@ export const Dashboard: React.FC = React.memo(() => {
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
-              </div>
+              </motion.div>
 
               {/* Weekly Class Goals comparison bar chart */}
-              <div className="bg-neutral-950 border-2 border-neutral-850 p-6 space-y-4">
+              <motion.div variants={cardVariants} className="bg-neutral-950 border-2 border-neutral-850 p-6 space-y-4">
                 <div>
                   <h4 className="text-xs font-black text-white uppercase tracking-wider font-mono">
                     Weekly Class Goals Comparison
@@ -4356,11 +4748,11 @@ export const Dashboard: React.FC = React.memo(() => {
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
-              </div>
+              </motion.div>
             </div>
 
             {/* Daily Expenditures Breakdown Stacked Bar Chart */}
-            <div className="bg-neutral-950 border-2 border-neutral-850 p-6 space-y-4 animate-fade-in">
+            <motion.div variants={cardVariants} className="bg-neutral-950 border-2 border-neutral-850 p-6 space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                 <div>
                   <h4 className="text-xs font-black text-white uppercase tracking-wider font-mono">
@@ -4531,10 +4923,10 @@ export const Dashboard: React.FC = React.memo(() => {
                   </BarChart>
                 </ResponsiveContainer>
               </div>
-            </div>
+            </motion.div>
 
             {/* The Main Excel-Style Aggregate Grid Table */}
-            <div className="bg-neutral-950 border-2 border-neutral-850 p-2 overflow-hidden">
+            <motion.div variants={cardVariants} className="bg-neutral-950 border-2 border-neutral-850 p-2 overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs border-collapse">
                   <thead>
@@ -4666,10 +5058,10 @@ export const Dashboard: React.FC = React.memo(() => {
                   </tbody>
                 </table>
               </div>
-            </div>
+            </motion.div>
 
             {/* Context Notice info */}
-            <div className="bg-neutral-950 p-4 border border-neutral-850 flex items-start gap-3">
+            <motion.div variants={cardVariants} className="bg-neutral-950 p-4 border border-neutral-850 flex items-start gap-3">
               <Info className="text-amber-400 shrink-0 mt-0.5" size={14} />
               <div className="space-y-1">
                 <span className="text-[10px] font-black uppercase text-amber-400 tracking-wider block font-mono">
@@ -4684,7 +5076,7 @@ export const Dashboard: React.FC = React.memo(() => {
                   pushed before reporting.
                 </p>
               </div>
-            </div>
+            </motion.div>
           </motion.div>
         )}
 
@@ -4692,10 +5084,10 @@ export const Dashboard: React.FC = React.memo(() => {
         {activeLayout === "absence-heatmap" && (
           <motion.div
             key="absence-heatmap-layout"
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -15 }}
-            transition={{ duration: 0.2 }}
+            variants={containerVariants}
+            initial="hidden"
+            animate="show"
+            exit="exit"
             className="bg-neutral-900 border-4 border-neutral-800 p-8 space-y-6 text-left"
           >
             {/* Header Content */}
@@ -4737,7 +5129,7 @@ export const Dashboard: React.FC = React.memo(() => {
             </div>
 
             {/* Live Heatmap Control Filters */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 bg-neutral-950 p-4 border-2 border-neutral-850/80">
+            <motion.div variants={cardVariants} className="grid grid-cols-1 md:grid-cols-4 gap-4 bg-neutral-950 p-4 border-2 border-neutral-850/80">
               {/* Class selector selector */}
               <div className="space-y-1.5 text-left">
                 <label className="text-[9.5px] font-mono uppercase font-black text-neutral-400 block tracking-wide">
@@ -4837,11 +5229,11 @@ export const Dashboard: React.FC = React.memo(() => {
                   </button>
                 </div>
               </div>
-            </div>
+            </motion.div>
 
             {/* Statistical KPIs Cards */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="bg-neutral-950 border-2 border-neutral-850 p-5 space-y-1.5 relative overflow-hidden">
+              <motion.div variants={cardVariants} className="bg-neutral-950 border-2 border-neutral-850 p-5 space-y-1.5 relative overflow-hidden">
                 <div className="absolute right-3 top-3 opacity-15 text-rose-500">
                   <AlertTriangle size={32} />
                 </div>
@@ -4855,9 +5247,9 @@ export const Dashboard: React.FC = React.memo(() => {
                   Aggregated frequency of confirmed absences school-wide across
                   current active terms.
                 </p>
-              </div>
+              </motion.div>
 
-              <div className="bg-neutral-950 border-2 border-neutral-850 p-5 space-y-1.5 relative overflow-hidden">
+              <motion.div variants={cardVariants} className="bg-neutral-950 border-2 border-neutral-850 p-5 space-y-1.5 relative overflow-hidden">
                 <div className="absolute right-3 top-3 opacity-15 text-amber-500">
                   <Users size={32} />
                 </div>
@@ -4875,9 +5267,9 @@ export const Dashboard: React.FC = React.memo(() => {
                   </span>{" "}
                   within the scope.
                 </p>
-              </div>
+              </motion.div>
 
-              <div className="bg-neutral-950 border-2 border-neutral-850 p-5 space-y-1.5 relative overflow-hidden">
+              <motion.div variants={cardVariants} className="bg-neutral-950 border-2 border-neutral-850 p-5 space-y-1.5 relative overflow-hidden">
                 <div className="absolute right-3 top-3 opacity-15 text-emerald-500">
                   <Activity size={32} />
                 </div>
@@ -4897,13 +5289,13 @@ export const Dashboard: React.FC = React.memo(() => {
                   Average presence accuracy rate of currently filtered student
                   segment.
                 </p>
-              </div>
+              </motion.div>
             </div>
 
             {/* Main Heatmap Visual Container */}
             <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
               {/* Heatmap Grid on Left (Span 3) */}
-              <div className="lg:col-span-3 bg-neutral-950 border-2 border-neutral-850 p-6 space-y-4">
+              <motion.div variants={cardVariants} className="lg:col-span-3 bg-neutral-950 border-2 border-neutral-850 p-6 space-y-4">
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-neutral-900 pb-3">
                   <div>
                     <h4 className="text-xs font-black text-white uppercase tracking-wider font-mono flex items-center gap-2">
@@ -5154,10 +5546,10 @@ export const Dashboard: React.FC = React.memo(() => {
                     </table>
                   </div>
                 )}
-              </div>
+              </motion.div>
 
               {/* Attendance Insights & Action Hub Column on Right (Span 1) */}
-              <div className="space-y-6">
+              <motion.div variants={cardVariants} className="space-y-6">
                 {/* Ranking Insight List */}
                 <div className="bg-neutral-950 border-2 border-neutral-850 p-5 space-y-4">
                   <div>
@@ -5344,7 +5736,7 @@ export const Dashboard: React.FC = React.memo(() => {
                     towards absent metrics or arrears balances.
                   </p>
                 </div>
-              </div>
+              </motion.div>
             </div>
           </motion.div>
         )}
@@ -5353,10 +5745,10 @@ export const Dashboard: React.FC = React.memo(() => {
         {activeLayout === "term-attendance-heatmap" && (
           <motion.div
             key="term-attendance-heatmap-layout"
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -15 }}
-            transition={{ duration: 0.2 }}
+            variants={containerVariants}
+            initial="hidden"
+            animate="show"
+            exit="exit"
             className="bg-neutral-900 border-4 border-neutral-800 p-8 space-y-6 text-left"
           >
             <TermAttendanceHeatmap />
@@ -5367,10 +5759,10 @@ export const Dashboard: React.FC = React.memo(() => {
         {activeLayout === "arrears-performance" && (
           <motion.div
             key="arrears-performance-layout"
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -15 }}
-            transition={{ duration: 0.2 }}
+            variants={containerVariants}
+            initial="hidden"
+            animate="show"
+            exit="exit"
             className="bg-neutral-900 border-4 border-neutral-800 p-8 space-y-6 text-left"
           >
             {/* Header Content */}
@@ -5401,7 +5793,7 @@ export const Dashboard: React.FC = React.memo(() => {
             </div>
 
             {/* Menu Options Tabs (Requested 1-4) */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 bg-neutral-950 p-1.5 border border-neutral-850">
+            <motion.div variants={cardVariants} className="grid grid-cols-2 md:grid-cols-4 gap-2 bg-neutral-950 p-1.5 border border-neutral-850">
               <button
                 type="button"
                 onClick={() => setArrearsMenuOption("class-debt")}
@@ -5446,10 +5838,10 @@ export const Dashboard: React.FC = React.memo(() => {
               >
                 4. Grade Rankings 🏅
               </button>
-            </div>
+            </motion.div>
 
             {/* Display Arrears Sub-Option Render Workspace */}
-            <div className="bg-neutral-950 border-2 border-neutral-850 p-6">
+            <motion.div variants={cardVariants} className="bg-neutral-950 border-2 border-neutral-850 p-6">
               {arrearsMenuOption === "class-debt" && (
                 <div className="space-y-4">
                   <div className="flex justify-between items-center pb-2 border-b border-neutral-850">
@@ -5772,7 +6164,7 @@ export const Dashboard: React.FC = React.memo(() => {
                   </div>
                 </div>
               )}
-            </div>
+            </motion.div>
           </motion.div>
         )}
 
@@ -5780,10 +6172,10 @@ export const Dashboard: React.FC = React.memo(() => {
         {activeLayout === "monthly-attendance" && (
           <motion.div
             key="monthly-attendance-layout"
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -15 }}
-            transition={{ duration: 0.2 }}
+            variants={containerVariants}
+            initial="hidden"
+            animate="show"
+            exit="exit"
             className="bg-neutral-900 border-4 border-neutral-800 p-8 space-y-6 text-left"
           >
             {/* Header Content */}
@@ -5829,7 +6221,7 @@ export const Dashboard: React.FC = React.memo(() => {
             {/* KPI Block */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
               {/* Metric 1: Avg Attendance Rate */}
-              <div className="bg-neutral-950 border-2 border-neutral-850 p-4 relative flex flex-col justify-between">
+              <motion.div variants={cardVariants} className="bg-neutral-950 border-2 border-neutral-850 p-4 relative flex flex-col justify-between">
                 <div>
                   <span className="text-[8px] font-mono font-black text-neutral-500 uppercase tracking-widest block">
                     Avg Monthly Rate
@@ -5844,10 +6236,10 @@ export const Dashboard: React.FC = React.memo(() => {
                 <div className="absolute top-3 right-3 w-7 h-7 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center rounded-sm">
                   <TrendingUp size={14} />
                 </div>
-              </div>
+              </motion.div>
 
               {/* Metric 2: Best Attendance Day */}
-              <div className="bg-neutral-950 border-2 border-neutral-850 p-4 relative flex flex-col justify-between">
+              <motion.div variants={cardVariants} className="bg-neutral-950 border-2 border-neutral-850 p-4 relative flex flex-col justify-between">
                 <div>
                   <span className="text-[8px] font-mono font-black text-neutral-500 uppercase tracking-widest block">
                     Peak Attendance Day
@@ -5862,10 +6254,10 @@ export const Dashboard: React.FC = React.memo(() => {
                 <div className="absolute top-3 right-3 w-7 h-7 bg-amber-400/10 border border-amber-400/20 text-amber-400 flex items-center justify-center rounded-sm">
                   <Award size={14} />
                 </div>
-              </div>
+              </motion.div>
 
               {/* Metric 3: Lowest Attendance Day */}
-              <div className="bg-neutral-950 border-2 border-neutral-850 p-4 relative flex flex-col justify-between">
+              <motion.div variants={cardVariants} className="bg-neutral-950 border-2 border-neutral-850 p-4 relative flex flex-col justify-between">
                 <div>
                   <span className="text-[8px] font-mono font-black text-neutral-500 uppercase tracking-widest block">
                     Trough Attendance Day
@@ -5880,10 +6272,10 @@ export const Dashboard: React.FC = React.memo(() => {
                 <div className="absolute top-3 right-3 w-7 h-7 bg-rose-500/10 border border-rose-500/20 text-rose-500 flex items-center justify-center rounded-sm">
                   <TrendingDown size={14} />
                 </div>
-              </div>
+              </motion.div>
 
               {/* Metric 4: Average Turnover */}
-              <div className="bg-neutral-950 border-2 border-neutral-850 p-4 relative flex flex-col justify-between">
+              <motion.div variants={cardVariants} className="bg-neutral-950 border-2 border-neutral-850 p-4 relative flex flex-col justify-between">
                 <div>
                   <span className="text-[8px] font-mono font-black text-neutral-500 uppercase tracking-widest block">
                     Monthly Averages
@@ -5898,7 +6290,7 @@ export const Dashboard: React.FC = React.memo(() => {
                 <div className="absolute top-3 right-3 w-7 h-7 bg-neutral-900 border border-neutral-800 text-neutral-400 flex items-center justify-center rounded-sm">
                   <Users size={14} />
                 </div>
-              </div>
+              </motion.div>
             </div>
 
             {/* Charts Section */}
@@ -5910,7 +6302,7 @@ export const Dashboard: React.FC = React.memo(() => {
               <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
                 
                 {/* Column Left (8 cols): The Main Line area Chart showing trend percentage */}
-                <div className="xl:col-span-8 bg-neutral-950 border-2 border-neutral-850 p-6 space-y-4">
+                <motion.div variants={cardVariants} className="xl:col-span-8 bg-neutral-950 border-2 border-neutral-850 p-6 space-y-4">
                   <div className="flex justify-between items-center pb-2 border-b border-neutral-850">
                     <div>
                       <h4 className="text-xs font-black uppercase text-neutral-300">Daily Attendance Rate Trend (%)</h4>
@@ -5981,10 +6373,10 @@ export const Dashboard: React.FC = React.memo(() => {
                       </LineChart>
                     </ResponsiveContainer>
                   </div>
-                </div>
+                </motion.div>
 
                 {/* Column Right (4 cols): Detailed Attendance volumes (stacked bars or categories) */}
-                <div className="xl:col-span-4 flex flex-col gap-6">
+                <motion.div variants={cardVariants} className="xl:col-span-4 flex flex-col gap-6">
                   {/* Part 1: Stacked Bar Volumes */}
                   <div className="bg-neutral-950 border-2 border-neutral-850 p-6 space-y-4 flex-1">
                     <div>
@@ -6079,13 +6471,13 @@ export const Dashboard: React.FC = React.memo(() => {
                     </div>
                   </div>
 
-                </div>
+                </motion.div>
 
               </div>
             )}
 
             {/* Session Audit Matrix */}
-            <div className="bg-neutral-950 border-2 border-neutral-850 p-6 space-y-3">
+            <motion.div variants={cardVariants} className="bg-neutral-950 border-2 border-neutral-850 p-6 space-y-3">
               <div>
                 <h4 className="text-xs font-black uppercase text-neutral-300">Daily Session Checkout Logs</h4>
                 <p className="text-[8.5px] text-neutral-500 uppercase font-mono tracking-widest mt-0.5">
@@ -6131,7 +6523,7 @@ export const Dashboard: React.FC = React.memo(() => {
                   </p>
                 )}
               </div>
-            </div>
+            </motion.div>
 
           </motion.div>
         )}
@@ -6145,6 +6537,239 @@ export const Dashboard: React.FC = React.memo(() => {
         </div>
       )}
     </motion.div>
+
+    {/* Vocal Summary Assistant Modal */}
+    <AnimatePresence>
+      {isVocalSummaryOpen && (
+        <div id="vocal-summary-modal-overlay" className="fixed inset-0 bg-neutral-950/90 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fadeIn font-sans">
+          <div className="bg-neutral-900 border-4 border-neutral-800 max-w-2xl w-full p-6 md:p-8 shadow-[8px_8px_0px_0px_#10b981] flex flex-col gap-6 overflow-y-auto max-h-[90vh]">
+            
+            <div className="flex items-center justify-between pb-3 border-b-2 border-neutral-850">
+              <div className="flex items-center gap-3">
+                <Mic size={22} className={`${isVocalListening ? "text-emerald-400 animate-pulse" : "text-neutral-500"} stroke-[2.5]`} />
+                <div>
+                  <h3 className="text-sm font-black uppercase tracking-widest text-white">Dashboard Vocal Reporter</h3>
+                  <p className="text-[9px] font-mono text-neutral-500 uppercase tracking-wider font-bold">SAAKO HOLY CHILD ACADEMY Hands-Free Report</p>
+                </div>
+              </div>
+              <button 
+                type="button"
+                onClick={() => {
+                  setIsVocalListening(false);
+                  setIsVocalSummaryOpen(false);
+                  handleStopSpeaking();
+                }}
+                className="text-neutral-550 hover:text-white font-black font-mono text-xs uppercase p-1 cursor-pointer"
+              >
+                ✕ Close
+              </button>
+            </div>
+
+            {/* Microphone Indicator Station */}
+            <div className="flex flex-col items-center justify-center p-6 bg-neutral-950 border-2 border-neutral-850 rounded-none text-center space-y-4 relative overflow-hidden">
+              {/* CSS Pulse Waves */}
+              {isVocalListening && (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <div className="absolute w-24 h-24 rounded-full bg-emerald-500/10 animate-ping" />
+                  <div className="absolute w-36 h-36 rounded-full bg-emerald-500/5 animate-ping [animation-delay:0.5s]" />
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setIsVocalListening(prev => !prev)}
+                className={`relative z-10 w-20 h-20 rounded-full flex items-center justify-center border-4 transition-all duration-300 cursor-pointer ${
+                  isVocalListening 
+                    ? 'bg-emerald-500/20 border-emerald-400 text-emerald-400 shadow-[0_0_20px_rgba(16,185,129,0.3)] hover:bg-emerald-500/30' 
+                    : 'bg-neutral-900 border-neutral-850 text-neutral-500 hover:border-neutral-700 hover:text-neutral-300'
+                }`}
+                title={isVocalListening ? "Click to Pause" : "Click to Start Listening"}
+              >
+                <Mic size={32} className={isVocalListening ? "animate-bounce" : ""} />
+              </button>
+
+              <div className="space-y-1 relative z-10">
+                <span className={`text-[10px] font-mono font-black uppercase tracking-widest px-2.5 py-1 ${
+                  isVocalListening ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-neutral-900 text-neutral-500'
+                }`}>
+                  {isVocalListening ? 'MIC ACTIVE - SAY A COMMAND' : 'MIC PAUSED'}
+                </span>
+                <p className="text-[9px] text-neutral-550 font-mono font-bold uppercase pt-1">
+                  {isVocalListening ? 'Speak your report command clearly' : 'Click microphone to resume voice commands'}
+                </p>
+              </div>
+            </div>
+
+            {/* Realtime Transcript Panel */}
+            <div className="space-y-2">
+              <span className="text-[9px] font-mono uppercase font-black text-neutral-500 tracking-wider block">Live Transcript</span>
+              <div className="bg-neutral-950 p-4 border border-neutral-850 min-h-12 flex items-center justify-center">
+                {vocalTranscript ? (
+                  <p className="text-xs font-mono font-black text-white italic text-center">
+                    "{vocalTranscript}"
+                  </p>
+                ) : (
+                  <p className="text-xs font-mono font-black text-neutral-700 uppercase tracking-widest text-center">
+                    ... Say "Summarize today's check-ins" ...
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* Live Feedback Message */}
+            {vocalFeedback && (
+              <div className={`p-4 border-l-4 font-mono text-[10px] uppercase font-black tracking-wider ${
+                vocalFeedback.type === 'success' 
+                  ? 'bg-emerald-950/20 border-emerald-500 text-emerald-400' 
+                  : vocalFeedback.type === 'warning' 
+                    ? 'bg-amber-950/20 border-amber-500 text-amber-400' 
+                    : 'bg-red-950/20 border-red-500 text-red-400'
+              }`}>
+                <div className="flex items-center gap-2">
+                  <span>{vocalFeedback.type === 'success' ? '✔' : '⚠️'}</span>
+                  <span>{vocalFeedback.text}</span>
+                </div>
+              </div>
+            )}
+
+            {/* Generated Report Card Section */}
+            {generatedReport ? (
+              <div className="bg-neutral-950 p-6 border-2 border-emerald-500/20 space-y-4 rounded-none relative">
+                <div className="flex items-center justify-between border-b border-neutral-850 pb-2.5">
+                  <span className="text-[10px] font-mono uppercase font-black text-emerald-400 tracking-widest">
+                    Generated Ledger Report (Date: {generatedReport.date})
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        try {
+                          navigator.clipboard.writeText(generatedReport.text);
+                          showToast("Copied ledger report to clipboard!");
+                          playLocalBeep("success");
+                        } catch (e) {
+                          // clipboard error
+                        }
+                      }}
+                      className="p-1 text-neutral-450 hover:text-white transition-colors cursor-pointer"
+                      title="Copy to Clipboard"
+                    >
+                      <Copy size={14} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Audio Vocalization Wave Indicator when speaking */}
+                {isSpeakingReport && (
+                  <div className="flex items-center justify-center gap-1.5 py-2.5 bg-emerald-500/5 border border-emerald-500/10">
+                    <div className="w-1.5 h-6 bg-emerald-500 animate-[bounce_0.8s_infinite]" />
+                    <div className="w-1.5 h-4 bg-emerald-500 animate-[bounce_0.6s_infinite_0.15s]" />
+                    <div className="w-1.5 h-8 bg-emerald-500 animate-[bounce_0.9s_infinite_0.3s]" />
+                    <div className="w-1.5 h-5 bg-emerald-500 animate-[bounce_0.7s_infinite_0.45s]" />
+                    <span className="text-[9px] font-mono text-emerald-400 font-extrabold uppercase tracking-widest ml-2 animate-pulse">
+                      Vocalizing Attendance Ledger...
+                    </span>
+                  </div>
+                )}
+
+                <pre className="text-[10px] font-mono font-bold text-neutral-300 whitespace-pre-wrap leading-relaxed max-h-48 overflow-y-auto bg-neutral-900/60 p-4 border border-neutral-850">
+                  {generatedReport.text}
+                </pre>
+
+                {/* Interactive Report Vocal Controls */}
+                <div className="flex flex-wrap gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => speakReportText(generatedReport.spokenText)}
+                    className="flex-1 bg-emerald-500 hover:bg-emerald-400 text-black py-2.5 px-4 font-mono font-black text-[9px] uppercase tracking-widest transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                  >
+                    <Volume2 size={12} className="stroke-[3]" />
+                    <span>{isSpeakingReport ? "Replay Vocalization" : "Vocalize Report"}</span>
+                  </button>
+                  
+                  {isSpeakingReport && (
+                    <button
+                      type="button"
+                      onClick={handleStopSpeaking}
+                      className="bg-neutral-900 hover:bg-neutral-800 border-2 border-red-500/40 text-red-400 hover:text-red-300 py-2.5 px-4 font-mono font-black text-[9px] uppercase tracking-widest transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      <VolumeX size={12} className="stroke-[3]" />
+                      <span>Mute / Stop</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="bg-neutral-950 p-6 border border-neutral-850 rounded-none text-center space-y-3">
+                <p className="text-[10px] font-mono text-neutral-550 uppercase font-black tracking-widest">
+                  No active summary generated yet
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const report = generateAttendanceReport(dateFilterRef.current);
+                    setGeneratedReport(report);
+                    speakReportText(report.spokenText);
+                  }}
+                  className="mx-auto bg-neutral-900 hover:bg-neutral-850 border border-neutral-800 hover:border-emerald-500 text-neutral-400 hover:text-emerald-400 py-2.5 px-6 font-mono font-black text-[9px] uppercase tracking-widest transition-all cursor-pointer"
+                >
+                  Click to Manual Generate & Speak Summary
+                </button>
+              </div>
+            )}
+
+            {/* Helper Tips */}
+            <div className="bg-neutral-950 p-4 border border-neutral-850 space-y-2">
+              <h4 className="text-[9px] font-mono uppercase font-black text-neutral-400 tracking-widest">Supported Commands</h4>
+              <ul className="text-[9px] font-mono font-bold text-neutral-550 space-y-1">
+                <li>• <strong className="text-amber-400 font-black">"Summarize today's check-ins"</strong> - Vocalizes the checked-in and financial summary for the simulated current day</li>
+                <li>• <strong className="text-amber-400 font-black">"Summarize yesterday's check-ins"</strong> - Switches date to yesterday and vocalizes report</li>
+                <li>• <strong className="text-amber-400 font-black">"Summarize check-ins"</strong> or <strong className="text-amber-400 font-black">"Vocalize report"</strong> - Vocalizes current date summary</li>
+                <li>• <strong className="text-amber-400 font-black">"Close assistant"</strong> - Shuts down the vocal reporter</li>
+              </ul>
+            </div>
+
+            {/* Command History Logs */}
+            <div className="space-y-2">
+              <h4 className="text-[9px] font-mono uppercase font-black text-neutral-500 tracking-wider">Processed Commands history</h4>
+              <div className="bg-neutral-950 p-4 border border-neutral-850 max-h-24 overflow-y-auto space-y-1.5 divide-y divide-neutral-900/60 font-mono text-[9px]">
+                {vocalHistory.length === 0 ? (
+                  <div className="text-neutral-600 uppercase font-black tracking-widest text-center py-2">
+                    No commands processed in this session
+                  </div>
+                ) : (
+                  vocalHistory.map(hist => (
+                    <div key={hist.id} className="pt-1.5 first:pt-0 flex justify-between items-center font-bold">
+                      <div className="space-y-0.5">
+                        <span className="text-neutral-400 uppercase tracking-tight block">Said: "{hist.command}"</span>
+                        <span className={`block uppercase tracking-wide ${hist.success ? 'text-emerald-400' : 'text-red-500'}`}>{hist.result}</span>
+                      </div>
+                      <span className={hist.success ? 'text-emerald-400' : 'text-red-500'}>
+                        {hist.success ? '✔' : '✖'}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Footer Control */}
+            <button
+              type="button"
+              onClick={() => {
+                setIsVocalListening(false);
+                setIsVocalSummaryOpen(false);
+                handleStopSpeaking();
+              }}
+              className="w-full bg-neutral-950 hover:bg-neutral-850 border-2 border-neutral-800 text-neutral-450 hover:text-white py-3 px-4 font-mono font-black text-[10px] uppercase tracking-widest transition-all hover:border-emerald-400 hover:text-emerald-400 cursor-pointer text-center"
+            >
+              Shutdown Voice Reporter
+            </button>
+
+          </div>
+        </div>
+      )}
+    </AnimatePresence>
 
     {/* Print Friendly & PDF Export Modal */}
     <AnimatePresence>
@@ -6327,7 +6952,7 @@ export const Dashboard: React.FC = React.memo(() => {
                         Primary & Junior High School Education • Administrative Ledger Registry
                       </p>
                       <p className="text-[9px] font-mono text-neutral-450 uppercase tracking-widest">
-                        P.O. Box K-540, Koforidua • Eastern Region, Ghana
+                        P. O. Box LS 15, Sawla Savannah Region • Sawla, Jelinkon street, Savannah Region, Ghana
                       </p>
                     </div>
                     <div className="text-right space-y-1 font-mono">

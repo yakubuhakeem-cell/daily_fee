@@ -16,9 +16,12 @@ const ReportPanel = React.lazy(() => import('./components/ReportPanel').then(mod
 const TermPayersTab = React.lazy(() => import('./components/TermPayersTab').then(module => ({ default: module.TermPayersTab })));
 const BudgetPlanTab = React.lazy(() => import('./components/BudgetPlanTab').then(module => ({ default: module.BudgetPlanTab })));
 const ExamsDashboardTab = React.lazy(() => import('./components/ExamsDashboardTab').then(module => ({ default: module.ExamsDashboardTab })));
+import { PayslipVerificationModal } from './components/PayslipVerificationModal';
 import { db } from './lib/firebase';
 import { StudentClass } from './types';
 import { EnrollmentSummaryWidget } from './components/EnrollmentSummaryWidget';
+import { InstallGuideModal } from './components/InstallGuideModal';
+import { AcademicHistoryDrawer } from './components/AcademicHistoryDrawer';
 import { 
   Fingerprint, 
   LayoutDashboard, 
@@ -43,7 +46,9 @@ import {
   AlertCircle,
   Check,
   ChevronDown,
-  Target
+  Target,
+  Smartphone,
+  History
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -65,7 +70,10 @@ function NavigationWrapper() {
     saveStatus,
     addStudent,
     playFeedbackSound,
-    systemSettings
+    systemSettings,
+    terms,
+    viewingTermId,
+    setViewingTermId
   } = useApp();
 
   // Compute unassigned pupils & missing registration records for the current day
@@ -141,12 +149,150 @@ function NavigationWrapper() {
   const [newPupilDiscount, setNewPupilDiscount] = useState<number>(0);
   const [newPupilTermFee, setNewPupilTermFee] = useState<number>(350);
   const [newPupilLegacyDebt, setNewPupilLegacyDebt] = useState<number>(0);
+  const [newPupilEnrollmentDate, setNewPupilEnrollmentDate] = useState('');
   const [newPupilPhoto, setNewPupilPhoto] = useState<string | null>(null);
 
   const [appToast, setAppToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const triggerAppToast = (message: string, type: 'success' | 'error' = 'success') => {
     setAppToast({ message, type });
     setTimeout(() => setAppToast(null), 4000);
+  };
+
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [showInstallBanner, setShowInstallBanner] = useState<boolean>(false);
+  const [isInstallGuideOpen, setIsInstallGuideOpen] = useState<boolean>(false);
+  const [isAcademicDrawerOpen, setIsAcademicDrawerOpen] = useState<boolean>(false);
+
+  const [offlineCacheStatus, setOfflineCacheStatus] = useState<'idle' | 'caching' | 'ready'>('idle');
+  const [offlineCacheProgress, setOfflineCacheProgress] = useState<number>(0);
+
+  // Prefetch and pre-cache core features for full offline registry capability
+  React.useEffect(() => {
+    let active = true;
+
+    const handleServiceWorkerMessage = (event: MessageEvent) => {
+      if (!active) return;
+      if (event.data && event.data.type === 'CACHE_PROGRESS') {
+        setOfflineCacheStatus('caching');
+        setOfflineCacheProgress(event.data.progress);
+      } else if (event.data && event.data.type === 'CACHE_COMPLETED') {
+        setOfflineCacheStatus('ready');
+        setOfflineCacheProgress(100);
+      }
+    };
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', handleServiceWorkerMessage);
+    }
+
+    // Prefetch function
+    const prefetchAndPreCache = () => {
+      if (!active) return;
+      
+      // 1. Dynamic Prefetching of core lazy chunks to prime the network cache
+      const lazyModules = [
+        () => import('./components/ClassRegister'),
+        () => import('./components/Dashboard'),
+        () => import('./components/AdminPanel'),
+        () => import('./components/ReportPanel'),
+        () => import('./components/TermPayersTab'),
+        () => import('./components/BudgetPlanTab'),
+        () => import('./components/ExamsDashboardTab')
+      ];
+
+      lazyModules.forEach(m => {
+        m().catch(err => console.log('Background chunk prefetch completed or skipped:', err));
+      });
+
+      // 2. Dynamic Asset Discovery (collect scripts and sheets currently loaded)
+      const scripts = Array.from(document.scripts)
+        .map(s => s.src)
+        .filter(src => src && src.startsWith(window.location.origin));
+      const styles = Array.from(document.styleSheets)
+        .map(s => s.href)
+        .filter(href => href && href.startsWith(window.location.origin));
+
+      const allDiscoverableAssets = [
+        '/',
+        '/index.html',
+        '/manifest.json',
+        '/school_logo.jpg',
+        '/icon.svg',
+        '/icon-192.png',
+        '/icon-512.png',
+        ...scripts,
+        ...styles
+      ];
+
+      // 3. Post to Service Worker to save in cache storage
+      navigator.serviceWorker.ready.then((registration) => {
+        if (registration.active) {
+          registration.active.postMessage({
+            type: 'PRE_CACHE_ASSETS',
+            urls: allDiscoverableAssets
+          });
+        }
+      });
+    };
+
+    // Run when browser is idle to avoid impact on initial load performance
+    if ('requestIdleCallback' in window) {
+      (window as any).requestIdleCallback(() => prefetchAndPreCache());
+    } else {
+      setTimeout(prefetchAndPreCache, 4000);
+    }
+
+    return () => {
+      active = false;
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.removeEventListener('message', handleServiceWorkerMessage);
+      }
+    };
+  }, []);
+
+  React.useEffect(() => {
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone === true;
+    const isDismissed = localStorage.getItem('pwa_banner_dismissed') === 'true';
+
+    const handleBeforeInstallPrompt = (e: any) => {
+      // Prevent the mini-infobar from appearing on mobile
+      e.preventDefault();
+      // Stash the event so it can be triggered later.
+      setDeferredPrompt(e);
+      // Show the install banner in our UI only if not already standalone/dismissed
+      if (!isStandalone && !isDismissed) {
+        setShowInstallBanner(true);
+      }
+    };
+
+    const handleAppInstalled = () => {
+      // Clear the deferredPrompt and hide the banner
+      setDeferredPrompt(null);
+      setShowInstallBanner(false);
+      triggerAppToast('PWA installed successfully! You can now run the app from your home screen.', 'success');
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleAppInstalled);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+    };
+  }, []);
+
+  const handleInstallClick = async () => {
+    if (!deferredPrompt) return;
+    // Show the install prompt
+    deferredPrompt.prompt();
+    // Wait for the user to respond to the prompt
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      triggerAppToast('Thank you for installing the app!', 'success');
+    }
+    // Clear prompt state
+    setDeferredPrompt(null);
+    setShowInstallBanner(false);
   };
 
   const PRE_SCHOOL_CLASSES: StudentClass[] = ['Nursery', 'KG1', 'KG2'];
@@ -156,15 +302,26 @@ function NavigationWrapper() {
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.size > 2 * 1024 * 1024) {
-        triggerAppToast('File size must be strictly under 2MB.', 'error');
-        return;
-      }
       const reader = new FileReader();
-      reader.onloadend = () => {
-        if (typeof reader.result === 'string') {
-          setNewPupilPhoto(reader.result);
-        }
+      reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const size = Math.min(img.width, img.height);
+          canvas.width = 350;
+          canvas.height = 350;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            const xOffset = (img.width - size) / 2;
+            const yOffset = (img.height - size) / 2;
+            ctx.drawImage(img, xOffset, yOffset, size, size, 0, 0, 350, 350);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+            setNewPupilPhoto(dataUrl);
+          } else {
+            setNewPupilPhoto(event.target?.result as string);
+          }
+        };
+        img.src = event.target?.result as string;
       };
       reader.readAsDataURL(file);
     }
@@ -197,7 +354,8 @@ function NavigationWrapper() {
         newPupilGender,
         newPupilPaymentType,
         newPupilTermFee,
-        newPupilLegacyDebt
+        newPupilLegacyDebt,
+        newPupilEnrollmentDate || undefined
       );
 
       playFeedbackSound('success');
@@ -211,6 +369,7 @@ function NavigationWrapper() {
       setNewPupilDiscount(0);
       setNewPupilTermFee(350);
       setNewPupilLegacyDebt(0);
+      setNewPupilEnrollmentDate('');
       setNewPupilPhoto(null);
       setIsAddPupilModalOpen(false);
     } catch (err) {
@@ -483,8 +642,9 @@ function NavigationWrapper() {
               <>
                 <button
                   onClick={() => setIsAddPupilModalOpen(true)}
-                  className="bg-amber-400 hover:bg-amber-300 text-neutral-900 border-2 border-neutral-950 px-4 py-2 font-mono text-xs font-black uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[1px_1px_0px_0px_rgba(0,0,0,1)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none shrink-0 rounded-none no-print"
-                  title="Quick Register Active Pupil"
+                  disabled={!!viewingTermId}
+                  className="bg-amber-400 hover:bg-amber-300 disabled:opacity-40 disabled:cursor-not-allowed text-neutral-900 border-2 border-neutral-950 px-4 py-2 font-mono text-xs font-black uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[1px_1px_0px_0px_rgba(0,0,0,1)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none shrink-0 rounded-none no-print"
+                  title={viewingTermId ? "Quick add disabled in archive view mode" : "Quick Register Active Pupil"}
                   id="btn-desktop-quick-add-pupil"
                 >
                   <Plus size={14} className="stroke-[3.5]" />
@@ -495,6 +655,26 @@ function NavigationWrapper() {
             )}
 
             <div className="flex gap-2">
+              <button
+                onClick={() => setIsAcademicDrawerOpen(true)}
+                className="bg-neutral-800 hover:bg-amber-400 hover:text-black text-amber-400 px-3 py-1.5 border border-neutral-700 hover:border-amber-400 font-mono text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer rounded-none"
+                title="Open Academic Archives"
+                id="btn-desktop-academic-archives"
+              >
+                <History size={13} className="stroke-[3]" />
+                <span className="hidden lg:inline">Academic Archives</span>
+                <span className="lg:hidden">Archives</span>
+              </button>
+              <button
+                onClick={() => setIsInstallGuideOpen(true)}
+                className="bg-emerald-950/40 text-emerald-400 hover:bg-emerald-500 hover:text-neutral-950 px-3 py-1.5 border border-emerald-900/60 hover:border-emerald-400 font-mono text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer rounded-none"
+                title="Download / Install Web App on Device"
+                id="btn-desktop-install-app"
+              >
+                <Smartphone size={13} className="stroke-[3]" />
+                <span className="hidden lg:inline">Download App</span>
+                <span className="lg:hidden">Install</span>
+              </button>
               <button
                 onClick={() => setTheme(theme === 'daylight' ? 'dark' : 'daylight')}
                 className="bg-neutral-800 hover:bg-amber-400 hover:text-black text-neutral-400 p-2 border border-neutral-700 hover:border-amber-400 transition-colors cursor-pointer"
@@ -518,14 +698,33 @@ function NavigationWrapper() {
             {(currentUser.role === 'Administrator' || currentUser.role === 'Headmaster' || currentUser.role === 'Teacher') && (
               <button
                 onClick={() => setIsAddPupilModalOpen(true)}
-                className="bg-amber-400 hover:bg-amber-300 text-neutral-900 border-2 border-neutral-950 px-3 py-1.5 font-mono text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-[2px] active:translate-y-[2px] rounded-none no-print"
-                title="Quick Register Active Pupil"
+                disabled={!!viewingTermId}
+                className="bg-amber-400 hover:bg-amber-300 disabled:opacity-40 disabled:cursor-not-allowed text-neutral-900 border-2 border-neutral-950 px-3 py-1.5 font-mono text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-[2px] active:translate-y-[2px] rounded-none no-print"
+                title={viewingTermId ? "Quick add disabled in archive view mode" : "Quick Register Active Pupil"}
                 id="btn-mobile-quick-add-pupil"
               >
                 <Plus size={12} className="stroke-[4]" />
                 <span>+ Pupil</span>
               </button>
             )}
+            <button
+              onClick={() => setIsAcademicDrawerOpen(true)}
+              className="bg-neutral-800 text-amber-400 px-2 py-1.5 border border-neutral-700 font-mono text-[10px] font-black uppercase tracking-wider flex items-center gap-1 transition-all cursor-pointer rounded-none"
+              title="Open Academic Archives"
+              id="btn-mobile-academic-archives"
+            >
+              <History size={11} className="stroke-[3.5]" />
+              <span>Archive</span>
+            </button>
+            <button
+              onClick={() => setIsInstallGuideOpen(true)}
+              className="bg-emerald-950/40 text-emerald-400 hover:bg-emerald-500 hover:text-neutral-950 px-2.5 py-1.5 border border-emerald-900/60 font-mono text-[10px] font-black uppercase tracking-wider flex items-center gap-1 transition-all cursor-pointer rounded-none"
+              title="Download / Install Web App on Device"
+              id="btn-mobile-install-app"
+            >
+              <Smartphone size={11} className="stroke-[3.5]" />
+              <span>Install</span>
+            </button>
             <button 
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
               className="p-2 text-white/85 hover:text-white hover:bg-white/5 border border-neutral-800 transition-all"
@@ -535,6 +734,53 @@ function NavigationWrapper() {
           </div>
         </div>
       </header>
+
+      {/* Historical Archive View Mode Warning Banner */}
+      {viewingTermId && (
+        <div className="bg-amber-400 text-black px-8 py-3.5 flex flex-col md:flex-row items-center justify-between gap-4 text-xs font-bold border-b-4 border-amber-500 animate-fade-in shrink-0 transition-all duration-350 no-print z-50">
+          <div className="flex items-center gap-3">
+            <span className="text-sm">📖</span>
+            <span className="leading-relaxed">
+              <strong>Historical Archive View Active:</strong> You are currently viewing academic data and financial reports for <strong className="border-b border-black/20 uppercase font-mono">{terms.find(t => t.id === viewingTermId)?.name || 'Historical Term'}</strong> in read-only mode.
+            </span>
+          </div>
+          <button
+            onClick={() => setViewingTermId(null)}
+            className="shrink-0 bg-black hover:bg-neutral-900 border border-neutral-950 text-amber-400 font-mono tracking-wider uppercase text-[10px] font-black px-4 py-2 shadow transition-all cursor-pointer rounded-none"
+          >
+            ⚡ Return to Live Workspace
+          </button>
+        </div>
+      )}
+
+      {/* PWA Install App Banner */}
+      {showInstallBanner && deferredPrompt && (
+        <div className="bg-emerald-600 text-white px-8 py-3.5 flex flex-col md:flex-row items-center justify-between gap-4 text-xs font-bold border-b-4 border-emerald-700 animate-fade-in shrink-0 transition-all duration-350 no-print z-50">
+          <div className="flex items-center gap-3">
+            <span className="text-sm">📱</span>
+            <span className="leading-relaxed">
+              <strong>Save Tracker to Home Screen:</strong> Add the <strong>{(systemSettings?.schoolName || 'SAAKO HOLY CHILD ACADEMY').toUpperCase()}</strong> daily tracker to your phone or desktop for instant full-screen access and optimized offline cache!
+            </span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={handleInstallClick}
+              className="shrink-0 bg-amber-400 hover:bg-amber-300 text-neutral-900 border border-neutral-950 font-mono tracking-wider uppercase text-[10px] font-black px-4 py-2.5 shadow transition-all cursor-pointer rounded-none flex items-center gap-1"
+            >
+              ⚡ Install App
+            </button>
+            <button
+              onClick={() => {
+                setShowInstallBanner(false);
+                localStorage.setItem('pwa_banner_dismissed', 'true');
+              }}
+              className="bg-transparent hover:bg-white/10 text-white/90 hover:text-white font-mono tracking-wider uppercase text-[10px] font-black px-3 py-2 cursor-pointer transition-colors"
+            >
+              Later
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Sync Link Warning banner */}
       {db.isActive() && storageMode === 'local' && (
@@ -715,6 +961,22 @@ function NavigationWrapper() {
           </div>
 
           <div className="space-y-6 shrink-0">
+            <button
+              onClick={() => setIsAcademicDrawerOpen(true)}
+              className="w-full bg-amber-400/10 hover:bg-amber-400/20 text-amber-400 border-2 border-amber-400/35 hover:border-amber-400 p-3.5 font-mono text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer shadow-[3px_3px_0px_0px_rgba(245,158,11,0.2)] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[1px_1px_0px_0px_rgba(245,158,11,0.2)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none rounded-none no-print"
+              title="Browse Academic History & Past Debts"
+            >
+              <History size={14} className="stroke-[3]" />
+              <span>📖 Academic Archives</span>
+            </button>
+            <button
+              onClick={() => setIsInstallGuideOpen(true)}
+              className="w-full bg-emerald-950/40 hover:bg-emerald-900/30 text-emerald-400 border-2 border-emerald-900 hover:border-emerald-700 p-3.5 font-mono text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer shadow-[3px_3px_0px_0px_rgba(4,86,58,0.5)] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[1px_1px_0px_0px_rgba(4,86,58,0.5)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none rounded-none no-print"
+              title="Download & Install Application on Device"
+            >
+              <Smartphone size={14} className="stroke-[3]" />
+              <span>📱 Download & Install App</span>
+            </button>
             <EnrollmentSummaryWidget students={students || []} />
             <div className="bg-neutral-800/60 p-4 border-l-4 border-amber-400 space-y-3">
               <p className="text-[11px] font-black text-neutral-300 leading-tight uppercase tracking-wide">
@@ -938,6 +1200,19 @@ function NavigationWrapper() {
                 })}
               </nav>
 
+              <div className="pb-2 border-b border-neutral-800">
+                <button
+                  onClick={() => {
+                    setIsInstallGuideOpen(true);
+                    setMobileMenuOpen(false);
+                  }}
+                  className="w-full bg-emerald-950/60 hover:bg-emerald-900/30 text-emerald-400 border border-emerald-800 px-4 py-2.5 font-mono text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer rounded-none"
+                >
+                  <Smartphone size={14} className="stroke-[3]" />
+                  <span>📱 Download & Install App</span>
+                </button>
+              </div>
+
               <div className="pt-4 border-t border-neutral-800">
                 <EnrollmentSummaryWidget students={students || []} />
               </div>
@@ -958,7 +1233,17 @@ function NavigationWrapper() {
                 </div>
               </div>
             }>
-              {renderTabContent()}
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={activeTab}
+                  initial={{ opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  transition={{ duration: 0.15, ease: "easeInOut" }}
+                >
+                  {renderTabContent()}
+                </motion.div>
+              </AnimatePresence>
             </React.Suspense>
           </ErrorBoundary>
         </main>
@@ -1211,6 +1496,21 @@ function NavigationWrapper() {
         )}
       </AnimatePresence>
 
+      <InstallGuideModal
+        isOpen={isInstallGuideOpen}
+        onClose={() => setIsInstallGuideOpen(false)}
+        deferredPrompt={deferredPrompt}
+        onInstallDirectly={handleInstallClick}
+        schoolName={systemSettings?.schoolName || 'SAAKO HOLY CHILD ACADEMY'}
+        offlineCacheStatus={offlineCacheStatus}
+        offlineCacheProgress={offlineCacheProgress}
+      />
+
+      <AcademicHistoryDrawer
+        isOpen={isAcademicDrawerOpen}
+        onClose={() => setIsAcademicDrawerOpen(false)}
+      />
+
       {/* QUICK ENROLL PUPIL MODAL OVERLAY */}
       <AnimatePresence>
         {isAddPupilModalOpen && (
@@ -1438,6 +1738,22 @@ function NavigationWrapper() {
                     </div>
                   )}
 
+                  {/* Pupil Start Date / Enrollment Date */}
+                  <div className="space-y-1.5 col-span-1 md:col-span-2">
+                    <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest font-mono">
+                      Pupil's First Day / Start Date
+                    </label>
+                    <input
+                      type="date"
+                      value={newPupilEnrollmentDate}
+                      onChange={(e) => setNewPupilEnrollmentDate(e.target.value)}
+                      className="w-full bg-neutral-950 border border-neutral-800 py-2.5 px-4 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 rounded-none font-mono"
+                    />
+                    <p className="text-[8px] font-mono text-neutral-500 uppercase leading-snug">
+                      Select date if new child to ignore previous dates as debt. Leave blank if old student to calculate full term debt.
+                    </p>
+                  </div>
+
                   {/* Legacy Arrears / Debt */}
                   <div className="space-y-1.5 col-span-1 md:col-span-2">
                     <label className="block text-[10px] font-black text-red-400 uppercase tracking-widest font-mono">
@@ -1521,6 +1837,8 @@ function NavigationWrapper() {
         )}
       </AnimatePresence>
 
+
+
       {/* GLOBAL TOAST BANNER */}
       <AnimatePresence>
         {appToast && (
@@ -1541,6 +1859,9 @@ function NavigationWrapper() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* PAYSLIP VERIFICATION MODAL OVERLAY */}
+      <PayslipVerificationModal />
     </div>
   );
 }

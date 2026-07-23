@@ -18,8 +18,14 @@ export const SchoolLogo: React.FC<SchoolLogoProps> = ({
   lightBackground = false 
 }) => {
   const { systemSettings } = useApp();
+  const [imgError, setImgError] = React.useState(false);
 
-  if (systemSettings?.schoolLogoUrl) {
+  // Reset imgError whenever schoolLogoUrl changes
+  React.useEffect(() => {
+    setImgError(false);
+  }, [systemSettings?.schoolLogoUrl]);
+
+  if (systemSettings?.schoolLogoUrl && !imgError) {
     return (
       <img 
         src={systemSettings.schoolLogoUrl} 
@@ -28,6 +34,7 @@ export const SchoolLogo: React.FC<SchoolLogoProps> = ({
         height={size}
         className={`object-contain select-none shrink-0 rounded-full border border-neutral-800 shadow-sm ${className}`}
         referrerPolicy="no-referrer"
+        onError={() => setImgError(true)}
         style={{ width: size, height: size }}
       />
     );

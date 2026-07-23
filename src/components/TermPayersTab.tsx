@@ -239,6 +239,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
     messageText: string;
     defaultPhone: string;
   } | null>(null);
+  const [reminderChannel, setReminderChannel] = useState<'whatsapp' | 'sms'>('whatsapp');
   const [customWAContact, setCustomWAContact] = useState('');
   const [selectedStaffPhone, setSelectedStaffPhone] = useState('');
 
@@ -514,7 +515,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
     <div class="header">
       <div>
         <h1 class="school-title">SAAKO HOLY CHILD ACADEMY</h1>
-        <p class="school-subtitle">Sawla Branch • Term Ledger Docket</p>
+        <p class="school-subtitle">Sawla, Jelinkon street, Savannah Region • Term Ledger Docket</p>
       </div>
       <div>
         <span class="receipt-type">Term installment</span>
@@ -3500,6 +3501,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
                 setWhatsAppReminderModal(null);
                 setCustomWAContact('');
                 setSelectedStaffPhone('');
+                setReminderChannel('whatsapp');
               }}
               className="absolute top-4 right-4 text-neutral-400 hover:text-white font-mono text-xs p-1 cursor-pointer font-black border border-neutral-800 hover:border-red-500 hover:text-red-500 px-1.5 py-0.5 transition-all"
             >
@@ -3507,10 +3509,38 @@ export const TermPayersTab: React.FC = React.memo(() => {
             </button>
 
             <div className="space-y-1">
-              <span className="text-[9px] font-mono font-black uppercase tracking-widest text-amber-400">WhatsApp Reminder Dispatch</span>
+              <span className="text-[9px] font-mono font-black uppercase tracking-widest text-amber-400">
+                {reminderChannel === 'whatsapp' ? 'WhatsApp Reminder Dispatch' : 'SMS Reminder Dispatch'}
+              </span>
               <h3 className="text-base font-black uppercase tracking-tight font-mono text-white">
                 Remind: {whatsAppReminderModal.student.name}
               </h3>
+            </div>
+
+            {/* Communication Channel Tabs */}
+            <div className="flex border-2 border-neutral-800 p-1 bg-neutral-950/85">
+              <button
+                type="button"
+                onClick={() => setReminderChannel('whatsapp')}
+                className={`flex-1 py-2 text-center font-mono text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer ${
+                  reminderChannel === 'whatsapp'
+                    ? 'bg-emerald-950 border border-emerald-800 text-emerald-400 shadow-sm'
+                    : 'text-neutral-500 hover:text-neutral-300'
+                }`}
+              >
+                💬 WhatsApp Mode
+              </button>
+              <button
+                type="button"
+                onClick={() => setReminderChannel('sms')}
+                className={`flex-1 py-2 text-center font-mono text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer ${
+                  reminderChannel === 'sms'
+                    ? 'bg-amber-955 border border-amber-800 text-amber-400 shadow-sm'
+                    : 'text-neutral-500 hover:text-neutral-300'
+                }`}
+              >
+                📱 SMS Mode
+              </button>
             </div>
 
             {/* Message Preview */}
@@ -3533,119 +3563,32 @@ export const TermPayersTab: React.FC = React.memo(() => {
             </div>
 
             <div className="border-t border-neutral-850 my-2 pt-2 space-y-3">
-              <span className="text-[10px] font-mono font-black uppercase tracking-wider text-amber-400 block">Choose WhatsApp Contact Option:</span>
+              <span className="text-[10px] font-mono font-black uppercase tracking-wider text-amber-400 block">
+                {reminderChannel === 'whatsapp' ? 'Choose WhatsApp Contact Option:' : 'Choose SMS Contact Option:'}
+              </span>
 
-              {/* Option 1: Open WhatsApp Contact Picker */}
-              <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-emerald-500/40 transition-all rounded-xs space-y-2">
-                <div>
-                  <h4 className="text-xs font-black uppercase font-mono text-emerald-400">1. WhatsApp Contact Picker (Universal Share)</h4>
-                  <p className="text-[9.5px] text-neutral-400 font-bold leading-tight">
-                    Launches WhatsApp so you can search and choose ANY contact or group directly from your WhatsApp chats.
-                  </p>
-                </div>
-                <button
-                  onClick={async () => {
-                    const urlText = encodeURIComponent(whatsAppReminderModal.messageText);
-                    const waUrl = `https://api.whatsapp.com/send?text=${urlText}`;
-                    if (typeof window !== 'undefined') {
-                      window.open(waUrl, '_blank', 'noopener,noreferrer');
-                      showToast("WhatsApp Contact Picker opened!");
-                    }
-                    // Trigger background logging
-                    try {
-                      await sendautomatedWhatsApp(
-                        'Universal Share Picker',
-                        whatsAppReminderModal.messageText,
-                        whatsAppReminderModal.student.id,
-                        whatsAppReminderModal.student.name,
-                        'term-single-outstanding'
-                      );
-                    } catch (e) {}
-                    setWhatsAppReminderModal(null);
-                    setCustomWAContact('');
-                    setSelectedStaffPhone('');
-                  }}
-                  className="w-full bg-emerald-950 hover:bg-emerald-900 text-emerald-400 hover:text-emerald-300 border border-emerald-800 py-2 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded-xs flex items-center justify-center gap-1.5"
-                >
-                  <MessageSquare size={12} />
-                  <span>Choose Contact & Send on WhatsApp</span>
-                </button>
-              </div>
-
-              {/* Option 2: Send to Guardian */}
-              {whatsAppReminderModal.defaultPhone && (
-                <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
-                  <div>
-                    <h4 className="text-xs font-black uppercase font-mono text-white">2. Registered Parent/Guardian</h4>
-                    <p className="text-[9.5px] text-neutral-400 font-bold leading-tight">
-                      Registered Number: <span className="text-amber-400 font-black">{whatsAppReminderModal.defaultPhone}</span>
-                    </p>
-                  </div>
-                  <button
-                    onClick={async () => {
-                      let targetPhone = whatsAppReminderModal.defaultPhone.replace(/\D/g, "");
-                      if (targetPhone.startsWith("0") && targetPhone.length === 10) {
-                        targetPhone = "233" + targetPhone.substring(1);
-                      }
-                      const urlText = encodeURIComponent(whatsAppReminderModal.messageText);
-                      const waUrl = `https://api.whatsapp.com/send?phone=${targetPhone}&text=${urlText}`;
-                      if (typeof window !== 'undefined') {
-                        window.open(waUrl, '_blank', 'noopener,noreferrer');
-                        showToast(`WhatsApp opened with Guardian (${whatsAppReminderModal.defaultPhone})!`);
-                      }
-                      // Trigger background logging
-                      try {
-                        await sendautomatedWhatsApp(
-                          whatsAppReminderModal.defaultPhone,
-                          whatsAppReminderModal.messageText,
-                          whatsAppReminderModal.student.id,
-                          whatsAppReminderModal.student.name,
-                          'term-single-outstanding'
-                        );
-                      } catch (e) {}
-                      setWhatsAppReminderModal(null);
-                      setCustomWAContact('');
-                      setSelectedStaffPhone('');
-                    }}
-                    className="w-full bg-neutral-950 hover:bg-neutral-850 text-white hover:text-amber-400 border border-neutral-800 py-2 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded-xs"
-                  >
-                    💬 Send directly to Guardian ({whatsAppReminderModal.defaultPhone})
-                  </button>
-                </div>
-              )}
-
-              {/* Option 3: Send to school staff/teacher */}
-              {users && users.length > 0 && (
-                <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
-                  <h4 className="text-xs font-black uppercase font-mono text-white">3. School Staff / Class Teacher</h4>
-                  <div className="flex gap-2">
-                    <select
-                      value={selectedStaffPhone}
-                      onChange={(e) => setSelectedStaffPhone(e.target.value)}
-                      className="bg-neutral-950 border border-neutral-800 rounded-xs text-[10px] font-mono font-bold text-white px-2 py-1.5 flex-1 focus:outline-none focus:border-amber-400"
-                    >
-                      <option value="">-- SELECT STAFF MEMBER --</option>
-                      {users.map(u => (
-                        u.phone ? <option key={u.id} value={u.phone}>{u.name} ({u.role || 'Staff'}) - {u.phone}</option> : null
-                      ))}
-                    </select>
+              {reminderChannel === 'whatsapp' ? (
+                <>
+                  {/* Option 1: Open WhatsApp Contact Picker */}
+                  <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-emerald-500/40 transition-all rounded-xs space-y-2">
+                    <div>
+                      <h4 className="text-xs font-black uppercase font-mono text-emerald-400">1. WhatsApp Contact Picker (Universal Share)</h4>
+                      <p className="text-[9.5px] text-neutral-400 font-bold leading-tight">
+                        Launches WhatsApp so you can search and choose ANY contact or group directly from your WhatsApp chats.
+                      </p>
+                    </div>
                     <button
-                      disabled={!selectedStaffPhone}
                       onClick={async () => {
-                        let targetPhone = selectedStaffPhone.replace(/\D/g, "");
-                        if (targetPhone.startsWith("0") && targetPhone.length === 10) {
-                          targetPhone = "233" + targetPhone.substring(1);
-                        }
                         const urlText = encodeURIComponent(whatsAppReminderModal.messageText);
-                        const waUrl = `https://api.whatsapp.com/send?phone=${targetPhone}&text=${urlText}`;
+                        const waUrl = `https://api.whatsapp.com/send?text=${urlText}`;
                         if (typeof window !== 'undefined') {
                           window.open(waUrl, '_blank', 'noopener,noreferrer');
-                          showToast(`WhatsApp opened with Staff member!`);
+                          showToast("WhatsApp Contact Picker opened!");
                         }
                         // Trigger background logging
                         try {
                           await sendautomatedWhatsApp(
-                            selectedStaffPhone,
+                            'Universal Share Picker',
                             whatsAppReminderModal.messageText,
                             whatsAppReminderModal.student.id,
                             whatsAppReminderModal.student.name,
@@ -3656,58 +3599,354 @@ export const TermPayersTab: React.FC = React.memo(() => {
                         setCustomWAContact('');
                         setSelectedStaffPhone('');
                       }}
-                      className="bg-amber-400 hover:bg-amber-500 disabled:opacity-40 disabled:hover:bg-amber-400 text-black px-4 py-1.5 text-[10px] font-mono font-black uppercase rounded-xs cursor-pointer"
+                      className="w-full bg-emerald-950 hover:bg-emerald-900 text-emerald-400 hover:text-emerald-300 border border-emerald-800 py-2 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded-xs flex items-center justify-center gap-1.5"
                     >
-                      Send
+                      <MessageSquare size={12} />
+                      <span>Choose Contact & Send on WhatsApp</span>
                     </button>
                   </div>
-                </div>
-              )}
 
-              {/* Option 4: Custom Number */}
-              <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
-                <h4 className="text-xs font-black uppercase font-mono text-white">4. Type Custom Phone Number</h4>
-                <div className="flex gap-2">
-                  <input
-                    type="tel"
-                    value={customWAContact}
-                    onChange={(e) => setCustomWAContact(e.target.value)}
-                    placeholder="e.g. 0244000000"
-                    className="bg-neutral-950 border border-neutral-800 rounded-xs text-[10px] font-mono font-bold text-white px-2 py-1.5 flex-1 focus:outline-none focus:border-amber-400"
-                  />
-                  <button
-                    disabled={!customWAContact.trim()}
-                    onClick={async () => {
-                      let targetPhone = customWAContact.replace(/\D/g, "");
-                      if (targetPhone.startsWith("0") && targetPhone.length === 10) {
-                        targetPhone = "233" + targetPhone.substring(1);
-                      }
-                      const urlText = encodeURIComponent(whatsAppReminderModal.messageText);
-                      const waUrl = `https://api.whatsapp.com/send?phone=${targetPhone}&text=${urlText}`;
-                      if (typeof window !== 'undefined') {
-                        window.open(waUrl, '_blank', 'noopener,noreferrer');
-                        showToast(`WhatsApp opened with custom recipient!`);
-                      }
-                      // Trigger background logging
-                      try {
-                        await sendautomatedWhatsApp(
-                          customWAContact,
-                          whatsAppReminderModal.messageText,
-                          whatsAppReminderModal.student.id,
-                          whatsAppReminderModal.student.name,
-                          'term-single-outstanding'
-                        );
-                      } catch (e) {}
-                      setWhatsAppReminderModal(null);
-                      setCustomWAContact('');
-                      setSelectedStaffPhone('');
-                    }}
-                    className="bg-amber-400 hover:bg-amber-500 disabled:opacity-40 disabled:hover:bg-amber-400 text-black px-4 py-1.5 text-[10px] font-mono font-black uppercase rounded-xs cursor-pointer"
-                  >
-                    Send
-                  </button>
-                </div>
-              </div>
+                  {/* Option 2: Send to Guardian */}
+                  {whatsAppReminderModal.defaultPhone && (
+                    <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
+                      <div>
+                        <h4 className="text-xs font-black uppercase font-mono text-white">2. Registered Parent/Guardian</h4>
+                        <p className="text-[9.5px] text-neutral-400 font-bold leading-tight">
+                          Registered Number: <span className="text-amber-400 font-black">{whatsAppReminderModal.defaultPhone}</span>
+                        </p>
+                      </div>
+                      <button
+                        onClick={async () => {
+                          let targetPhone = whatsAppReminderModal.defaultPhone.replace(/\D/g, "");
+                          if (targetPhone.startsWith("0") && targetPhone.length === 10) {
+                            targetPhone = "233" + targetPhone.substring(1);
+                          }
+                          const urlText = encodeURIComponent(whatsAppReminderModal.messageText);
+                          const waUrl = `https://api.whatsapp.com/send?phone=${targetPhone}&text=${urlText}`;
+                          if (typeof window !== 'undefined') {
+                            window.open(waUrl, '_blank', 'noopener,noreferrer');
+                            showToast(`WhatsApp opened with Guardian (${whatsAppReminderModal.defaultPhone})!`);
+                          }
+                          // Trigger background logging
+                          try {
+                            await sendautomatedWhatsApp(
+                              whatsAppReminderModal.defaultPhone,
+                              whatsAppReminderModal.messageText,
+                              whatsAppReminderModal.student.id,
+                              whatsAppReminderModal.student.name,
+                              'term-single-outstanding'
+                            );
+                          } catch (e) {}
+                          setWhatsAppReminderModal(null);
+                          setCustomWAContact('');
+                          setSelectedStaffPhone('');
+                        }}
+                        className="w-full bg-neutral-950 hover:bg-neutral-850 text-white hover:text-amber-400 border border-neutral-800 py-2 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded-xs"
+                      >
+                        💬 Send directly to Guardian ({whatsAppReminderModal.defaultPhone})
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Option 3: Send to school staff/teacher */}
+                  {users && users.length > 0 && (
+                    <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
+                      <h4 className="text-xs font-black uppercase font-mono text-white">3. School Staff / Class Teacher</h4>
+                      <div className="flex gap-2">
+                        <select
+                          value={selectedStaffPhone}
+                          onChange={(e) => setSelectedStaffPhone(e.target.value)}
+                          className="bg-neutral-950 border border-neutral-800 rounded-xs text-[10px] font-mono font-bold text-white px-2 py-1.5 flex-1 focus:outline-none focus:border-amber-400"
+                        >
+                          <option value="">-- SELECT STAFF MEMBER --</option>
+                          {users.map(u => (
+                            u.phone ? <option key={u.id} value={u.phone}>{u.name} ({u.role || 'Staff'}) - {u.phone}</option> : null
+                          ))}
+                        </select>
+                        <button
+                          disabled={!selectedStaffPhone}
+                          onClick={async () => {
+                            let targetPhone = selectedStaffPhone.replace(/\D/g, "");
+                            if (targetPhone.startsWith("0") && targetPhone.length === 10) {
+                              targetPhone = "233" + targetPhone.substring(1);
+                            }
+                            const urlText = encodeURIComponent(whatsAppReminderModal.messageText);
+                            const waUrl = `https://api.whatsapp.com/send?phone=${targetPhone}&text=${urlText}`;
+                            if (typeof window !== 'undefined') {
+                              window.open(waUrl, '_blank', 'noopener,noreferrer');
+                              showToast(`WhatsApp opened with Staff member!`);
+                            }
+                            // Trigger background logging
+                            try {
+                              await sendautomatedWhatsApp(
+                                selectedStaffPhone,
+                                whatsAppReminderModal.messageText,
+                                whatsAppReminderModal.student.id,
+                                whatsAppReminderModal.student.name,
+                                'term-single-outstanding'
+                              );
+                            } catch (e) {}
+                            setWhatsAppReminderModal(null);
+                            setCustomWAContact('');
+                            setSelectedStaffPhone('');
+                          }}
+                          className="bg-amber-400 hover:bg-amber-500 disabled:opacity-40 disabled:hover:bg-amber-400 text-black px-4 py-1.5 text-[10px] font-mono font-black uppercase rounded-xs cursor-pointer"
+                        >
+                          Send
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Option 4: Custom Number */}
+                  <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
+                    <h4 className="text-xs font-black uppercase font-mono text-white">4. Type Custom Phone Number</h4>
+                    <div className="flex gap-2">
+                      <input
+                        type="tel"
+                        value={customWAContact}
+                        onChange={(e) => setCustomWAContact(e.target.value)}
+                        placeholder="e.g. 0244000000"
+                        className="bg-neutral-950 border border-neutral-800 rounded-xs text-[10px] font-mono font-bold text-white px-2 py-1.5 flex-1 focus:outline-none focus:border-amber-400"
+                      />
+                      <button
+                        disabled={!customWAContact.trim()}
+                        onClick={async () => {
+                          let targetPhone = customWAContact.replace(/\D/g, "");
+                          if (targetPhone.startsWith("0") && targetPhone.length === 10) {
+                            targetPhone = "233" + targetPhone.substring(1);
+                          }
+                          const urlText = encodeURIComponent(whatsAppReminderModal.messageText);
+                          const waUrl = `https://api.whatsapp.com/send?phone=${targetPhone}&text=${urlText}`;
+                          if (typeof window !== 'undefined') {
+                            window.open(waUrl, '_blank', 'noopener,noreferrer');
+                            showToast(`WhatsApp opened with custom recipient!`);
+                          }
+                          // Trigger background logging
+                          try {
+                            await sendautomatedWhatsApp(
+                              customWAContact,
+                              whatsAppReminderModal.messageText,
+                              whatsAppReminderModal.student.id,
+                              whatsAppReminderModal.student.name,
+                              'term-single-outstanding'
+                            );
+                          } catch (e) {}
+                          setWhatsAppReminderModal(null);
+                          setCustomWAContact('');
+                          setSelectedStaffPhone('');
+                        }}
+                        className="bg-amber-400 hover:bg-amber-500 disabled:opacity-40 disabled:hover:bg-amber-400 text-black px-4 py-1.5 text-[10px] font-mono font-black uppercase rounded-xs cursor-pointer"
+                      >
+                        Send
+                      </button>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  {/* Option 1: Universal SMS Picker */}
+                  <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-500/40 transition-all rounded-xs space-y-2">
+                    <div>
+                      <h4 className="text-xs font-black uppercase font-mono text-amber-400">1. SMS Client App Picker (Universal)</h4>
+                      <p className="text-[9.5px] text-neutral-400 font-bold leading-tight">
+                        Launches your device's native SMS messaging app prefilled with the outstanding debt alert text.
+                      </p>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        const smsUrl = `sms:?body=${encodeURIComponent(whatsAppReminderModal.messageText)}`;
+                        if (typeof window !== 'undefined') {
+                          window.open(smsUrl, '_blank');
+                          showToast("Native SMS picker launched!");
+                        }
+                        // Copy message automatically for safety
+                        navigator.clipboard.writeText(whatsAppReminderModal.messageText);
+                        // Trigger background logging
+                        try {
+                          await sendautomatedWhatsApp(
+                            'Universal SMS Picker',
+                            whatsAppReminderModal.messageText,
+                            whatsAppReminderModal.student.id,
+                            whatsAppReminderModal.student.name,
+                            'sms-single-outstanding'
+                          );
+                        } catch (e) {}
+                        setWhatsAppReminderModal(null);
+                        setCustomWAContact('');
+                        setSelectedStaffPhone('');
+                        setReminderChannel('whatsapp');
+                      }}
+                      className="w-full bg-amber-955 hover:bg-amber-900 text-amber-400 hover:text-amber-300 border border-amber-850 py-2 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded-xs flex items-center justify-center gap-1.5"
+                    >
+                      <Smartphone size={12} />
+                      <span>Choose Contact & Send via Native SMS</span>
+                    </button>
+                  </div>
+
+                  {/* Option 2: Send SMS directly to Guardian */}
+                  {whatsAppReminderModal.defaultPhone && (
+                    <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
+                      <div>
+                        <h4 className="text-xs font-black uppercase font-mono text-white">2. Registered Parent/Guardian (SMS)</h4>
+                        <p className="text-[9.5px] text-neutral-400 font-bold leading-tight">
+                          Registered Phone: <span className="text-amber-400 font-black">{whatsAppReminderModal.defaultPhone}</span>
+                        </p>
+                      </div>
+                      <div className="flex flex-col sm:flex-row gap-2">
+                        <button
+                          onClick={async () => {
+                            let cleanPhone = whatsAppReminderModal.defaultPhone.replace(/\D/g, "");
+                            const smsUrl = `sms:${cleanPhone}?body=${encodeURIComponent(whatsAppReminderModal.messageText)}`;
+                            if (typeof window !== 'undefined') {
+                              window.open(smsUrl, '_blank');
+                              showToast(`SMS App launched for ${whatsAppReminderModal.defaultPhone}!`);
+                            }
+                            navigator.clipboard.writeText(whatsAppReminderModal.messageText);
+                            // Trigger background logging
+                            try {
+                              await sendautomatedWhatsApp(
+                                whatsAppReminderModal.defaultPhone,
+                                whatsAppReminderModal.messageText,
+                                whatsAppReminderModal.student.id,
+                                whatsAppReminderModal.student.name,
+                                'sms-single-outstanding'
+                              );
+                            } catch (e) {}
+                            setWhatsAppReminderModal(null);
+                            setCustomWAContact('');
+                            setSelectedStaffPhone('');
+                            setReminderChannel('whatsapp');
+                          }}
+                          className="flex-1 bg-neutral-950 hover:bg-neutral-850 text-white hover:text-amber-400 border border-neutral-800 py-2 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded-xs"
+                        >
+                          📱 Open Native SMS
+                        </button>
+
+                        <button
+                          onClick={async () => {
+                            showToast("Dispatching via cloud SMS carrier gateway...");
+                            try {
+                              const res = await sendautomatedWhatsApp(
+                                whatsAppReminderModal.defaultPhone,
+                                whatsAppReminderModal.messageText,
+                                whatsAppReminderModal.student.id,
+                                whatsAppReminderModal.student.name,
+                                'sms-single-outstanding'
+                              );
+                              if (res.success) {
+                                showToast("SMS dispatch token registered & logged successfully!");
+                              } else {
+                                showToast("Logged (Simulation Mode) successfully.");
+                              }
+                            } catch (e) {
+                              showToast("Logged (Simulation Mode).");
+                            }
+                            setWhatsAppReminderModal(null);
+                            setCustomWAContact('');
+                            setSelectedStaffPhone('');
+                            setReminderChannel('whatsapp');
+                          }}
+                          className="bg-amber-400 hover:bg-amber-500 text-black px-4 py-2 text-[10px] font-mono font-black uppercase rounded-xs cursor-pointer text-center"
+                        >
+                          Send via Cloud API
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Option 3: Send SMS to school staff/teacher */}
+                  {users && users.length > 0 && (
+                    <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
+                      <h4 className="text-xs font-black uppercase font-mono text-white">3. School Staff / Class Teacher (SMS)</h4>
+                      <div className="flex gap-2">
+                        <select
+                          value={selectedStaffPhone}
+                          onChange={(e) => setSelectedStaffPhone(e.target.value)}
+                          className="bg-neutral-950 border border-neutral-800 rounded-xs text-[10px] font-mono font-bold text-white px-2 py-1.5 flex-1 focus:outline-none focus:border-amber-400"
+                        >
+                          <option value="">-- SELECT STAFF MEMBER --</option>
+                          {users.map(u => (
+                            u.phone ? <option key={u.id} value={u.phone}>{u.name} ({u.role || 'Staff'}) - {u.phone}</option> : null
+                          ))}
+                        </select>
+                        <button
+                          disabled={!selectedStaffPhone}
+                          onClick={async () => {
+                            let cleanPhone = selectedStaffPhone.replace(/\D/g, "");
+                            const smsUrl = `sms:${cleanPhone}?body=${encodeURIComponent(whatsAppReminderModal.messageText)}`;
+                            if (typeof window !== 'undefined') {
+                              window.open(smsUrl, '_blank');
+                              showToast(`SMS App launched for ${selectedStaffPhone}!`);
+                            }
+                            navigator.clipboard.writeText(whatsAppReminderModal.messageText);
+                            // Trigger background logging
+                            try {
+                              await sendautomatedWhatsApp(
+                                selectedStaffPhone,
+                                whatsAppReminderModal.messageText,
+                                whatsAppReminderModal.student.id,
+                                whatsAppReminderModal.student.name,
+                                'sms-single-outstanding'
+                              );
+                            } catch (e) {}
+                            setWhatsAppReminderModal(null);
+                            setCustomWAContact('');
+                            setSelectedStaffPhone('');
+                            setReminderChannel('whatsapp');
+                          }}
+                          className="bg-amber-400 hover:bg-amber-500 disabled:opacity-40 disabled:hover:bg-amber-400 text-black px-4 py-1.5 text-[10px] font-mono font-black uppercase rounded-xs cursor-pointer"
+                        >
+                          Send SMS
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Option 4: Custom Number (SMS) */}
+                  <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
+                    <h4 className="text-xs font-black uppercase font-mono text-white">4. Type Custom Phone Number (SMS)</h4>
+                    <div className="flex gap-2">
+                      <input
+                        type="tel"
+                        value={customWAContact}
+                        onChange={(e) => setCustomWAContact(e.target.value)}
+                        placeholder="e.g. 0244000000"
+                        className="bg-neutral-950 border border-neutral-800 rounded-xs text-[10px] font-mono font-bold text-white px-2 py-1.5 flex-1 focus:outline-none focus:border-amber-400"
+                      />
+                      <button
+                        disabled={!customWAContact.trim()}
+                        onClick={async () => {
+                          let cleanPhone = customWAContact.replace(/\D/g, "");
+                          const smsUrl = `sms:${cleanPhone}?body=${encodeURIComponent(whatsAppReminderModal.messageText)}`;
+                          if (typeof window !== 'undefined') {
+                            window.open(smsUrl, '_blank');
+                            showToast(`SMS App launched for ${customWAContact}!`);
+                          }
+                          navigator.clipboard.writeText(whatsAppReminderModal.messageText);
+                          // Trigger background logging
+                          try {
+                            await sendautomatedWhatsApp(
+                              customWAContact,
+                              whatsAppReminderModal.messageText,
+                              whatsAppReminderModal.student.id,
+                              whatsAppReminderModal.student.name,
+                              'sms-single-outstanding'
+                            );
+                          } catch (e) {}
+                          setWhatsAppReminderModal(null);
+                          setCustomWAContact('');
+                          setSelectedStaffPhone('');
+                          setReminderChannel('whatsapp');
+                        }}
+                        className="bg-amber-400 hover:bg-amber-500 disabled:opacity-40 disabled:hover:bg-amber-400 text-black px-4 py-1.5 text-[10px] font-mono font-black uppercase rounded-xs cursor-pointer"
+                      >
+                        Send SMS
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
 
             </div>
           </div>

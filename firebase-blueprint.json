@@ -8,7 +8,7 @@
         "id": { "type": "string", "description": "Unique user ID" },
         "name": { "type": "string", "description": "User display name" },
         "email": { "type": "string", "format": "email", "description": "User email address" },
-        "role": { "type": "string", "enum": ["Administrator", "Accountant", "Teacher"], "description": "Staff access role" },
+        "role": { "type": "string", "enum": ["Administrator", "Accountant", "Teacher", "Headmaster"], "description": "Staff access role" },
         "assignedClass": { "type": "string", "description": "Assigned class if the user is a Teacher" },
         "assignedClasses": { "type": "array", "description": "Assigned classes if the user is a Teacher with multiple gates" },
         "mfaEnabled": { "type": "boolean", "description": "Whether MFA is enabled or not" },
@@ -72,7 +72,7 @@
     },
     "WorkerSalary": {
       "title": "WorkerSalary",
-      "description": "Workers salary payments",
+      "description": "Workers salary payments with calculation formula: netPaid = baseSalary + allowance - deduction",
       "type": "object",
       "properties": {
         "id": { "type": "string", "description": "Unique salary payment ID" },
@@ -84,7 +84,7 @@
         "baseSalary": { "type": "number", "description": "Base salary in GHC" },
         "allowance": { "type": "number", "description": "Allowances / bonuses in GHC" },
         "deduction": { "type": "number", "description": "Deductions in GHC" },
-        "netPaid": { "type": "number", "description": "Total net GHC paid" },
+        "netPaid": { "type": "number", "description": "Total net GHC paid (baseSalary + allowance - deduction)" },
         "paymentMethod": { "type": "string", "enum": ["Cash", "Mobile Money", "Bank Transfer"], "description": "Mode of payment" },
         "notes": { "type": "string", "description": "Reference or personal notes" },
         "timestamp": { "type": "string", "description": "ISO timestamp of payment" }
@@ -129,7 +129,7 @@
     },
     "ExamsExpense": {
       "title": "ExamsExpense",
-      "description": "Exam companies printing invoices logs",
+      "description": "Exam companies printing invoices logs with formula: totalAmount = billingPerChild * studentCount (when billingPerChild > 0)",
       "type": "object",
       "properties": {
         "id": { "type": "string", "description": "Unique invoice ID" },
@@ -154,6 +154,53 @@
         "classFees": { "type": "object", "description": "JSON map object detailing class fee rules" }
       },
       "required": ["classFees"]
+    },
+    "Term": {
+      "title": "Term",
+      "description": "School Terms details",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique term ID" },
+        "name": { "type": "string", "description": "Term Name" },
+        "startDate": { "type": "string", "description": "YYYY-MM-DD date" },
+        "daysCount": { "type": "number", "description": "Number of active school days" },
+        "schoolDays": { "type": "array", "description": "Array of school dates YYYY-MM-DD" },
+        "active": { "type": "boolean", "description": "Whether this is the active term" }
+      },
+      "required": ["id", "name", "startDate", "daysCount", "schoolDays", "active"]
+    },
+    "TeacherEvaluation": {
+      "title": "TeacherEvaluation",
+      "description": "Teacher performance assessment evaluations",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique evaluation ID" },
+        "teacherId": { "type": "string", "description": "Teacher staff ID reference" },
+        "teacherName": { "type": "string", "description": "Teacher full name" },
+        "monthYear": { "type": "string", "description": "Reference month June 2026" },
+        "attendanceScore": { "type": "string", "enum": ["Excellent", "Good", "Fair", "Poor"] },
+        "punctualityScore": { "type": "string", "enum": ["Excellent", "Good", "Fair", "Poor"] },
+        "checkedEthics": { "type": "array", "description": "List of active ethics tags" },
+        "calculatedDeduction": { "type": "number", "description": "Total deductions percentage" },
+        "calculatedBenefit": { "type": "number", "description": "Total benefits percentage" },
+        "dateCreated": { "type": "string", "description": "Date created YYYY-MM-DD" }
+      },
+      "required": ["id", "teacherId", "teacherName", "monthYear", "attendanceScore", "punctualityScore", "checkedEthics", "calculatedDeduction", "calculatedBenefit", "dateCreated"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "System transaction log audit entries",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique log ID" },
+        "timestamp": { "type": "string", "description": "ISO timestamp" },
+        "action": { "type": "string", "description": "Action designation code" },
+        "category": { "type": "string", "enum": ["students", "payments", "expenses", "settings", "security", "other"] },
+        "operatorName": { "type": "string", "description": "Dispenser cashier name" },
+        "operatorRole": { "type": "string", "description": "Operator role" },
+        "details": { "type": "string", "description": "Full details of mutation" }
+      },
+      "required": ["id", "timestamp", "action", "category", "operatorName", "operatorRole", "details"]
     }
   },
   "firestore": {
@@ -192,6 +239,18 @@
     "/exams_settings/{settingsId}": {
       "schema": "ExamsSettings",
       "description": "Collection of default assessment standard prices"
+    },
+    "/terms/{termId}": {
+      "schema": "Term",
+      "description": "Collection of active/inactive school terms"
+    },
+    "/teacher_evaluations/{evaluationId}": {
+      "schema": "TeacherEvaluation",
+      "description": "Collection of teacher moral & attendance evaluations"
+    },
+    "/auditLogs/{logId}": {
+      "schema": "AuditLog",
+      "description": "Collection of system critical actions audit trails"
     }
   }
 }

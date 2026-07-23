@@ -25,9 +25,13 @@ export const SettingsPanel: React.FC = () => {
   const [baselineTermFeeJhs, setBaselineTermFeeJhs] = useState(systemSettings?.baselineTermFeeJhs ?? 450.00);
   const [currencyCode, setCurrencyCode] = useState(systemSettings?.currencyCode || 'GHC');
   const [customMotto, setCustomMotto] = useState(systemSettings?.customMotto || 'Holiness Is Our Key');
-  const [customLocation, setCustomLocation] = useState(systemSettings?.customLocation || 'Sawla');
+  const [customLocation, setCustomLocation] = useState(systemSettings?.customLocation || 'Sawla, Jelinkon street');
   const [primaryColor, setPrimaryColor] = useState(systemSettings?.primaryColor || '#fbbf24');
   const [adminWhatsAppPhone, setAdminWhatsAppPhone] = useState(systemSettings?.adminWhatsAppPhone || '');
+  const [whatsappGatewayType, setWhatsappGatewayType] = useState<'api' | 'direct'>(systemSettings?.whatsappGatewayType || 'direct');
+  const [whatsappGatewayMode, setWhatsappGatewayMode] = useState<'twilio' | 'webhook' | 'direct'>(systemSettings?.whatsappGatewayMode || 'direct');
+  const [whatsappWebhookUrl, setWhatsappWebhookUrl] = useState(systemSettings?.whatsappWebhookUrl || '');
+  const [whatsappWebhookToken, setWhatsappWebhookToken] = useState(systemSettings?.whatsappWebhookToken || '');
   const [autoSendCheckInAlert, setLocalAutoSendCheckInAlert] = useState(systemSettings?.autoSendCheckInAlert ?? false);
   const [autoSendArrearsAlert, setLocalAutoSendArrearsAlert] = useState(systemSettings?.autoSendArrearsAlert ?? false);
   const [termDiscountEnabled, setTermDiscountEnabled] = useState(systemSettings?.termDiscountEnabled ?? false);
@@ -54,7 +58,7 @@ export const SettingsPanel: React.FC = () => {
       baselineTermFeeJhs: 450.00,
       currencyCode: 'GHC',
       customMotto: 'Holiness Is Our Key',
-      customLocation: 'Sawla',
+      customLocation: 'Sawla, Jelinkon street',
       primaryColor: '#fbbf24'
     },
     {
@@ -99,7 +103,7 @@ export const SettingsPanel: React.FC = () => {
       baselineTermFeeJhs: 1800.00,
       currencyCode: 'USD',
       customMotto: 'Lead, Learn, Inspire',
-      customLocation: 'Sawla District',
+      customLocation: 'Sawla, Jelinkon street',
       primaryColor: '#f43f5e'
     }
   ];
@@ -150,7 +154,11 @@ export const SettingsPanel: React.FC = () => {
       termDiscountPercentage: Number(termDiscountPercentage),
       lateFeeEnabled,
       lateFeeCutoffTime,
-      lateFeePercentage: Number(lateFeePercentage)
+      lateFeePercentage: Number(lateFeePercentage),
+      whatsappGatewayType: whatsappGatewayMode === 'direct' ? 'direct' : 'api',
+      whatsappGatewayMode,
+      whatsappWebhookUrl,
+      whatsappWebhookToken
     };
 
     const isOk = await updateSystemSettings(payload);
@@ -280,16 +288,64 @@ export const SettingsPanel: React.FC = () => {
                   <label className="block text-xs font-mono font-bold text-neutral-400 uppercase tracking-wider mb-1">
                     Custom Logo URL (Image Link)
                   </label>
-                  <input
-                    type="url"
-                    value={schoolLogoUrl}
-                    onChange={(e) => setSchoolLogoUrl(e.target.value)}
-                    className="w-full bg-neutral-950 border border-neutral-800 focus:border-emerald-500/50 rounded p-2 text-xs text-white font-mono focus:outline-none transition-colors"
-                    placeholder="https://images.unsplash.com/... or blank to use default SVG Crest"
-                  />
-                  <p className="text-[10px] text-neutral-500 mt-1">
-                    Provide an image URL. Live-switch back to the circular SVG heraldic badge instantly by leaving this empty.
-                  </p>
+                  <div className="flex gap-2">
+                    <input
+                      type="url"
+                      value={schoolLogoUrl}
+                      onChange={(e) => setSchoolLogoUrl(e.target.value)}
+                      className="flex-1 bg-neutral-950 border border-neutral-800 focus:border-emerald-500/50 rounded p-2 text-xs text-white font-mono focus:outline-none transition-colors"
+                      placeholder="https://images.unsplash.com/... or blank to use default SVG Crest"
+                    />
+                    {schoolLogoUrl && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSchoolLogoUrl('');
+                          playFeedbackSound('success');
+                        }}
+                        className="bg-neutral-800 hover:bg-red-500/15 text-neutral-450 hover:text-red-450 px-3 py-2 border border-neutral-700 hover:border-red-500/30 text-xs font-mono font-bold transition-all cursor-pointer rounded"
+                        title="Reset to Default Crest"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                  
+                  {/* Live Mini Preview with Helper Info */}
+                  <div className="mt-2.5 p-2 bg-neutral-950 border border-neutral-900 rounded flex items-center gap-3">
+                    <div className="w-10 h-10 shrink-0 flex items-center justify-center bg-neutral-900 border border-neutral-800 rounded-full overflow-hidden">
+                      {schoolLogoUrl ? (
+                        <img 
+                          src={schoolLogoUrl} 
+                          alt="Branding Preview" 
+                          className="w-full h-full object-contain"
+                          onError={(e) => {
+                            const parent = e.currentTarget.parentElement;
+                            if (parent) {
+                              parent.innerHTML = '<div class="text-[9px] text-red-400 font-mono font-black" title="Error loading logo URL">FAIL</div>';
+                            }
+                          }}
+                        />
+                      ) : (
+                        <div className="w-full h-full p-1 flex items-center justify-center bg-white/5">
+                          <SchoolLogo size={28} />
+                        </div>
+                      )}
+                    </div>
+                    <div className="text-[10px] text-neutral-400 leading-relaxed flex-1">
+                      {schoolLogoUrl ? (
+                        <div>
+                          <span className="text-emerald-400 font-bold block">✓ Custom URL Set</span>
+                          If this URL becomes broken or CORS-blocked, the app will automatically display the default SVG Crest.
+                        </div>
+                      ) : (
+                        <div>
+                          <span className="text-amber-400 font-bold block">★ Default SVG Crest Active</span>
+                          Leaving this empty renders the official high-contrast circular heraldic badge of the academy.
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
@@ -587,6 +643,64 @@ export const SettingsPanel: React.FC = () => {
                     SMS/WhatsApp phone number of the master administrator. Automated notifications for budget goal thresholds (50%, 75%, 100%) will send directly here.
                   </p>
                 </div>
+
+                 <div>
+                  <label className="block text-xs font-mono font-bold text-neutral-400 uppercase tracking-wider mb-1">
+                    WhatsApp Gateway Dispatch Mode
+                  </label>
+                  <select
+                    value={whatsappGatewayMode}
+                    onChange={(e) => {
+                      const val = e.target.value as 'twilio' | 'webhook' | 'direct';
+                      setWhatsappGatewayMode(val);
+                      setWhatsappGatewayType(val === 'direct' ? 'direct' : 'api');
+                    }}
+                    className="w-full bg-neutral-950 border border-neutral-800 focus:border-emerald-500/50 rounded p-2 text-xs text-white font-mono focus:outline-none transition-colors"
+                  >
+                    <option value="direct">Manual / System Default (Direct WhatsApp Web/App Share Link)</option>
+                    <option value="twilio">Twilio API Gateway (Automated background dispatcher)</option>
+                    <option value="webhook">Custom / Webhook API Gateway (Automated HTTP POST request)</option>
+                  </select>
+                  <p className="text-[10px] text-neutral-500 mt-1">
+                    Configure if system-wide notifications prepare a pre-filled direct WhatsApp link to share manually, or attempt background server API automation via Twilio or Custom Webhook.
+                  </p>
+                </div>
+
+                {whatsappGatewayMode === 'webhook' && (
+                  <div className="bg-neutral-950 p-4 border border-neutral-850 rounded space-y-3 animate-fade-in">
+                    <div>
+                      <label className="block text-[10px] font-mono font-bold text-neutral-400 uppercase tracking-wider mb-1">
+                        Custom Webhook HTTP Endpoint URL
+                      </label>
+                      <input
+                        type="url"
+                        value={whatsappWebhookUrl}
+                        onChange={(e) => setWhatsappWebhookUrl(e.target.value)}
+                        className="w-full bg-neutral-900 border border-neutral-800 focus:border-emerald-500/50 rounded p-2 text-xs text-white font-mono focus:outline-none transition-colors"
+                        placeholder="e.g. https://api.my-gateway.com/send"
+                      />
+                      <p className="text-[9px] text-neutral-500 mt-1">
+                        System will perform an HTTP POST request to this endpoint with JSON body containing phone, message, studentId, studentName, and message type.
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-mono font-bold text-neutral-400 uppercase tracking-wider mb-1">
+                        Custom Webhook Authorization Token (Header)
+                      </label>
+                      <input
+                        type="password"
+                        value={whatsappWebhookToken}
+                        onChange={(e) => setWhatsappWebhookToken(e.target.value)}
+                        className="w-full bg-neutral-900 border border-neutral-800 focus:border-emerald-500/50 rounded p-2 text-xs text-white font-mono focus:outline-none transition-colors"
+                        placeholder="e.g. Bearer my-secret-auth-token"
+                      />
+                      <p className="text-[9px] text-neutral-500 mt-1">
+                        Optional authorization header token dispatched alongside custom payload requests.
+                      </p>
+                    </div>
+                  </div>
+                )}
 
                 <div className="border-t border-neutral-800 pt-4 mt-2 space-y-3">
                   <span className="block text-xs font-mono font-bold text-neutral-300 uppercase tracking-wider">

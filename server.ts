@@ -25,6 +25,8 @@ interface DatabaseSchema {
   examsPayments?: any[];
   examsExpenses?: any[];
   examsSettings?: any;
+  teacherEvaluations?: any[];
+  journalEntries?: any[];
 }
 
 function loadDatabase(): DatabaseSchema {
@@ -50,6 +52,12 @@ function loadDatabase(): DatabaseSchema {
       if (!parsed.examsSettings) {
         parsed.examsSettings = null;
       }
+      if (!parsed.teacherEvaluations) {
+        parsed.teacherEvaluations = [];
+      }
+      if (!parsed.journalEntries) {
+        parsed.journalEntries = [];
+      }
       return parsed;
     }
   } catch (error) {
@@ -68,7 +76,9 @@ function loadDatabase(): DatabaseSchema {
     budgetTargets: [],
     examsPayments: [],
     examsExpenses: [],
-    examsSettings: null
+    examsSettings: null,
+    teacherEvaluations: [],
+    journalEntries: []
   };
 }
 
@@ -174,10 +184,21 @@ async function bootstrapCloudSeeding() {
         }
       }
 
+      const skipDemo = local.systemSettings?.disableDemoData || false;
+      const DEMO_STUDENT_IDS = new Set([
+        's1', 's2', 's3', 's4', 's5', 's6', 's7', 's8', 's9', 's10',
+        's11', 's12', 's13', 's14', 's15', 's16', 's17', 's18', 's19', 's20',
+        's21', 's22', 's23', 's24', 's25', 's26', 's27'
+      ]);
+
       // Seed Students
       if (local.students && local.students.length > 0) {
-        for (let i = 0; i < local.students.length; i += 400) {
-          const chunk = local.students.slice(i, i + 400);
+        const studentsToSeed = skipDemo 
+          ? local.students.filter((s: any) => s && s.id && !DEMO_STUDENT_IDS.has(s.id))
+          : local.students;
+
+        for (let i = 0; i < studentsToSeed.length; i += 400) {
+          const chunk = studentsToSeed.slice(i, i + 400);
           const batch = writeBatch(firestoreDb);
           chunk.forEach(item => {
             if (item && item.id) {
@@ -190,8 +211,12 @@ async function bootstrapCloudSeeding() {
 
       // Seed Payments
       if (local.payments && local.payments.length > 0) {
-        for (let i = 0; i < local.payments.length; i += 400) {
-          const chunk = local.payments.slice(i, i + 400);
+        const paymentsToSeed = skipDemo 
+          ? local.payments.filter((p: any) => p && p.studentId && !DEMO_STUDENT_IDS.has(p.studentId))
+          : local.payments;
+
+        for (let i = 0; i < paymentsToSeed.length; i += 400) {
+          const chunk = paymentsToSeed.slice(i, i + 400);
           const batch = writeBatch(firestoreDb);
           chunk.forEach(item => {
             if (item && item.id) {
@@ -241,6 +266,68 @@ async function bootstrapCloudSeeding() {
   } catch (err) {
     console.error("Error during automatic server bootstrap seeding:", err);
   }
+}
+
+// Helper to merge local db.json cache with Cloud Firestore entries and heal any unsynced records
+function mergeAndSync<T extends { id: string }>(
+  localList: T[] | undefined | null,
+  cloudList: T[] | undefined | null,
+  collectionName: string
+): T[] {
+  const mergedMap = new Map<string, T>();
+  
+  // Add all local items first
+  if (Array.isArray(localList)) {
+    localList.forEach(item => {
+      if (item && typeof item === "object" && item.id) {
+        mergedMap.set(item.id, item);
+      }
+    });
+  }
+  
+  // Overwrite or add cloud items (cloud is the source of truth for updates)
+  if (Array.isArray(cloudList)) {
+    cloudList.forEach(item => {
+      if (item && typeof item === "object" && item.id) {
+        mergedMap.set(item.id, item);
+      }
+    });
+  }
+
+  // Find items that exist locally but are missing from the cloud
+  const unsyncedItems: T[] = [];
+  const cloudIds = new Set((cloudList || []).map(item => item?.id).filter(Boolean));
+  if (Array.isArray(localList)) {
+    localList.forEach(item => {
+      if (item && typeof item === "object" && item.id && !cloudIds.has(item.id)) {
+        unsyncedItems.push(item);
+      }
+    });
+  }
+
+  // Sync unsynced items to Firestore in the background
+  if (unsyncedItems.length > 0 && firestoreDb) {
+    console.log(`[Self-Healing Sync] Found ${unsyncedItems.length} unsynced items in "${collectionName}". Syncing to Firestore...`);
+    try {
+      const batch = writeBatch(firestoreDb);
+      let count = 0;
+      unsyncedItems.forEach(item => {
+        if (item && item.id) {
+          batch.set(doc(firestoreDb, collectionName, item.id), item);
+          count++;
+        }
+      });
+      if (count > 0) {
+        withTimeout(batch.commit(), 8000, `Self-Healing Sync ${collectionName}`)
+          .then(() => console.log(`[Self-Healing Sync] Successfully synced ${count} items to "${collectionName}"`))
+          .catch(err => console.error(`[Self-Healing Sync] Failed to sync ${collectionName} in background:`, err));
+      }
+    } catch (e) {
+      console.error(`[Self-Healing Sync] Error building writeBatch for ${collectionName}:`, e);
+    }
+  }
+
+  return Array.from(mergedMap.values());
 }
 
 let aiClient: any = null;
@@ -384,9 +471,9 @@ INSTRUCTIONS:
         const list = qSnaps.docs.map(d => d.data());
         // Sync local cache
         const dbLocal = loadDatabase();
-        dbLocal.users = list;
+        dbLocal.users = mergeAndSync(dbLocal.users, list, "users");
         saveDatabase(dbLocal);
-        return res.json(list);
+        return res.json(dbLocal.users);
       } catch (e) {
         console.error("Firestore getUsers failed, falling back to local SQLite/JSON:", e);
       }
@@ -449,9 +536,9 @@ INSTRUCTIONS:
         const list = qSnaps.docs.map(d => d.data());
         // Sync local cache
         const dbLocal = loadDatabase();
-        dbLocal.students = list;
+        dbLocal.students = mergeAndSync(dbLocal.students, list, "students");
         saveDatabase(dbLocal);
-        return res.json(list);
+        return res.json(dbLocal.students);
       } catch (e) {
         console.error("Firestore getStudents failed, falling back to local database:", e);
       }
@@ -567,9 +654,9 @@ INSTRUCTIONS:
         const list = qSnaps.docs.map(d => d.data());
         // Sync local cache
         const dbLocal = loadDatabase();
-        dbLocal.payments = list;
+        dbLocal.payments = mergeAndSync(dbLocal.payments, list, "payments");
         saveDatabase(dbLocal);
-        return res.json(list);
+        return res.json(dbLocal.payments);
       } catch (e) {
         console.error("Firestore getPayments failed, falling back to local database:", e);
       }
@@ -697,21 +784,155 @@ INSTRUCTIONS:
     res.json({ success: true });
   });
 
+  // POST /api/purge-demo
+  app.post("/api/purge-demo", async (req, res) => {
+    const demoStudentIds = new Set(Array.from({ length: 27 }, (_, i) => `s${i + 1}`));
+    const demoUserIds = new Set(['accountant-1']);
+
+    // 1. Process local database (db.json)
+    const dbLocal = loadDatabase();
+    
+    let purgedStudentsCount = 0;
+    let purgedPaymentsCount = 0;
+    let purgedUsersCount = 0;
+
+    if (dbLocal.students) {
+      dbLocal.students = dbLocal.students.filter(s => {
+        if (demoStudentIds.has(s.id)) {
+          purgedStudentsCount++;
+          return false;
+        }
+        return true;
+      });
+    }
+
+    if (dbLocal.payments) {
+      dbLocal.payments = dbLocal.payments.filter(p => {
+        if (demoStudentIds.has(p.studentId)) {
+          purgedPaymentsCount++;
+          return false;
+        }
+        return true;
+      });
+    }
+
+    if (dbLocal.users) {
+      dbLocal.users = dbLocal.users.filter(u => {
+        if (demoUserIds.has(u.id)) {
+          purgedUsersCount++;
+          return false;
+        }
+        return true;
+      });
+    }
+
+    saveDatabase(dbLocal);
+
+    // 2. Process Cloud Firestore if connected
+    if (firestoreDb) {
+      try {
+        // Delete students from Firestore
+        const studentBatch = writeBatch(firestoreDb);
+        let studentBatchCount = 0;
+        demoStudentIds.forEach(id => {
+          studentBatch.delete(doc(firestoreDb, "students", id));
+          studentBatchCount++;
+        });
+        if (studentBatchCount > 0) {
+          await withTimeout(studentBatch.commit(), 3000, "purgeDemoStudents");
+        }
+
+        // Delete users from Firestore
+        const userBatch = writeBatch(firestoreDb);
+        let userBatchCount = 0;
+        demoUserIds.forEach(id => {
+          userBatch.delete(doc(firestoreDb, "users", id));
+          userBatchCount++;
+        });
+        if (userBatchCount > 0) {
+          await withTimeout(userBatch.commit(), 3000, "purgeDemoUsers");
+        }
+
+        // Delete associated payments in Firestore using a query scan
+        const paymentsRef = collection(firestoreDb, "payments");
+        const qSnaps = await withTimeout(getDocs(paymentsRef), 3000, "getPaymentsForPurge");
+        const paymentBatch = writeBatch(firestoreDb);
+        let paymentsToDeleteCount = 0;
+        
+        qSnaps.docs.forEach((docSnap) => {
+          const data = docSnap.data();
+          if (data && demoStudentIds.has(data.studentId)) {
+            paymentBatch.delete(docSnap.ref);
+            paymentsToDeleteCount++;
+          }
+        });
+
+        if (paymentsToDeleteCount > 0) {
+          await withTimeout(paymentBatch.commit(), 4000, "purgeDemoPayments");
+        }
+      } catch (e) {
+        console.error("Firestore purge-demo failed:", e);
+      }
+    }
+
+    // Add audit log
+    await addAuditLog({
+      action: "PURGE_DEMO_DATA",
+      category: "settings",
+      operatorName: "Hakeem Yakubu",
+      operatorRole: "Administrator",
+      details: `Purged ${purgedStudentsCount} demo student records, ${purgedPaymentsCount} associated sample payments, and ${purgedUsersCount} demo staff accounts.`
+    });
+
+    res.json({
+      success: true,
+      purgedStudentsCount,
+      purgedPaymentsCount,
+      purgedUsersCount
+    });
+  });
+
+  async function clearCollection(colName: string) {
+    if (!firestoreDb) return;
+    try {
+      const qSnaps = await withTimeout(getDocs(collection(firestoreDb, colName)), 5000, `getDocs-${colName}`);
+      if (!qSnaps.empty) {
+        let batch = writeBatch(firestoreDb);
+        let count = 0;
+        for (const d of qSnaps.docs) {
+          batch.delete(d.ref);
+          count++;
+          if (count % 400 === 0) {
+            await withTimeout(batch.commit(), 5000, `clearCollectionBatch-${colName}`);
+            batch = writeBatch(firestoreDb);
+          }
+        }
+        if (count % 400 !== 0) {
+          await withTimeout(batch.commit(), 5000, `clearCollectionBatch-${colName}`);
+        }
+        console.log(`[Firestore Clear] Cleared ${count} documents from "${colName}"`);
+      }
+    } catch (e) {
+      console.error(`[Firestore Clear] Failed to clear "${colName}":`, e);
+    }
+  }
+
   // POST /api/seed
   app.post("/api/seed", async (req, res) => {
     const { users, students, payments, terms } = req.body;
     
     // Save to local cache backup
     const dbLocal = loadDatabase();
-    dbLocal.users = users || dbLocal.users;
-    dbLocal.students = students || dbLocal.students;
-    dbLocal.payments = payments || dbLocal.payments;
-    dbLocal.terms = terms || dbLocal.terms;
+    dbLocal.users = users !== undefined ? users : dbLocal.users;
+    dbLocal.students = students !== undefined ? students : dbLocal.students;
+    dbLocal.payments = payments !== undefined ? payments : dbLocal.payments;
+    dbLocal.terms = terms !== undefined ? terms : dbLocal.terms;
     saveDatabase(dbLocal);
 
     if (firestoreDb) {
       try {
         const seedCol = async (colName: string, items: any[]) => {
+          await clearCollection(colName);
           if (!items || items.length === 0) return;
           for (let i = 0; i < items.length; i += 400) {
             const chunk = items.slice(i, i + 400);
@@ -725,10 +946,10 @@ INSTRUCTIONS:
           }
         };
 
-        if (users) await seedCol("users", users);
-        if (students) await seedCol("students", students);
-        if (payments) await seedCol("payments", payments);
-        if (terms) await seedCol("terms", terms);
+        if (users !== undefined) await seedCol("users", users);
+        if (students !== undefined) await seedCol("students", students);
+        if (payments !== undefined) await seedCol("payments", payments);
+        if (terms !== undefined) await seedCol("terms", terms);
       } catch (e) {
         console.error("Firestore complete seeding failed:", e);
       }
@@ -744,9 +965,9 @@ INSTRUCTIONS:
         const list = qSnaps.docs.map(d => d.data());
         // Sync local cache
         const dbLocal = loadDatabase();
-        dbLocal.terms = list;
+        dbLocal.terms = mergeAndSync(dbLocal.terms, list, "terms");
         saveDatabase(dbLocal);
-        return res.json(list);
+        return res.json(dbLocal.terms);
       } catch (e) {
         console.error("Firestore getTerms failed, falling back to local database:", e);
       }
@@ -838,9 +1059,9 @@ INSTRUCTIONS:
         const list = qSnaps.docs.map(d => d.data());
         // Sync local cache
         const dbLocal = loadDatabase();
-        dbLocal.expenses = list;
+        dbLocal.expenses = mergeAndSync(dbLocal.expenses, list, "expenses");
         saveDatabase(dbLocal);
-        return res.json(list);
+        return res.json(dbLocal.expenses);
       } catch (e) {
         console.error("Firestore getExpenses failed, falling back to local database:", e);
       }
@@ -903,9 +1124,9 @@ INSTRUCTIONS:
         const list = qSnaps.docs.map(d => d.data());
         // Sync local cache
         const dbLocal = loadDatabase();
-        dbLocal.salaries = list;
+        dbLocal.salaries = mergeAndSync(dbLocal.salaries, list, "salaries");
         saveDatabase(dbLocal);
-        return res.json(list);
+        return res.json(dbLocal.salaries);
       } catch (e) {
         console.error("Firestore getSalaries failed, falling back to local database:", e);
       }
@@ -960,6 +1181,131 @@ INSTRUCTIONS:
     res.json({ success: true });
   });
 
+  // GET /api/evaluations
+  app.get("/api/evaluations", async (req, res) => {
+    if (firestoreDb) {
+      try {
+        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "teacher_evaluations")), 1500, "getTeacherEvaluations");
+        const list = qSnaps.docs.map(d => d.data());
+        // Sync local cache
+        const dbLocal = loadDatabase();
+        dbLocal.teacherEvaluations = mergeAndSync(dbLocal.teacherEvaluations, list, "teacher_evaluations");
+        saveDatabase(dbLocal);
+        return res.json(dbLocal.teacherEvaluations);
+      } catch (e) {
+        console.error("Firestore getTeacherEvaluations failed:", e);
+      }
+    }
+    const db = loadDatabase();
+    res.json(db.teacherEvaluations || []);
+  });
+
+  // POST /api/evaluations
+  app.post("/api/evaluations", async (req, res) => {
+    const evaluation = req.body;
+
+    // Save to local cache
+    const dbLocal = loadDatabase();
+    if (!dbLocal.teacherEvaluations) dbLocal.teacherEvaluations = [];
+    const idx = dbLocal.teacherEvaluations.findIndex((e) => e.id === evaluation.id);
+    if (idx >= 0) {
+      dbLocal.teacherEvaluations[idx] = evaluation;
+    } else {
+      dbLocal.teacherEvaluations.push(evaluation);
+    }
+    saveDatabase(dbLocal);
+
+    if (firestoreDb) {
+      try {
+        await withTimeout(setDoc(doc(firestoreDb, "teacher_evaluations", evaluation.id), evaluation), 1500, "saveTeacherEvaluation");
+      } catch (e) {
+        console.error("Firestore saveTeacherEvaluation failed:", e);
+      }
+    }
+    res.json({ success: true });
+  });
+
+  // DELETE /api/evaluations/:id
+  app.delete("/api/evaluations/:id", async (req, res) => {
+    const id = req.params.id;
+
+    // Save to local cache
+    const dbLocal = loadDatabase();
+    if (dbLocal.teacherEvaluations) {
+      dbLocal.teacherEvaluations = dbLocal.teacherEvaluations.filter((e) => e.id !== id);
+      saveDatabase(dbLocal);
+    }
+
+    if (firestoreDb) {
+      try {
+        await withTimeout(deleteDoc(doc(firestoreDb, "teacher_evaluations", id)), 1500, "deleteTeacherEvaluation");
+      } catch (e) {
+        console.error("Firestore deleteTeacherEvaluation failed:", e);
+      }
+    }
+    res.json({ success: true });
+  });
+
+  // GET /api/journal_entries
+  app.get("/api/journal_entries", async (req, res) => {
+    if (firestoreDb) {
+      try {
+        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "journal_entries")), 1500, "getJournalEntries");
+        const list = qSnaps.docs.map(d => d.data());
+        const dbLocal = loadDatabase();
+        dbLocal.journalEntries = mergeAndSync(dbLocal.journalEntries, list, "journal_entries");
+        saveDatabase(dbLocal);
+        return res.json(dbLocal.journalEntries);
+      } catch (e) {
+        console.error("Firestore getJournalEntries failed, falling back to local database:", e);
+      }
+    }
+    const dbLocal = loadDatabase();
+    res.json(dbLocal.journalEntries || []);
+  });
+
+  // POST /api/journal_entries
+  app.post("/api/journal_entries", async (req, res) => {
+    const entry = req.body;
+    const dbLocal = loadDatabase();
+    if (!dbLocal.journalEntries) dbLocal.journalEntries = [];
+    const idx = dbLocal.journalEntries.findIndex((e) => e.id === entry.id);
+    if (idx >= 0) {
+      dbLocal.journalEntries[idx] = entry;
+    } else {
+      dbLocal.journalEntries.push(entry);
+    }
+    saveDatabase(dbLocal);
+
+    if (firestoreDb) {
+      try {
+        await withTimeout(setDoc(doc(firestoreDb, "journal_entries", entry.id), entry), 1500, "saveJournalEntry");
+      } catch (e) {
+        console.error("Firestore saveJournalEntry failed:", e);
+      }
+    }
+    res.json({ success: true });
+  });
+
+  // DELETE /api/journal_entries/:id
+  app.delete("/api/journal_entries/:id", async (req, res) => {
+    const id = req.params.id;
+    const dbLocal = loadDatabase();
+    if (dbLocal.journalEntries) {
+      dbLocal.journalEntries = dbLocal.journalEntries.filter((e) => e.id !== id);
+      saveDatabase(dbLocal);
+    }
+
+    if (firestoreDb) {
+      try {
+        await withTimeout(deleteDoc(doc(firestoreDb, "journal_entries", id)), 1500, "deleteJournalEntry");
+      } catch (e) {
+        console.error("Firestore deleteJournalEntry failed:", e);
+      }
+    }
+    res.json({ success: true });
+  });
+
   // GET /api/budget_targets
   app.get("/api/budget_targets", async (req, res) => {
     if (firestoreDb) {
@@ -968,9 +1314,9 @@ INSTRUCTIONS:
         const list = qSnaps.docs.map(d => d.data());
         // Sync local cache
         const dbLocal = loadDatabase();
-        dbLocal.budgetTargets = list;
+        dbLocal.budgetTargets = mergeAndSync(dbLocal.budgetTargets, list, "budget_targets");
         saveDatabase(dbLocal);
-        return res.json(list);
+        return res.json(dbLocal.budgetTargets);
       } catch (e) {
         console.error("Firestore getBudgetTargets failed, falling back to local database:", e);
       }
@@ -1032,9 +1378,9 @@ INSTRUCTIONS:
         const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "exams_payments")), 1500, "getExamsPayments");
         const list = qSnaps.docs.map(d => d.data());
         const dbLocal = loadDatabase();
-        dbLocal.examsPayments = list;
+        dbLocal.examsPayments = mergeAndSync(dbLocal.examsPayments, list, "exams_payments");
         saveDatabase(dbLocal);
-        return res.json(list);
+        return res.json(dbLocal.examsPayments);
       } catch (e) {
         console.error("Firestore getExamsPayments failed, falling back to local database:", e);
       }
@@ -1092,9 +1438,9 @@ INSTRUCTIONS:
         const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "exams_expenses")), 1500, "getExamsExpenses");
         const list = qSnaps.docs.map(d => d.data());
         const dbLocal = loadDatabase();
-        dbLocal.examsExpenses = list;
+        dbLocal.examsExpenses = mergeAndSync(dbLocal.examsExpenses, list, "exams_expenses");
         saveDatabase(dbLocal);
-        return res.json(list);
+        return res.json(dbLocal.examsExpenses);
       } catch (e) {
         console.error("Firestore getExamsExpenses failed, falling back to local database:", e);
       }
@@ -1281,7 +1627,18 @@ INSTRUCTIONS:
 
   // POST /api/whatsapp/send
   app.post("/api/whatsapp/send", async (req, res) => {
-    const { phone, message, studentId, studentName, type, operator } = req.body;
+    const { 
+      phone, 
+      message, 
+      studentId, 
+      studentName, 
+      type, 
+      operator, 
+      isDirect,
+      whatsappGatewayMode,
+      whatsappWebhookUrl,
+      whatsappWebhookToken
+    } = req.body;
 
     if (!phone || !message) {
       return res.status(400).json({ error: "Missing required parameters: 'phone' and 'message' are required." });
@@ -1298,38 +1655,58 @@ INSTRUCTIONS:
 
     const provider = (process.env.WHATSAPP_PROVIDER || "simulated").toLowerCase();
 
-    // Check if any API credentials or URLs are configured to decide whether to trigger a real API
-    const isConfigured = 
-      provider === "meta" ||
-      provider === "twilio" ||
-      provider === "ultramsg" ||
-      provider === "arkesel" ||
-      (provider !== "simulated" && (
-        !!process.env.WHATSAPP_API_URL || 
-        !!process.env.WHATSAPP_TWILIO_SID || 
-        !!process.env.WHATSAPP_PHONE_NUMBER_ID ||
-        !!process.env.WHATSAPP_API_TOKEN
-      ));
+    // Check if direct share is requested
+    if (isDirect) {
+      responseStatus = "direct_share";
+      responseDetails = "Message prepared and opened using direct WhatsApp web/app link by user.";
+    } else {
+      const activeMode = whatsappGatewayMode || (provider === "twilio" ? "twilio" : "direct");
 
-    if (isConfigured) {
-      try {
-        let url = "";
-        let method = "POST";
-        let headers: Record<string, string> = { "Content-Type": "application/json" };
-        let body: any = "";
+      if (activeMode === "webhook") {
+        try {
+          const targetUrl = whatsappWebhookUrl || process.env.WHATSAPP_API_URL || "";
+          if (!targetUrl) {
+            responseStatus = "config_missing";
+            responseDetails = "Custom Webhook URL has not been configured in Admin Settings.";
+          } else {
+            const headers: Record<string, string> = { "Content-Type": "application/json" };
+            if (whatsappWebhookToken) {
+              headers["Authorization"] = whatsappWebhookToken;
+            } else if (process.env.WHATSAPP_API_TOKEN) {
+              headers["Authorization"] = `Bearer ${process.env.WHATSAPP_API_TOKEN}`;
+            }
 
-        if (provider === "arkesel") {
-          // Arkesel Ghana Integration (Mobile Money friendly)
-          const apiKey = process.env.WHATSAPP_API_TOKEN || "";
-          const sender = process.env.WHATSAPP_SENDER_PHONE || "SAAKOHCA";
-          
-          url = `https://sms.arkesel.com/sms/api?action=send-sms&api_key=${encodeURIComponent(apiKey)}&to=${encodeURIComponent(normalizedPhone)}&from=${encodeURIComponent(sender)}&sms=${encodeURIComponent(message)}`;
-          method = "GET";
-          headers = {};
-          body = null;
-        } 
-        else if (provider === "twilio" || (!!process.env.WHATSAPP_TWILIO_SID && !process.env.WHATSAPP_API_URL)) {
-          // Twilio Integration
+            const body = JSON.stringify({
+              to: normalizedPhone,
+              message: message,
+              studentId: studentId || "",
+              studentName: studentName || "",
+              type: type || "system-alert"
+            });
+
+            const apiResponse = await fetch(targetUrl, { method: "POST", headers, body });
+            const responseText = await apiResponse.text();
+            let responseJson;
+            try {
+              responseJson = JSON.parse(responseText);
+            } catch {
+              responseJson = { raw: responseText };
+            }
+
+            if (apiResponse.ok) {
+              responseStatus = "delivered";
+              responseDetails = `Webhook post succeeded. HTTP ${apiResponse.status}: ${JSON.stringify(responseJson)}`;
+            } else {
+              responseStatus = "api_error";
+              responseDetails = `Webhook target returned HTTP ${apiResponse.status}: ${JSON.stringify(responseJson)}`;
+            }
+          }
+        } catch (error: any) {
+          responseStatus = "connection_failed";
+          responseDetails = `Failed to contact Custom Webhook: ${error?.message || error}`;
+        }
+      } else if (activeMode === "twilio") {
+        try {
           const twilioSid = process.env.WHATSAPP_TWILIO_SID || "";
           const twilioAuthToken = process.env.WHATSAPP_TWILIO_AUTH_TOKEN || process.env.WHATSAPP_API_TOKEN || "";
           let fromNumber = process.env.WHATSAPP_SENDER_PHONE || "";
@@ -1337,105 +1714,56 @@ INSTRUCTIONS:
             fromNumber = `whatsapp:${fromNumber}`;
           }
 
-          url = `https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/Messages.json`;
-          
-          const authString = Buffer.from(`${twilioSid}:${twilioAuthToken}`).toString("base64");
-          headers = {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Authorization": `Basic ${authString}`
-          };
+          if (!twilioSid || !twilioAuthToken) {
+            responseStatus = "simulated_success";
+            responseDetails = "Simulated Twilio delivery (WHATSAPP_TWILIO_SID or AUTH_TOKEN not set in environment).";
+          } else {
+            const url = `https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/Messages.json`;
+            const authString = Buffer.from(`${twilioSid}:${twilioAuthToken}`).toString("base64");
+            const headers = {
+              "Content-Type": "application/x-www-form-urlencoded",
+              "Authorization": `Basic ${authString}`
+            };
 
-          // Recipient phone must have + prefix for twilio
-          let twilioTo = normalizedPhone;
-          if (!twilioTo.startsWith("+")) {
-            twilioTo = `+${twilioTo}`;
-          }
-          if (!twilioTo.startsWith("whatsapp:")) {
-            twilioTo = `whatsapp:${twilioTo}`;
-          }
-
-          const params = new URLSearchParams();
-          params.append("To", twilioTo);
-          params.append("From", fromNumber);
-          params.append("Body", message);
-          body = params.toString();
-        } 
-        else if (provider === "meta" || !!process.env.WHATSAPP_PHONE_NUMBER_ID) {
-          // Meta Cloud API Integration
-          const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID || "";
-          const token = process.env.WHATSAPP_API_TOKEN || "";
-          url = `https://graph.facebook.com/v20.0/${phoneId}/messages`;
-          
-          headers = {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${token}`
-          };
-          body = JSON.stringify({
-            messaging_product: "whatsapp",
-            recipient_type: "individual",
-            to: normalizedPhone,
-            type: "text",
-            text: { preview_url: false, body: message }
-          });
-        }
-        else if (provider === "ultramsg" || (process.env.WHATSAPP_API_URL && process.env.WHATSAPP_API_URL.includes("ultramsg.com"))) {
-          // UltraMsg Integration
-          url = process.env.WHATSAPP_API_URL || "https://api.ultramsg.com/instance181469/";
-          const token = process.env.WHATSAPP_API_TOKEN || "uitetqebejgf296w";
-          
-          if (url && !url.endsWith("/messages/chat") && !url.includes("messages/chat")) {
-            url = url.endsWith('/') ? `${url}messages/chat` : `${url}/messages/chat`;
-          }
-          
-          headers = { "Content-Type": "application/x-www-form-urlencoded" };
-          const params = new URLSearchParams();
-          params.append("token", token);
-          params.append("to", normalizedPhone);
-          params.append("body", message);
-          body = params.toString();
-        }
-        else {
-          // Custom / Generic webhook configuration (fallback)
-          url = process.env.WHATSAPP_API_URL || "";
-          headers = {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${process.env.WHATSAPP_API_TOKEN || ""}`
-          };
-          body = JSON.stringify({
-            messaging_product: "whatsapp",
-            to: normalizedPhone,
-            type: "text",
-            text: { body: message },
-            sender_phone: process.env.WHATSAPP_SENDER_PHONE,
-            payload: {
-              phone: normalizedPhone,
-              message,
-              studentId,
-              studentName,
-              type
+            let twilioTo = normalizedPhone;
+            if (!twilioTo.startsWith("+")) {
+              twilioTo = `+${twilioTo}`;
             }
-          });
-        }
+            if (!twilioTo.startsWith("whatsapp:")) {
+              twilioTo = `whatsapp:${twilioTo}`;
+            }
 
-        const apiResponse = await fetch(url, { method, headers, body });
-        const responseText = await apiResponse.text();
-        let responseJson;
-        try {
-          responseJson = JSON.parse(responseText);
-        } catch {
-          responseJson = { raw: responseText };
-        }
+            const params = new URLSearchParams();
+            params.append("To", twilioTo);
+            params.append("From", fromNumber);
+            params.append("Body", message);
+            const body = params.toString();
 
-        if (apiResponse.ok) {
-          responseStatus = "delivered";
-          responseDetails = `Delivered successfully. HTTP ${apiResponse.status}: ${JSON.stringify(responseJson)}`;
-        } else {
-          responseStatus = "api_error";
-          responseDetails = `Gateway response HTTP ${apiResponse.status}: ${JSON.stringify(responseJson)}`;
+            const apiResponse = await fetch(url, { method: "POST", headers, body });
+            const responseText = await apiResponse.text();
+            let responseJson;
+            try {
+              responseJson = JSON.parse(responseText);
+            } catch {
+              responseJson = { raw: responseText };
+            }
+
+            if (apiResponse.ok) {
+              responseStatus = "delivered";
+              responseDetails = `Delivered successfully via Twilio. HTTP ${apiResponse.status}`;
+            } else {
+              responseStatus = "api_error";
+              responseDetails = `Twilio API returned HTTP ${apiResponse.status}: ${JSON.stringify(responseJson)}`;
+            }
+          }
+        } catch (error: any) {
+          responseStatus = "connection_failed";
+          responseDetails = `Failed to send via Twilio API: ${error?.message || error}`;
         }
-      } catch (error: any) {
-        responseStatus = "connection_failed";
-        responseDetails = `Failed to contact gateway endpoint. Error: ${error?.message || error}`;
+      } else {
+        // Direct / manual
+        responseStatus = "direct_share";
+        responseDetails = "Manual/direct link fallback or simulated success (no background gateway configured).";
       }
     }
 

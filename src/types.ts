@@ -25,6 +25,7 @@ export interface Student {
   termFee?: number; // Fixed fee for entire school term for Term Payer (e.g. 350.00 GHC)
   legacyDebt?: number; // Pre-adoption/outstanding legacy debt to be integrated into their system balance (GHC)
   idCardDeactivated?: boolean;
+  enrollmentDate?: string; // Pupil's first day / enrollment date (YYYY-MM-DD) to ignore older dates for debt
 }
 
 export interface PaymentHistoryEntry {
@@ -89,6 +90,7 @@ export interface UserAccount {
   renewalPeriod?: string; // e.g., '1 Year', '6 Months', etc.
   signatureUrl?: string; // Staff/Employee digital signature
   managementSignatureUrl?: string; // Signatory officer digital signature
+  personalAddress?: string; // Teacher/Staff personal address for contracts
 }
 
 export interface Term {
@@ -119,12 +121,16 @@ export interface BackupRecord {
     payments: number;
     users: number;
     terms: number;
+    examsPayments?: number;
+    examsExpenses?: number;
   };
   data: {
     students: Student[];
     payments: PaymentRecord[];
     users: UserAccount[];
     terms: Term[];
+    examsPayments?: ExamsPayment[];
+    examsExpenses?: ExamsExpense[];
   };
 }
 
@@ -203,6 +209,12 @@ export interface SystemSettings {
   lateFeeEnabled?: boolean;
   lateFeeCutoffTime?: string; // e.g. "08:30"
   lateFeePercentage?: number; // e.g. 10 (representing 10%)
+  disableDemoData?: boolean;
+  whatsappGatewayType?: 'api' | 'direct';
+  whatsappGatewayMode?: 'twilio' | 'webhook' | 'direct';
+  whatsappWebhookUrl?: string;
+  whatsappWebhookToken?: string;
+  theme?: 'dark' | 'daylight';
 }
 
 export interface BudgetTarget {
@@ -254,6 +266,52 @@ export interface ExamsClassFeeStructure {
 
 export interface ExamsSettings {
   classFees: Record<StudentClass, ExamsClassFeeStructure>;
+  eligibleClasses?: StudentClass[];
+}
+
+export interface EthicConfig {
+  id: string;
+  label: string;
+  type: 'positive' | 'negative';
+  percentage: number; // e.g. 5 for 5%
+  description: string;
+}
+
+export const STANDARD_ETHICS: EthicConfig[] = [
+  // Negative
+  { id: 'neg-late', label: 'Late Coming / Poor Punctuality', type: 'negative', percentage: 2, description: 'Repeated lateness without excuse' },
+  { id: 'neg-negligence', label: 'Negligence of Duty', type: 'negative', percentage: 5, description: 'Leaving classroom unattended or failure to supervise students' },
+  { id: 'neg-absent', label: 'Unapproved Absenteeism', type: 'negative', percentage: 10, description: 'Absence from school without prior notice or permit' },
+  { id: 'neg-lessons', label: 'Failure to Submit Lesson Notes', type: 'negative', percentage: 4, description: 'Failure to prep or submit required teaching plans' },
+  { id: 'neg-control', label: 'Poor Classroom Control', type: 'negative', percentage: 3, description: 'Inability to maintain orderly class environment' },
+  { id: 'neg-misconduct', label: 'General Professional Misconduct', type: 'negative', percentage: 5, description: 'Violation of general school policies or standards' },
+
+  // Positive
+  { id: 'pos-attendance', label: 'Perfect Attendance Consistency', type: 'positive', percentage: 5, description: '100% active presence and devotion' },
+  { id: 'pos-punctuality', label: 'Excellent Punctuality & Early Bird', type: 'positive', percentage: 3, description: 'Always arriving before assembly time' },
+  { id: 'pos-delivery', label: 'Outstanding Lesson Notes & Delivery', type: 'positive', percentage: 4, description: 'Meticulously crafted notes and active teaching' },
+  { id: 'pos-engagement', label: 'High Student Engagement & Care', type: 'positive', percentage: 3, description: 'Goes above and beyond to support struggling students' },
+  { id: 'pos-hours', label: 'Active Teamwork & Extra Hours', type: 'positive', percentage: 5, description: 'Staying after school or helping with special events' },
+  { id: 'pos-dressing', label: 'Professionalism & Clean Dressing', type: 'positive', percentage: 2, description: 'An exemplary role model in speech, dress, and conduct' }
+];
+
+export interface TeacherEvaluation {
+  id: string;
+  teacherId: string;
+  teacherName: string;
+  monthYear: string; // e.g. "June 2026" or "2026-06"
+  attendanceScore: 'Excellent' | 'Good' | 'Fair' | 'Poor';
+  punctualityScore: 'Excellent' | 'Good' | 'Fair' | 'Poor';
+  negligenceReports?: string;
+  checkedEthics: string[]; // List of ethic IDs
+  calculatedDeduction: number; // total percentage deduction
+  calculatedBenefit: number;   // total percentage benefit
+  notes?: string;
+  recordedBy?: string;
+  dateCreated: string;
+  customPercentages?: Record<string, number>;
+  customAttendancePct?: number | null;
+  customPunctualityPct?: number | null;
 }
 
 export interface AuditLog {
@@ -268,6 +326,18 @@ export interface AuditLog {
   studentName?: string;
   amount?: number;
 }
+
+export interface JournalEntry {
+  id: string;
+  date: string; // YYYY-MM-DD
+  description: string;
+  debitAccount: string;
+  creditAccount: string;
+  amount: number;
+  recordedBy: string;
+  timestamp: string; // ISO string
+}
+
 
 
 

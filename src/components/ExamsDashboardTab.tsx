@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
-import { StudentClass, SchoolCategory, PaymentMethod } from '../types';
+import { StudentClass, SchoolCategory, PaymentMethod, ExamsExpense } from '../types';
 import { 
   ResponsiveContainer, 
   BarChart, 
@@ -33,11 +33,14 @@ import {
   ArrowUpRight,
   ClipboardCheck,
   RefreshCw,
+  X,
   Sliders,
   DollarSign,
   FileSpreadsheet,
   Calendar,
-  History
+  History,
+  Check,
+  Eye
 } from 'lucide-react';
 
 export function ExamsDashboardTab() {
@@ -53,11 +56,21 @@ export function ExamsDashboardTab() {
     deleteExamsPayment, 
     addExamsExpense, 
     deleteExamsExpense, 
+    updateExamsExpense,
     updateExamsSettings,
     playFeedbackSound
   } = useApp();
 
   const [activeSubTab, setActiveSubTab] = useState<'insights' | 'collection' | 'companies' | 'configuration'>('insights');
+  
+  // Local custom toast system
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => {
+      setToastMessage(null);
+    }, 3500);
+  };
   
   // States for fee collection
   const [selectedClass, setSelectedClass] = useState<StudentClass>('B1');
@@ -66,12 +79,14 @@ export function ExamsDashboardTab() {
   const [collectAmount, setCollectAmount] = useState<string>('');
   const [collectMethod, setCollectMethod] = useState<PaymentMethod>('Cash');
   const [collectNotes, setCollectNotes] = useState('');
+  const [collectDate, setCollectDate] = useState<string>('');
 
   // States for company invoice
   const [invoiceProvider, setInvoiceProvider] = useState('');
   const [invoiceClass, setInvoiceClass] = useState<StudentClass | 'All-Preschool' | 'All-Primary' | 'All-JHS' | 'Entire-School'>('Entire-School');
   const [invoiceBillingPerChild, setInvoiceBillingPerChild] = useState<string>('15');
   const [invoiceNotes, setInvoiceNotes] = useState('');
+  const [invoicePaymentOption, setInvoicePaymentOption] = useState<'paid' | 'unpaid'>('paid');
   const [expenseType, setExpenseType] = useState<'publisher' | 'other'>('publisher');
   const [otherExpenseAmount, setOtherExpenseAmount] = useState<string>('');
 
@@ -86,13 +101,70 @@ export function ExamsDashboardTab() {
 
   // Daily totals auditing states
   const [auditSearchQuery, setAuditSearchQuery] = useState('');
+  const [selectedClassDetail, setSelectedClassDetail] = useState<{ date: string; class: StudentClass } | null>(null);
+  const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'yesterday' | 'this-week'>('all');
+  const [verifiedDates, setVerifiedDates] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('s_exams_verified_dates');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const toggleVerifyDate = (date: string) => {
+    setVerifiedDates(prev => {
+      const updated = prev.includes(date) ? prev.filter(d => d !== date) : [...prev, date];
+      localStorage.setItem('s_exams_verified_dates', JSON.stringify(updated));
+      return updated;
+    });
+    if (playFeedbackSound) {
+      playFeedbackSound('success');
+    }
+  };
+
+  // Classes listing
+  const CLASSES_LIST: StudentClass[] = [
+    'Nursery', 'KG1', 'KG2',
+    'B1', 'B2', 'B3', 'B4', 'B5', 'B6',
+    'B7', 'B8', 'B9'
+  ];
+
+  // Helper to resolve student category
+  const getClassCategory = (cls: StudentClass): SchoolCategory => {
+    if (['Nursery', 'KG1', 'KG2'].includes(cls)) return 'Pre-school';
+    if (['B1', 'B2', 'B3', 'B4', 'B5', 'B6'].includes(cls)) return 'Primary';
+    return 'JHS';
+  };
+
+  // Safe standard settings loader
+  const safeSettings = useMemo(() => {
+    const defaultEligible = CLASSES_LIST.filter(cls => cls !== 'Nursery');
+    const base = (examsSettings && examsSettings.classFees) ? examsSettings : {
+      classFees: CLASSES_LIST.reduce((acc, cls) => {
+        const cat = getClassCategory(cls);
+        if (cat === 'Pre-school') acc[cls] = { feeCharged: 20, companyBilling: 12 };
+        else if (cat === 'Primary') acc[cls] = { feeCharged: 30, companyBilling: 18 };
+        else acc[cls] = { feeCharged: 45, companyBilling: 25 };
+        return acc;
+      }, {} as Record<StudentClass, { feeCharged: number; companyBilling: number }>),
+      eligibleClasses: defaultEligible
+    };
+    return {
+      classFees: base.classFees,
+      eligibleClasses: base.eligibleClasses ?? defaultEligible
+    };
+  }, [examsSettings]);
 
   // Filter terms
   const currentTermId = activeTerm?.id || 'term_default';
 
   // Group exams fee payments by date and then by class for easy daily auditing
   const dailyClassTotals = useMemo(() => {
-    const activeTermPayments = examsPayments.filter(p => p.termId === currentTermId);
+    const activeTermPayments = examsPayments.filter(p => {
+      if (p.termId !== currentTermId) return false;
+      return safeSettings.eligibleClasses?.includes(p.class);
+    });
     
     // Grouping structure: { "YYYY-MM-DD": { "B1": total_amount, "KG1": total_amount } }
     const dateMap: Record<string, Record<StudentClass, number>> = {};
@@ -121,59 +193,127 @@ export function ExamsDashboardTab() {
         totalCollected
       };
     }).sort((a, b) => b.date.localeCompare(a.date));
-  }, [examsPayments, currentTermId]);
+  }, [examsPayments, currentTermId, safeSettings]);
 
-  // Filtered daily class collections based on query
+  // Filtered daily class collections based on query and quick filters
   const filteredDailyClassTotals = useMemo(() => {
-    if (!auditSearchQuery.trim()) return dailyClassTotals;
+    let list = dailyClassTotals;
+
+    // Apply date preset filter
+    if (dateFilter === 'today') {
+      list = list.filter(item => item.date === currentDate);
+    } else if (dateFilter === 'yesterday') {
+      const yesterdayStr = (() => {
+        try {
+          const d = new Date(currentDate);
+          d.setDate(d.getDate() - 1);
+          return d.toISOString().split('T')[0];
+        } catch {
+          return '';
+        }
+      })();
+      list = list.filter(item => item.date === yesterdayStr);
+    } else if (dateFilter === 'this-week') {
+      const sevenDaysAgoStr = (() => {
+        try {
+          const d = new Date(currentDate);
+          d.setDate(d.getDate() - 7);
+          return d.toISOString().split('T')[0];
+        } catch {
+          return '';
+        }
+      })();
+      list = list.filter(item => item.date >= sevenDaysAgoStr && item.date <= currentDate);
+    }
+
+    if (!auditSearchQuery.trim()) return list;
     const query = auditSearchQuery.toLowerCase();
-    return dailyClassTotals.filter(item => 
+    return list.filter(item => 
       item.date.includes(query) || 
       Object.keys(item.classTotals).some(cls => cls.toLowerCase().includes(query))
     );
-  }, [dailyClassTotals, auditSearchQuery]);
+  }, [dailyClassTotals, auditSearchQuery, dateFilter, currentDate]);
 
-  // Classes listing
-  const CLASSES_LIST: StudentClass[] = [
-    'Nursery', 'KG1', 'KG2',
-    'B1', 'B2', 'B3', 'B4', 'B5', 'B6',
-    'B7', 'B8', 'B9'
-  ];
+  // Modal payments breakdown for the clicked class & date
+  const modalPayments = useMemo(() => {
+    if (!selectedClassDetail) return [];
+    return examsPayments.filter(p => 
+      p.datePaid === selectedClassDetail.date && 
+      p.class === selectedClassDetail.class &&
+      p.termId === currentTermId
+    );
+  }, [examsPayments, selectedClassDetail, currentTermId]);
 
-  // Helper to resolve student category
-  const getClassCategory = (cls: StudentClass): SchoolCategory => {
-    if (['Nursery', 'KG1', 'KG2'].includes(cls)) return 'Pre-school';
-    if (['B1', 'B2', 'B3', 'B4', 'B5', 'B6'].includes(cls)) return 'Primary';
-    return 'JHS';
-  };
 
-  // Safe standard settings loader
-  const safeSettings = useMemo(() => {
-    if (examsSettings && examsSettings.classFees) return examsSettings;
-    return {
-      classFees: CLASSES_LIST.reduce((acc, cls) => {
-        const cat = getClassCategory(cls);
-        if (cat === 'Pre-school') acc[cls] = { feeCharged: 20, companyBilling: 12 };
-        else if (cat === 'Primary') acc[cls] = { feeCharged: 30, companyBilling: 18 };
-        else acc[cls] = { feeCharged: 45, companyBilling: 25 };
-        return acc;
-      }, {} as Record<StudentClass, { feeCharged: number; companyBilling: number }>)
-    };
-  }, [examsSettings]);
 
   // Active student list
   const activeStudents = useMemo(() => {
     return students.filter(s => s.active);
   }, [students]);
 
+  // Dynamic adjusted company/publisher expenses based on class eligibility
+  const adjustedExamsExpenses = useMemo(() => {
+    return examsExpenses.map(expense => {
+      const isOther = expense.studentCount === 0 || expense.notes?.includes('[Other Expense]');
+      if (isOther) {
+        return expense;
+      }
+
+      // Publisher expense: determine targeted classes
+      let targetedClasses: StudentClass[] = [];
+      if (expense.targetClass === 'Entire-School') {
+        targetedClasses = CLASSES_LIST;
+      } else if (expense.targetClass === 'All-Preschool') {
+        targetedClasses = ['Nursery', 'KG1', 'KG2'];
+      } else if (expense.targetClass === 'All-Primary') {
+        targetedClasses = ['B1', 'B2', 'B3', 'B4', 'B5', 'B6'];
+      } else if (expense.targetClass === 'All-JHS') {
+        targetedClasses = ['B7', 'B8', 'B9'];
+      } else {
+        targetedClasses = [expense.targetClass as StudentClass];
+      }
+
+      // Filter only currently eligible classes
+      const eligibleTargetClasses = targetedClasses.filter(cls => safeSettings.eligibleClasses?.includes(cls));
+
+      // Count active students in these eligible classes
+      const eligibleStudentCount = activeStudents.filter(s => eligibleTargetClasses.includes(s.class)).length;
+
+      const adjustedTotal = expense.billingPerChild * eligibleStudentCount;
+      const adjustedAmountPaid = expense.status === 'Paid' ? adjustedTotal : Math.min(expense.amountPaid, adjustedTotal);
+      
+      let adjustedStatus = expense.status;
+      if (adjustedAmountPaid >= adjustedTotal) {
+        adjustedStatus = 'Paid';
+      } else if (adjustedAmountPaid > 0) {
+        adjustedStatus = 'Partially Paid';
+      } else {
+        adjustedStatus = 'Unpaid';
+      }
+
+      return {
+        ...expense,
+        studentCount: eligibleStudentCount,
+        totalAmount: adjustedTotal,
+        amountPaid: adjustedAmountPaid,
+        status: adjustedStatus
+      };
+    });
+  }, [examsExpenses, safeSettings, activeStudents]);
+
   // Calculations
   const metrics = useMemo(() => {
-    const activeTermPayments = examsPayments.filter(p => p.termId === currentTermId);
+    const activeTermPayments = examsPayments.filter(p => {
+      if (p.termId !== currentTermId) return false;
+      return safeSettings.eligibleClasses?.includes(p.class);
+    });
     
     let totalRevenueExpected = 0;
     let totalCompanyBillingExpected = 0;
 
     activeStudents.forEach(student => {
+      const isEligible = safeSettings.eligibleClasses?.includes(student.class);
+      if (!isEligible) return;
       const classFee = safeSettings.classFees[student.class]?.feeCharged || 0;
       const compCost = safeSettings.classFees[student.class]?.companyBilling || 0;
       totalRevenueExpected += classFee;
@@ -181,16 +321,17 @@ export function ExamsDashboardTab() {
     });
 
     const totalRevenueCollected = activeTermPayments.reduce((sum, p) => sum + p.amountPaid, 0);
-    const totalCompanyBillingInvoiced = examsExpenses.reduce((sum, e) => sum + e.totalAmount, 0);
-    const totalCompanyBillingPaid = examsExpenses.reduce((sum, e) => sum + e.amountPaid, 0);
+    const totalCompanyBillingInvoiced = adjustedExamsExpenses.reduce((sum, e) => sum + e.totalAmount, 0);
+    const totalCompanyBillingPaid = adjustedExamsExpenses.reduce((sum, e) => sum + e.amountPaid, 0);
 
     const netProfitCollected = totalRevenueCollected - totalCompanyBillingPaid;
     const netProfitProjected = totalRevenueExpected - totalCompanyBillingInvoiced;
 
     const totalPupilsPaidCount = new Set(activeTermPayments.map(p => p.studentId)).size;
-    const totalPupilsUnpaidCount = Math.max(0, activeStudents.length - totalPupilsPaidCount);
-    const collectionPercentage = activeStudents.length > 0 
-      ? Math.round((totalPupilsPaidCount / activeStudents.length) * 100) 
+    const eligibleStudents = activeStudents.filter(s => safeSettings.eligibleClasses?.includes(s.class));
+    const totalPupilsUnpaidCount = Math.max(0, eligibleStudents.length - totalPupilsPaidCount);
+    const collectionPercentage = eligibleStudents.length > 0 
+      ? Math.round((totalPupilsPaidCount / eligibleStudents.length) * 100) 
       : 0;
 
     return {
@@ -205,39 +346,47 @@ export function ExamsDashboardTab() {
       unpaidCount: totalPupilsUnpaidCount,
       collectionRate: collectionPercentage
     };
-  }, [activeStudents, examsPayments, examsExpenses, safeSettings, currentTermId]);
+  }, [activeStudents, examsPayments, adjustedExamsExpenses, safeSettings, currentTermId]);
 
   // Class level breakdown data
   const classBreakdowns = useMemo(() => {
-    const activeTermPayments = examsPayments.filter(p => p.termId === currentTermId);
+    const activeTermPayments = examsPayments.filter(p => {
+      if (p.termId !== currentTermId) return false;
+      return safeSettings.eligibleClasses?.includes(p.class);
+    });
     
     return CLASSES_LIST.map(cls => {
+      const isEligible = safeSettings.eligibleClasses?.includes(cls);
       const clsStudents = activeStudents.filter(s => s.class === cls);
       const studentCount = clsStudents.length;
       
       const config = safeSettings.classFees[cls] || { feeCharged: 0, companyBilling: 0 };
-      const expectedRevenue = studentCount * config.feeCharged;
-      const expectedCompanyBill = studentCount * config.companyBilling;
+      const feeCharged = isEligible ? config.feeCharged : 0;
+      const companyBilling = isEligible ? config.companyBilling : 0;
+
+      const expectedRevenue = studentCount * feeCharged;
+      const expectedCompanyBill = studentCount * companyBilling;
 
       const clsPayments = activeTermPayments.filter(p => p.class === cls);
-      const actualCollected = clsPayments.reduce((sum, p) => sum + p.amountPaid, 0);
-      const paidPupilsCount = new Set(clsPayments.map(p => p.studentId)).size;
-      const unpaidPupilsCount = Math.max(0, studentCount - paidPupilsCount);
+      const actualCollected = isEligible ? clsPayments.reduce((sum, p) => sum + p.amountPaid, 0) : 0;
+      const paidPupilsCount = isEligible ? new Set(clsPayments.map(p => p.studentId)).size : 0;
+      const unpaidPupilsCount = isEligible ? Math.max(0, studentCount - paidPupilsCount) : 0;
 
-      const netMargin = actualCollected - (studentCount * config.companyBilling);
+      const netMargin = isEligible ? (actualCollected - (studentCount * companyBilling)) : 0;
 
       return {
         class: cls,
         category: getClassCategory(cls),
         studentCount,
-        feeCharged: config.feeCharged,
-        companyBilling: config.companyBilling,
+        feeCharged,
+        companyBilling,
         expectedRevenue,
         expectedCompanyBill,
         actualCollected,
         paidCount: paidPupilsCount,
         unpaidCount: unpaidPupilsCount,
-        netMargin
+        netMargin,
+        isEligible
       };
     });
   }, [activeStudents, examsPayments, safeSettings, currentTermId]);
@@ -262,13 +411,16 @@ export function ExamsDashboardTab() {
   const studentPaymentState = (studentId: string) => {
     const student = students.find(s => s.id === studentId);
     const studentClass = student?.class || 'B1' as StudentClass;
+    const isEligible = safeSettings.eligibleClasses?.includes(studentClass);
     const activeTermPayments = examsPayments.filter(p => p.termId === currentTermId);
     const payments = activeTermPayments.filter(p => p.studentId === studentId);
     const totalPaid = payments.reduce((sum, p) => sum + p.amountPaid, 0);
-    const expectedFee = safeSettings.classFees[studentClass]?.feeCharged || 0;
+    const expectedFee = isEligible ? (safeSettings.classFees[studentClass]?.feeCharged || 0) : 0;
     
-    let paidStatus: 'unpaid' | 'partial' | 'fully_paid' = 'unpaid';
-    if (payments.length > 0) {
+    let paidStatus: 'unpaid' | 'partial' | 'fully_paid' | 'exempt' = 'unpaid';
+    if (!isEligible) {
+      paidStatus = 'exempt';
+    } else if (payments.length > 0) {
       if (totalPaid >= expectedFee) {
         paidStatus = 'fully_paid';
       } else {
@@ -277,8 +429,9 @@ export function ExamsDashboardTab() {
     }
 
     return {
-      paid: paidStatus === 'fully_paid',
+      paid: paidStatus === 'fully_paid' || paidStatus === 'exempt',
       isPartial: paidStatus === 'partial',
+      isExempt: paidStatus === 'exempt',
       paidStatus,
       amount: totalPaid,
       records: payments,
@@ -288,13 +441,16 @@ export function ExamsDashboardTab() {
 
   // Open Collect Modal
   const handleOpenCollect = (student: any) => {
+    const isEligible = safeSettings.eligibleClasses?.includes(student.class);
     const config = safeSettings.classFees[student.class] || { feeCharged: 0 };
     const payState = studentPaymentState(student.id);
-    const remaining = Math.max(0, config.feeCharged - payState.amount);
+    const expectedFee = isEligible ? config.feeCharged : 0;
+    const remaining = Math.max(0, expectedFee - payState.amount);
     setCollectModalStudent(student);
     setCollectAmount(remaining.toString());
     setCollectMethod('Cash');
     setCollectNotes('');
+    setCollectDate(currentDate || new Date().toISOString().split('T')[0]);
   };
 
   // Handle Collect Submit
@@ -308,7 +464,7 @@ export function ExamsDashboardTab() {
     }
 
     try {
-      await addExamsPayment(collectModalStudent.id, amount, collectMethod, collectNotes || undefined);
+      await addExamsPayment(collectModalStudent.id, amount, collectMethod, collectNotes || undefined, collectDate || undefined);
       playFeedbackSound('success');
       setCollectModalStudent(null);
     } catch (err: any) {
@@ -319,11 +475,15 @@ export function ExamsDashboardTab() {
 
   // Calculate Student Counts for Invoice Targets
   const getTargetClassCount = (target: string) => {
-    if (target === 'Entire-School') return activeStudents.length;
-    if (target === 'All-Preschool') return activeStudents.filter(s => ['Nursery', 'KG1', 'KG2'].includes(s.class)).length;
-    if (target === 'All-Primary') return activeStudents.filter(s => ['B1', 'B2', 'B3', 'B4', 'B5', 'B6'].includes(s.class)).length;
-    if (target === 'All-JHS') return activeStudents.filter(s => ['B7', 'B8', 'B9'].includes(s.class)).length;
-    return activeStudents.filter(s => s.class === target).length;
+    const eligibleStudents = activeStudents.filter(s => safeSettings.eligibleClasses?.includes(s.class));
+    if (target === 'Entire-School') return eligibleStudents.length;
+    if (target === 'All-Preschool') return eligibleStudents.filter(s => ['Nursery', 'KG1', 'KG2'].includes(s.class)).length;
+    if (target === 'All-Primary') return eligibleStudents.filter(s => ['B1', 'B2', 'B3', 'B4', 'B5', 'B6'].includes(s.class)).length;
+    if (target === 'All-JHS') return eligibleStudents.filter(s => ['B7', 'B8', 'B9'].includes(s.class)).length;
+    
+    const isEligible = safeSettings.eligibleClasses?.includes(target as StudentClass);
+    if (!isEligible) return 0;
+    return eligibleStudents.filter(s => s.class === target).length;
   };
 
   // Handle Log Company Bill/Expense
@@ -356,6 +516,9 @@ export function ExamsDashboardTab() {
       childCount = 0;
     }
 
+    const amountPaid = invoicePaymentOption === 'paid' ? totalAmount : 0;
+    const status = invoicePaymentOption === 'paid' ? 'Paid' : 'Unpaid';
+
     try {
       await addExamsExpense(
         invoiceProvider.trim(),
@@ -363,8 +526,8 @@ export function ExamsDashboardTab() {
         rate,
         childCount,
         totalAmount,
-        totalAmount, // Mark fully paid by default for simplicity
-        'Paid',
+        amountPaid,
+        status,
         invoiceNotes ? (expenseType === 'other' ? `[Other Expense] ${invoiceNotes}` : invoiceNotes) : (expenseType === 'other' ? '[Other Expense]' : undefined),
         currentDate
       );
@@ -373,6 +536,7 @@ export function ExamsDashboardTab() {
       setInvoiceClass('Entire-School');
       setInvoiceNotes('');
       setOtherExpenseAmount('');
+      setInvoicePaymentOption('paid'); // Reset payment option too
     } catch (err: any) {
       playFeedbackSound('error');
       alert("Failed to record company invoice.");
@@ -384,6 +548,24 @@ export function ExamsDashboardTab() {
     if (window.confirm("Are you sure you want to delete this company billing record?")) {
       await deleteExamsExpense(id);
       playFeedbackSound('success');
+    }
+  };
+
+  // Confirm / Pay an unpaid or partially paid exams expense
+  const handleConfirmExpensePayment = async (expense: ExamsExpense) => {
+    if (window.confirm(`Are you sure you want to confirm payment of GHC ${expense.totalAmount.toFixed(2)} for ${expense.providerName}? This will mark it as PAID and affect the actual cash flow metrics.`)) {
+      try {
+        const updatedExpense: ExamsExpense = {
+          ...expense,
+          amountPaid: expense.totalAmount,
+          status: 'Paid'
+        };
+        await updateExamsExpense(updatedExpense);
+        playFeedbackSound('success');
+      } catch (err) {
+        playFeedbackSound('error');
+        alert("Failed to confirm payment.");
+      }
     }
   };
 
@@ -406,7 +588,50 @@ export function ExamsDashboardTab() {
       [field]: num
     };
 
-    await updateExamsSettings({ classFees: currentFees });
+    await updateExamsSettings({ 
+      classFees: currentFees, 
+      eligibleClasses: safeSettings.eligibleClasses 
+    });
+  };
+
+  // Toggle Eligibility
+  const handleToggleEligibility = async (cls: StudentClass) => {
+    const currentEligible = [...(safeSettings.eligibleClasses || [])];
+    const index = currentEligible.indexOf(cls);
+    
+    if (index > -1) {
+      currentEligible.splice(index, 1);
+    } else {
+      currentEligible.push(cls);
+    }
+
+    await updateExamsSettings({ 
+      classFees: safeSettings.classFees, 
+      eligibleClasses: currentEligible 
+    });
+    playFeedbackSound?.('success');
+  };
+
+  // Bulk toggling eligibility
+  const handleBulkToggleCategory = async (category: SchoolCategory, eligible: boolean) => {
+    const currentEligible = [...(safeSettings.eligibleClasses || [])];
+    CLASSES_LIST.forEach(cls => {
+      const cat = getClassCategory(cls);
+      if (cat === category) {
+        const idx = currentEligible.indexOf(cls);
+        if (eligible && idx === -1) {
+          currentEligible.push(cls);
+        } else if (!eligible && idx > -1) {
+          currentEligible.splice(idx, 1);
+        }
+      }
+    });
+
+    await updateExamsSettings({ 
+      classFees: safeSettings.classFees, 
+      eligibleClasses: currentEligible 
+    });
+    playFeedbackSound?.('success');
   };
 
   const activeTermName = activeTerm?.name || "No Active Term Set";
@@ -547,7 +772,7 @@ export function ExamsDashboardTab() {
           onClick={() => setActiveSubTab('companies')}
           className={`px-5 py-3 text-xs uppercase tracking-wider font-mono border-b-2 font-black transition ${activeSubTab === 'companies' ? 'border-amber-400 text-amber-400' : 'border-transparent text-neutral-400 hover:text-white'}`}
         >
-          Company Invoices ({examsExpenses.length})
+          Company Invoices ({adjustedExamsExpenses.length})
         </button>
         <button 
           onClick={() => setActiveSubTab('configuration')}
@@ -653,6 +878,33 @@ export function ExamsDashboardTab() {
               </div>
             </div>
 
+            {/* School-Wide Summary Cards (Expected, Paid, Balance) */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-neutral-950/60 border border-neutral-850 p-4 rounded-xl">
+              <div className="space-y-1">
+                <span className="text-[10px] text-neutral-400 uppercase tracking-widest font-black block">Total Exams Fee Expected</span>
+                <div className="text-xl font-black text-white font-mono">
+                  GHC {classBreakdowns.reduce((sum, cb) => sum + cb.expectedRevenue, 0).toFixed(2)}
+                </div>
+                <p className="text-[9px] text-neutral-500">Based on active cohort sizes & fee charge levels</p>
+              </div>
+
+              <div className="space-y-1 border-t sm:border-t-0 sm:border-x border-neutral-850 pt-2.5 sm:pt-0 sm:px-4">
+                <span className="text-[10px] text-neutral-400 uppercase tracking-widest font-black block font-bold">Total Exams Fee Paid</span>
+                <div className="text-xl font-black text-emerald-400 font-mono">
+                  GHC {classBreakdowns.reduce((sum, cb) => sum + cb.actualCollected, 0).toFixed(2)}
+                </div>
+                <p className="text-[9px] text-neutral-500">Realized collected payments to-date</p>
+              </div>
+
+              <div className="space-y-1 border-t sm:border-t-0 pt-2.5 sm:pt-0 pl-0 sm:pl-4">
+                <span className="text-[10px] text-neutral-400 uppercase tracking-widest font-black block font-bold">Total Outstanding Balance</span>
+                <div className="text-xl font-black text-amber-500 font-mono">
+                  GHC {classBreakdowns.reduce((sum, cb) => sum + (cb.expectedRevenue - cb.actualCollected), 0).toFixed(2)}
+                </div>
+                <p className="text-[9px] text-neutral-500">Unpaid end-of-term assessment balances</p>
+              </div>
+            </div>
+
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-xs font-mono">
                 <thead>
@@ -661,66 +913,146 @@ export function ExamsDashboardTab() {
                     <th className="py-2.5 px-3">Level</th>
                     <th className="py-2.5 px-3 text-center">Pupils Count</th>
                     <th className="py-2.5 px-3 text-right">Fee/Child</th>
-                    <th className="py-2.5 px-3 text-right">Revenue Expected</th>
-                    <th className="py-2.5 px-3 text-right">Revenue Collected</th>
-                    <th className="py-2.5 px-3 text-right">Company Cost/Child</th>
-                    <th className="py-2.5 px-3 text-right">Total Company Bill</th>
+                    <th className="py-2.5 px-3 text-right">Expected</th>
+                    <th className="py-2.5 px-3 text-right">Paid</th>
+                    <th className="py-2.5 px-3 text-right">Balance</th>
+                    <th className="py-2.5 px-3 text-right">Cost/Child</th>
+                    <th className="py-2.5 px-3 text-right">Company Bill</th>
                     <th className="py-2.5 px-3 text-right">Net Margin</th>
                     <th className="py-2.5 px-3 text-center">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-neutral-800/60">
-                  {classBreakdowns.map((cb) => (
-                    <tr key={cb.class} className="hover:bg-neutral-800/20 transition">
-                      <td className="py-2 px-3 font-bold text-white">{cb.class}</td>
-                      <td className="py-2 px-3 text-neutral-500 text-[10px]">{cb.category}</td>
-                      <td className="py-2 px-3 text-center text-neutral-300 font-bold">{cb.studentCount}</td>
-                      <td className="py-2 px-3 text-right text-neutral-400">GHC {cb.feeCharged.toFixed(2)}</td>
-                      <td className="py-2 px-3 text-right text-neutral-400">GHC {cb.expectedRevenue.toFixed(2)}</td>
-                      <td className="py-2 px-3 text-right font-bold text-emerald-400">GHC {cb.actualCollected.toFixed(2)}</td>
-                      <td className="py-2 px-3 text-right text-neutral-400">GHC {cb.companyBilling.toFixed(2)}</td>
-                      <td className="py-2 px-3 text-right text-neutral-400">GHC {cb.expectedCompanyBill.toFixed(2)}</td>
-                      <td className={`py-2 px-3 text-right font-black ${cb.netMargin >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                        GHC {cb.netMargin.toFixed(2)}
-                      </td>
-                      <td className="py-2 px-3 text-center">
-                        <button 
-                          onClick={() => {
-                            setSelectedClass(cb.class);
-                            setActiveSubTab('collection');
-                          }}
-                          className="bg-neutral-800 hover:bg-neutral-700 text-[10px] font-bold text-amber-400 px-2.5 py-1 rounded"
-                        >
-                          Roster
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {classBreakdowns.map((cb) => {
+                    const balance = cb.expectedRevenue - cb.actualCollected;
+                    return (
+                      <tr key={cb.class} className="hover:bg-neutral-800/20 transition">
+                        <td className="py-2 px-3 font-bold text-white">{cb.class}</td>
+                        <td className="py-2 px-3 text-neutral-500 text-[10px]">{cb.category}</td>
+                        <td className="py-2 px-3 text-center text-neutral-300 font-bold">{cb.studentCount}</td>
+                        <td className="py-2 px-3 text-right text-neutral-400">GHC {cb.feeCharged.toFixed(2)}</td>
+                        <td className="py-2 px-3 text-right text-neutral-300 font-bold">GHC {cb.expectedRevenue.toFixed(2)}</td>
+                        <td className="py-2 px-3 text-right font-bold text-emerald-400 font-mono">GHC {cb.actualCollected.toFixed(2)}</td>
+                        <td className={`py-2 px-3 text-right font-black font-mono ${balance > 0 ? 'text-amber-500' : 'text-emerald-500/80'}`}>
+                          GHC {balance.toFixed(2)}
+                        </td>
+                        <td className="py-2 px-3 text-right text-neutral-500">GHC {cb.companyBilling.toFixed(2)}</td>
+                        <td className="py-2 px-3 text-right text-neutral-500">GHC {cb.expectedCompanyBill.toFixed(2)}</td>
+                        <td className={`py-2 px-3 text-right font-black ${cb.netMargin >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                          GHC {cb.netMargin.toFixed(2)}
+                        </td>
+                        <td className="py-2 px-3 text-center">
+                          <button 
+                            onClick={() => {
+                              setSelectedClass(cb.class);
+                              setActiveSubTab('collection');
+                            }}
+                            className="bg-neutral-800 hover:bg-neutral-700 text-[10px] font-bold text-amber-400 px-2.5 py-1 rounded cursor-pointer"
+                          >
+                            Roster
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
+                <tfoot>
+                  <tr className="border-t-2 border-neutral-800 bg-neutral-950/60 font-bold text-white text-[11px]">
+                    <td className="py-3 px-3" colSpan={2}>TOTALS</td>
+                    <td className="py-3 px-3 text-center text-neutral-300">
+                      {classBreakdowns.reduce((sum, cb) => sum + cb.studentCount, 0)}
+                    </td>
+                    <td className="py-3 px-3 text-right text-neutral-500">-</td>
+                    <td className="py-3 px-3 text-right text-neutral-300 font-black">
+                      GHC {classBreakdowns.reduce((sum, cb) => sum + cb.expectedRevenue, 0).toFixed(2)}
+                    </td>
+                    <td className="py-3 px-3 text-right font-black text-emerald-400 font-mono">
+                      GHC {classBreakdowns.reduce((sum, cb) => sum + cb.actualCollected, 0).toFixed(2)}
+                    </td>
+                    <td className="py-3 px-3 text-right font-black text-amber-500 font-mono">
+                      GHC {classBreakdowns.reduce((sum, cb) => sum + (cb.expectedRevenue - cb.actualCollected), 0).toFixed(2)}
+                    </td>
+                    <td className="py-3 px-3 text-right text-neutral-500">-</td>
+                    <td className="py-3 px-3 text-right text-neutral-500">
+                      GHC {classBreakdowns.reduce((sum, cb) => sum + cb.expectedCompanyBill, 0).toFixed(2)}
+                    </td>
+                    <td className={`py-3 px-3 text-right font-black ${classBreakdowns.reduce((sum, cb) => sum + cb.netMargin, 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      GHC {classBreakdowns.reduce((sum, cb) => sum + cb.netMargin, 0).toFixed(2)}
+                    </td>
+                    <td className="py-3 px-3"></td>
+                  </tr>
+                </tfoot>
               </table>
             </div>
           </div>
 
           {/* Daily Class-by-Class Collection Auditing Ledger */}
           <div className="lg:col-span-3 bg-neutral-900 border border-neutral-800 rounded-xl p-5 space-y-4">
-            <div className="border-b border-neutral-800 pb-3 flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <div>
-                <h2 className="text-sm font-black uppercase font-mono tracking-wider flex items-center gap-2">
-                  <History size={16} className="text-amber-400 animate-pulse" /> Daily Class Collection Auditing Ledger
-                </h2>
-                <p className="text-[10px] text-neutral-400">Auditable daily totals of exams fees collected per class (chronological view)</p>
+            
+            {/* Auditing Overview Summary stats bar */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-neutral-950 border border-neutral-850 p-4 rounded-xl">
+              <div className="space-y-1">
+                <span className="text-[9px] text-neutral-500 uppercase tracking-widest font-black font-mono">Total Filtered Inflow</span>
+                <div className="text-xl font-black text-emerald-400 font-mono">
+                  GHC {filteredDailyClassTotals.reduce((sum, item) => sum + item.totalCollected, 0).toFixed(2)}
+                </div>
+                <p className="text-[9px] text-neutral-400">Sum of selected daily fee collections</p>
               </div>
 
-              {/* Search date or class inside daily totals */}
-              <div className="w-full md:w-72">
-                <div className="relative">
-                  <Search className="absolute left-3 top-2.5 text-neutral-500" size={14} />
+              <div className="space-y-1 border-y sm:border-y-0 sm:border-x border-neutral-850 py-2 sm:py-0 sm:px-4">
+                <span className="text-[9px] text-neutral-500 uppercase tracking-widest font-black font-mono">Audit Verification Pace</span>
+                <div className="text-xl font-black text-white font-mono flex items-center gap-1.5">
+                  {filteredDailyClassTotals.filter(item => verifiedDates.includes(item.date)).length} <span className="text-neutral-500 text-sm">of</span> {filteredDailyClassTotals.length} <span className="text-[10px] text-emerald-400 font-bold font-mono">Days</span>
+                </div>
+                <div className="w-full bg-neutral-850 h-1.5 rounded-full overflow-hidden">
+                  <div 
+                    className="bg-emerald-500 h-full transition-all duration-350"
+                    style={{ width: `${filteredDailyClassTotals.length > 0 ? (filteredDailyClassTotals.filter(item => verifiedDates.includes(item.date)).length / filteredDailyClassTotals.length) * 100 : 0}%` }}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1 sm:pl-4">
+                <span className="text-[9px] text-neutral-500 uppercase tracking-widest font-black font-mono">Average Inflow Rate</span>
+                <div className="text-xl font-black text-amber-400 font-mono">
+                  GHC {(filteredDailyClassTotals.length > 0 ? (filteredDailyClassTotals.reduce((sum, item) => sum + item.totalCollected, 0) / filteredDailyClassTotals.length) : 0).toFixed(2)}
+                </div>
+                <p className="text-[9px] text-neutral-400">Average per school day recorded</p>
+              </div>
+            </div>
+
+            <div className="border-b border-neutral-800 pb-3 flex flex-col xl:flex-row xl:items-center justify-between gap-4">
+              <div>
+                <h2 className="text-sm font-black uppercase font-mono tracking-wider flex items-center gap-2 text-white">
+                  <History size={16} className="text-amber-400" /> Daily Class Collection Auditing Ledger
+                </h2>
+                <p className="text-[10px] text-neutral-400">Click any class badge to inspect or delete individual transaction logs.</p>
+              </div>
+
+              {/* Filtering bar */}
+              <div className="flex flex-wrap items-center gap-2.5">
+                {/* Preset filter tabs */}
+                <div className="flex bg-neutral-950 border border-neutral-800 rounded-lg p-0.5">
+                  {(['all', 'today', 'yesterday', 'this-week'] as const).map((filter) => (
+                    <button
+                      key={filter}
+                      onClick={() => setDateFilter(filter)}
+                      className={`px-3 py-1 text-[10px] uppercase font-mono font-black rounded-md transition-all ${dateFilter === filter ? 'bg-amber-400 text-black shadow' : 'text-neutral-400 hover:text-white hover:bg-neutral-900/40'}`}
+                    >
+                      {filter === 'this-week' ? 'Last 7 Days' : filter}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Search query bar */}
+                <div className="relative w-full sm:w-56">
+                  <Search className="absolute left-3 top-2 text-neutral-500" size={12} />
                   <input
                     type="text"
-                    placeholder="Search by date (YYYY-MM-DD) or class..."
+                    placeholder="Search YYYY-MM-DD or class..."
                     value={auditSearchQuery}
                     onChange={(e) => setAuditSearchQuery(e.target.value)}
-                    className="w-full bg-neutral-950 text-white border border-neutral-800 rounded-lg py-1.5 pl-8 pr-4 text-[11px] font-mono focus:outline-none focus:border-amber-400"
+                    className="w-full bg-neutral-950 text-white border border-neutral-800 rounded-lg py-1 pl-7 pr-3 text-[10px] font-mono focus:outline-none focus:border-amber-400"
                   />
                 </div>
               </div>
@@ -728,50 +1060,81 @@ export function ExamsDashboardTab() {
 
             {filteredDailyClassTotals.length === 0 ? (
               <div className="h-40 flex flex-col justify-center items-center border-2 border-dashed border-neutral-800 rounded-xl text-neutral-500 p-4">
-                <History size={28} className="mb-2 text-neutral-600" />
-                <p className="text-xs font-mono text-center">No exams fee daily collections match your audit query.</p>
+                <History size={28} className="mb-2 text-neutral-600 animate-pulse" />
+                <p className="text-xs font-mono text-center font-bold">No exams fee daily collections match your parameters.</p>
+                <p className="text-[10px] text-neutral-600 text-center">Adjust filter presets or clear search filter queries.</p>
               </div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse text-xs font-mono">
                   <thead>
-                    <tr className="border-b border-neutral-800 text-neutral-400 bg-neutral-950/40">
-                      <th className="py-2.5 px-3 w-1/4">Collection Date</th>
-                      <th className="py-2.5 px-3 w-1/2">Daily Totals per Class</th>
-                      <th className="py-2.5 px-3 text-right w-1/4">Total Daily Collection</th>
+                    <tr className="border-b border-neutral-800 text-neutral-400 bg-neutral-950/40 text-[10px] uppercase tracking-wider">
+                      <th className="py-2.5 px-3 w-1/12 text-center">Audit</th>
+                      <th className="py-2.5 px-3 w-2/12">Collection Date</th>
+                      <th className="py-2.5 px-3 w-7/12">Daily Totals per Class (Click Badge to Inspect)</th>
+                      <th className="py-2.5 px-3 text-right w-2/12">Grand Total</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-neutral-800/60">
-                    {filteredDailyClassTotals.map((item) => (
-                      <tr key={item.date} className="hover:bg-neutral-800/20 transition">
-                        {/* Date column */}
-                        <td className="py-3 px-3 font-bold text-white flex items-center gap-2">
-                          <Calendar size={14} className="text-neutral-500" />
-                          <span>{item.date}</span>
-                        </td>
+                    {filteredDailyClassTotals.map((item) => {
+                      const isVerified = verifiedDates.includes(item.date);
+                      return (
+                        <tr 
+                          key={item.date} 
+                          className={`hover:bg-neutral-800/20 transition-all duration-150 ${isVerified ? 'bg-emerald-950/10 border-l-4 border-emerald-500' : ''}`}
+                        >
+                          {/* Verify Audit Action */}
+                          <td className="py-3 px-3 text-center">
+                            <button
+                              type="button"
+                              onClick={() => toggleVerifyDate(item.date)}
+                              className={`p-1.5 rounded transition-all cursor-pointer ${isVerified ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-neutral-950 hover:bg-neutral-800 border border-neutral-800 text-neutral-500 hover:text-white'}`}
+                              title={isVerified ? "Audited & Verified. Click to cancel audit." : "Mark as audited & verified"}
+                            >
+                              <Check size={12} className={isVerified ? "stroke-[3px]" : "stroke-[2px]"} />
+                            </button>
+                          </td>
 
-                        {/* Class Totals column */}
-                        <td className="py-3 px-3">
-                          <div className="flex flex-wrap gap-2">
-                            {Object.entries(item.classTotals).map(([cls, amount]) => (
-                              <span 
-                                key={cls} 
-                                className="bg-neutral-950 border border-neutral-850 px-2.5 py-1 rounded text-[10px] font-bold text-neutral-300 flex items-center gap-1.5 shadow-sm"
-                              >
-                                <span className="text-amber-400 uppercase font-mono font-black">{cls}</span>
-                                <span className="text-neutral-500 font-normal">|</span>
-                                <span className="text-white font-mono">GHC {(amount as number).toFixed(2)}</span>
-                              </span>
-                            ))}
-                          </div>
-                        </td>
+                          {/* Date column */}
+                          <td className="py-3 px-3 font-bold text-white">
+                            <div className="flex items-center gap-1.5">
+                              <Calendar size={13} className="text-neutral-500" />
+                              <span>{item.date}</span>
+                              {isVerified && (
+                                <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-wider">
+                                  Verified
+                                </span>
+                              )}
+                            </div>
+                          </td>
 
-                        {/* Grand Total column */}
-                        <td className="py-3 px-3 text-right font-black text-emerald-400 text-sm">
-                          GHC {item.totalCollected.toFixed(2)}
-                        </td>
-                      </tr>
-                    ))}
+                          {/* Class Totals column */}
+                          <td className="py-3 px-3">
+                            <div className="flex flex-wrap gap-2">
+                              {Object.entries(item.classTotals).map(([cls, amount]) => (
+                                <button
+                                  key={cls}
+                                  type="button"
+                                  onClick={() => setSelectedClassDetail({ date: item.date, class: cls as StudentClass })}
+                                  className="bg-neutral-950 border border-neutral-850 hover:border-amber-400/50 hover:bg-neutral-900 px-2.5 py-1 rounded text-[10px] font-bold text-neutral-300 flex items-center gap-1.5 shadow-sm transition group"
+                                  title={`Click to inspect pupil breakdowns for ${cls}`}
+                                >
+                                  <span className="text-amber-400 uppercase font-mono font-black group-hover:text-amber-300">{cls}</span>
+                                  <span className="text-neutral-700 font-normal">|</span>
+                                  <span className="text-white font-mono">GHC {(amount as number).toFixed(2)}</span>
+                                  <Eye size={10} className="text-neutral-500 group-hover:text-amber-400 ml-0.5 opacity-0 group-hover:opacity-100 transition-opacity" />
+                                </button>
+                              ))}
+                            </div>
+                          </td>
+
+                          {/* Grand Total column */}
+                          <td className="py-3 px-3 text-right font-black text-emerald-400 text-sm">
+                            GHC {item.totalCollected.toFixed(2)}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -865,7 +1228,8 @@ export function ExamsDashboardTab() {
                   <tbody className="divide-y divide-neutral-800/60">
                     {classRosterFiltered.map((student) => {
                       const payState = studentPaymentState(student.id);
-                      const expectedFee = safeSettings.classFees[student.class]?.feeCharged || 0;
+                      const isEligible = safeSettings.eligibleClasses?.includes(student.class);
+                      const expectedFee = isEligible ? (safeSettings.classFees[student.class]?.feeCharged || 0) : 0;
                       const balanceDue = Math.max(0, expectedFee - payState.amount);
                       const isExpanded = !!expandedInstallments[student.id];
 
@@ -891,7 +1255,11 @@ export function ExamsDashboardTab() {
                             <td className="py-2 px-3 text-center text-neutral-500 text-[10px]">{student.gender || 'Male'}</td>
                             <td className="py-2 px-3 text-right text-neutral-400">GHC {expectedFee.toFixed(2)}</td>
                             <td className="py-2 px-3 text-center">
-                              {payState.paid ? (
+                              {payState.isExempt ? (
+                                <span className="inline-flex items-center gap-1 text-[9px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-neutral-950 text-neutral-500 border border-neutral-800/40">
+                                  Exempt
+                                </span>
+                              ) : payState.paid ? (
                                 <span className="inline-flex items-center gap-1 text-[9px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-900/30">
                                   <CheckCircle2 size={10} /> Paid / Cleared
                                 </span>
@@ -912,7 +1280,7 @@ export function ExamsDashboardTab() {
                               GHC {balanceDue.toFixed(2)}
                             </td>
                             <td className="py-2 px-3 text-center flex items-center justify-center gap-1.5">
-                              {!payState.paid && (
+                              {!payState.paid && !payState.isExempt && (
                                 <button
                                   onClick={() => handleOpenCollect(student)}
                                   className="bg-emerald-500 hover:bg-emerald-600 text-black text-[10px] font-bold px-2 py-1 rounded transition flex items-center gap-1"
@@ -1117,6 +1485,38 @@ export function ExamsDashboardTab() {
               )}
 
               <div>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 block mb-1">
+                  Payment Status
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setInvoicePaymentOption('paid')}
+                    className={`flex flex-col items-center justify-center p-2 rounded-lg border text-center transition ${
+                      invoicePaymentOption === 'paid'
+                        ? 'border-emerald-500 bg-emerald-500/10 text-emerald-400'
+                        : 'border-neutral-800 bg-neutral-950 text-neutral-400 hover:border-neutral-700'
+                    }`}
+                  >
+                    <span className="text-[10px] font-black uppercase tracking-wider">Confirm Payment</span>
+                    <span className="text-[8px] opacity-75 mt-0.5">Paid Now / Affects Cash</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setInvoicePaymentOption('unpaid')}
+                    className={`flex flex-col items-center justify-center p-2 rounded-lg border text-center transition ${
+                      invoicePaymentOption === 'unpaid'
+                        ? 'border-amber-500 bg-amber-500/10 text-amber-400'
+                        : 'border-neutral-800 bg-neutral-950 text-neutral-400 hover:border-neutral-700'
+                    }`}
+                  >
+                    <span className="text-[10px] font-black uppercase tracking-wider">Expected Cost Only</span>
+                    <span className="text-[8px] opacity-75 mt-0.5">Pay Later / No Cash Out</span>
+                  </button>
+                </div>
+              </div>
+
+              <div>
                 <label className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 block mb-1">Notes / Description</label>
                 <textarea
                   placeholder={expenseType === 'publisher' ? "Log invoice description, printing specifications, terms..." : "Log purpose, proof details, reference number..."}
@@ -1143,7 +1543,7 @@ export function ExamsDashboardTab() {
                 <p className="text-[10px] text-neutral-400">Chronological history of assessments print ordering and overhead expenditures</p>
               </div>
               <span className="text-xs font-bold font-mono text-neutral-400">
-                Total Expenses logged: GHC {examsExpenses.reduce((sum, e) => sum + e.totalAmount, 0).toFixed(2)}
+                Total Expenses logged: GHC {adjustedExamsExpenses.reduce((sum, e) => sum + e.totalAmount, 0).toFixed(2)}
               </span>
             </div>
 
@@ -1201,7 +1601,7 @@ export function ExamsDashboardTab() {
               </div>
             </div>
 
-            {examsExpenses.length === 0 ? (
+            {adjustedExamsExpenses.length === 0 ? (
               <div className="h-80 flex flex-col justify-center items-center border-2 border-dashed border-neutral-800 rounded-xl text-neutral-500 p-4">
                 <Building2 size={40} className="mb-2 text-neutral-600" />
                 <p className="text-xs font-mono text-center">No exams company billing or overhead records found in current ledger.</p>
@@ -1222,7 +1622,7 @@ export function ExamsDashboardTab() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-neutral-800/60">
-                    {examsExpenses.map((expense) => {
+                    {adjustedExamsExpenses.map((expense) => {
                       const isOther = expense.studentCount === 0 || expense.notes?.includes('[Other Expense]');
                       return (
                         <tr key={expense.id} className="hover:bg-neutral-800/20 transition">
@@ -1242,18 +1642,35 @@ export function ExamsDashboardTab() {
                           </td>
                           <td className="py-2.5 px-3 text-right font-black text-amber-400">GHC {expense.totalAmount.toFixed(2)}</td>
                           <td className="py-2.5 px-3 text-center">
-                            <span className="inline-flex text-[9px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-900/30">
-                              {expense.status}
-                            </span>
+                            {expense.status === 'Paid' ? (
+                              <span className="inline-flex text-[9px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-900/30">
+                                {expense.status}
+                              </span>
+                            ) : (
+                              <span className="inline-flex text-[9px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-400 border border-rose-900/30">
+                                {expense.status}
+                              </span>
+                            )}
                           </td>
                           <td className="py-2.5 px-3 text-center">
-                            <button
-                              onClick={() => handleDeleteInvoice(expense.id)}
-                              className="text-neutral-500 hover:text-rose-400 p-1 transition"
-                              title="Delete billing log"
-                            >
-                              <Trash2 size={14} />
-                            </button>
+                            <div className="flex items-center justify-center gap-2">
+                              {expense.status !== 'Paid' && (
+                                <button
+                                  onClick={() => handleConfirmExpensePayment(expense)}
+                                  className="text-emerald-400 hover:text-emerald-300 p-1 bg-emerald-500/10 rounded transition"
+                                  title="Confirm payment (Mark Paid)"
+                                >
+                                  <CheckCircle2 size={14} />
+                                </button>
+                              )}
+                              <button
+                                onClick={() => handleDeleteInvoice(expense.id)}
+                                className="text-neutral-500 hover:text-rose-400 p-1 transition"
+                                title="Delete billing log"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -1273,7 +1690,49 @@ export function ExamsDashboardTab() {
               <h2 className="text-sm font-black uppercase font-mono tracking-wider flex items-center gap-2">
                 <Settings size={16} className="text-amber-400" /> Assessment Pricing and Cost Structure Configuration
               </h2>
-              <p className="text-[10px] text-neutral-400">Define expected parent payments and company pricing models per child</p>
+              <p className="text-[10px] text-neutral-400">Define expected parent payments, company pricing models per child, and class-level eligibility</p>
+            </div>
+          </div>
+
+          {/* ELIGIBILITY & BULK TOGGLES BOX */}
+          <div className="bg-neutral-950 border border-neutral-800 rounded-xl p-4 space-y-4 font-mono text-xs">
+            <div className="flex items-start gap-2.5">
+              <span className="p-1.5 bg-amber-400/10 text-amber-400 rounded mt-0.5">
+                <ClipboardCheck size={16} />
+              </span>
+              <div>
+                <h3 className="text-xs font-black uppercase text-white tracking-wider">Class Exams Eligibility</h3>
+                <p className="text-[10px] text-neutral-400 leading-relaxed mt-0.5">
+                  Excluding specific classes (e.g., Nursery or KG) exempts their pupils from assessment charges. This filters them out of unpaid counts, expected revenue targets, and billing statistics, resulting in a cleaner and easier final auditing process.
+                </p>
+              </div>
+            </div>
+
+            <div className="pt-2 border-t border-neutral-800/40 flex flex-col md:flex-row gap-4 justify-between items-start md:items-center">
+              <span className="text-[10px] uppercase tracking-wider font-extrabold text-neutral-400">Bulk Category Controls:</span>
+              <div className="flex flex-wrap gap-2">
+                {['Pre-school', 'Primary', 'JHS'].map((cat) => {
+                  const categoryClasses = CLASSES_LIST.filter(cls => getClassCategory(cls) === cat);
+                  const allEligible = categoryClasses.every(cls => safeSettings.eligibleClasses?.includes(cls));
+                  
+                  return (
+                    <div key={cat} className="bg-neutral-900 border border-neutral-800 rounded p-1.5 flex items-center gap-2">
+                      <span className="text-[9px] uppercase font-bold text-neutral-400 px-1">{cat}</span>
+                      <button
+                        type="button"
+                        onClick={() => handleBulkToggleCategory(cat as SchoolCategory, !allEligible)}
+                        className={`text-[9px] uppercase font-black tracking-wider px-2 py-1 rounded transition-colors ${
+                          allEligible 
+                            ? 'bg-rose-500/10 text-rose-400 border border-rose-950 hover:bg-rose-500/20' 
+                            : 'bg-emerald-500/10 text-emerald-400 border border-emerald-950 hover:bg-emerald-500/20'
+                        }`}
+                      >
+                        {allEligible ? 'Disable All' : 'Enable All'}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
 
@@ -1281,11 +1740,31 @@ export function ExamsDashboardTab() {
             {CLASSES_LIST.map((cls) => {
               const conf = safeSettings.classFees[cls] || { feeCharged: 0, companyBilling: 0 };
               const category = getClassCategory(cls);
+              const isEligible = safeSettings.eligibleClasses?.includes(cls);
+
               return (
-                <div key={cls} className="bg-neutral-950 border border-neutral-800 p-4 rounded-xl space-y-3 shadow-inner hover:border-neutral-700 transition">
+                <div key={cls} className={`border p-4 rounded-xl space-y-3 shadow-inner transition ${
+                  isEligible 
+                    ? 'bg-neutral-950 border-neutral-800 hover:border-neutral-700' 
+                    : 'bg-neutral-950/40 border-neutral-900/60 opacity-60'
+                }`}>
                   <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
-                    <span className="font-black text-white text-sm">{cls}</span>
-                    <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-neutral-900 text-neutral-500">{category}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-black text-white text-sm">{cls}</span>
+                      <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-neutral-900 text-neutral-500">{category}</span>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleToggleEligibility(cls)}
+                      className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded border transition-all ${
+                        isEligible 
+                          ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20' 
+                          : 'bg-rose-500/10 text-rose-400 border-rose-500/30 hover:bg-rose-500/20'
+                      }`}
+                    >
+                      {isEligible ? 'Eligible' : 'Exempted'}
+                    </button>
                   </div>
 
                   <div className="space-y-3">
@@ -1295,9 +1774,12 @@ export function ExamsDashboardTab() {
                         type="number"
                         min="0"
                         step="0.5"
-                        value={conf.feeCharged}
+                        disabled={!isEligible}
+                        value={isEligible ? conf.feeCharged : 0}
                         onChange={(e) => handleUpdateConfig(cls, 'feeCharged', e.target.value)}
-                        className="w-full bg-neutral-900 text-white border border-neutral-800 rounded px-2.5 py-1.5 focus:outline-none focus:border-amber-400 font-bold"
+                        className={`w-full bg-neutral-900 text-white border border-neutral-800 rounded px-2.5 py-1.5 focus:outline-none focus:border-amber-400 font-bold ${
+                          !isEligible ? 'opacity-40 cursor-not-allowed bg-neutral-950' : ''
+                        }`}
                       />
                     </div>
                     <div>
@@ -1306,15 +1788,23 @@ export function ExamsDashboardTab() {
                         type="number"
                         min="0"
                         step="0.5"
-                        value={conf.companyBilling}
+                        disabled={!isEligible}
+                        value={isEligible ? conf.companyBilling : 0}
                         onChange={(e) => handleUpdateConfig(cls, 'companyBilling', e.target.value)}
-                        className="w-full bg-neutral-900 text-white border border-neutral-800 rounded px-2.5 py-1.5 focus:outline-none focus:border-amber-400 font-bold text-neutral-300"
+                        className={`w-full bg-neutral-900 text-white border border-neutral-800 rounded px-2.5 py-1.5 focus:outline-none focus:border-amber-400 font-bold text-neutral-300 ${
+                          !isEligible ? 'opacity-40 cursor-not-allowed bg-neutral-950' : ''
+                        }`}
                       />
                     </div>
                   </div>
 
-                  <div className="text-[10px] text-neutral-500 text-right pt-1 border-t border-neutral-800">
-                    Net Markup per Child: <span className="font-bold text-emerald-400">GHC {(conf.feeCharged - conf.companyBilling).toFixed(2)}</span>
+                  <div className="text-[10px] text-neutral-500 text-right pt-1 border-t border-neutral-800 flex justify-between items-center">
+                    <span>
+                      {!isEligible && <span className="text-rose-400/80 font-bold">No Obligations</span>}
+                    </span>
+                    <span>
+                      Net Markup: <span className="font-bold text-emerald-400">GHC {isEligible ? (conf.feeCharged - conf.companyBilling).toFixed(2) : '0.00'}</span>
+                    </span>
                   </div>
                 </div>
               );
@@ -1447,6 +1937,20 @@ export function ExamsDashboardTab() {
                 </div>
 
                 <div>
+                  <label className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 block mb-1">Payment Date / Record Date</label>
+                  <input
+                    type="date"
+                    required
+                    value={collectDate}
+                    onChange={(e) => setCollectDate(e.target.value)}
+                    className="w-full bg-neutral-950 text-white border border-neutral-800 rounded-lg py-2 px-3 focus:outline-none focus:border-amber-400 font-bold"
+                  />
+                  <span className="text-[9.5px] text-neutral-500 mt-1 block">
+                    Defaults to today. Adjust this date to record past payments (e.g. 2026-07-09).
+                  </span>
+                </div>
+
+                <div>
                   <label className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 block mb-1">Payment Method</label>
                   <select
                     value={collectMethod}
@@ -1508,7 +2012,7 @@ export function ExamsDashboardTab() {
               <div className="text-center space-y-1">
                 <h1 className="text-xl font-extrabold uppercase tracking-wide">Saako Holy Child Academy</h1>
                 <p className="text-xs uppercase font-bold text-gray-700">Daily Attendance and Fee Ledger System</p>
-                <p className="text-[10px] text-gray-500 italic">P. O. Box ls 15, Sawla, Ghana</p>
+                <p className="text-[10px] text-gray-500 italic">P. O. Box LS 15, Sawla Savannah Region • Sawla, Jelinkon street, Savannah Region, Ghana</p>
                 <div className="border-b-2 border-black my-2"></div>
                 <h2 className="text-sm font-black uppercase bg-gray-200 py-1 tracking-widest">Official Assessment Fee Receipt</h2>
               </div>
@@ -1770,6 +2274,110 @@ export function ExamsDashboardTab() {
           </div>
         );
       })()}
+
+      {/* Interactive Daily Audit Pupil Breakdown Modal */}
+      {selectedClassDetail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm p-4 animate-fadeIn">
+          <div className="bg-neutral-900 border border-neutral-800 max-w-2xl w-full rounded-2xl shadow-2xl overflow-hidden font-mono text-xs">
+            {/* Header */}
+            <div className="bg-neutral-950 border-b border-neutral-800 px-6 py-4 flex items-center justify-between">
+              <div className="space-y-0.5">
+                <span className="text-[9px] text-amber-400 font-black tracking-widest uppercase">Granular Audit Journal</span>
+                <h3 className="text-sm font-black text-white uppercase flex items-center gap-2">
+                  <ClipboardCheck size={16} className="text-emerald-400" />
+                  {selectedClassDetail.class} Payments on {selectedClassDetail.date}
+                </h3>
+              </div>
+              <button 
+                onClick={() => setSelectedClassDetail(null)}
+                className="text-neutral-500 hover:text-white transition p-1 hover:bg-neutral-800 rounded-lg cursor-pointer border-none bg-transparent"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* List */}
+            <div className="p-6 space-y-4 max-h-[400px] overflow-y-auto">
+              {modalPayments.length === 0 ? (
+                <div className="text-center py-12 text-neutral-500 space-y-2">
+                  <AlertCircle size={32} className="mx-auto text-neutral-600 animate-pulse" />
+                  <p className="font-bold">No registered pupil collections found.</p>
+                  <p className="text-[10px]">Payments might have been deleted, or are recorded under a different class or date.</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-5 text-neutral-500 border-b border-neutral-850 pb-2 text-[10px] font-black uppercase tracking-wider">
+                    <span className="col-span-2">Pupil Name</span>
+                    <span className="text-right">Amount Paid</span>
+                    <span className="pl-4">Method</span>
+                    <span className="text-right">Action</span>
+                  </div>
+                  
+                  {modalPayments.map((p) => (
+                    <div key={p.id} className="grid grid-cols-5 items-center py-2.5 border-b border-neutral-850/40 hover:bg-neutral-850/10 rounded px-1.5 transition">
+                      {/* Name */}
+                      <div className="col-span-2 font-bold text-white pr-2 truncate">
+                        {p.studentName}
+                      </div>
+                      
+                      {/* Amount */}
+                      <div className="text-right font-black text-amber-400 pr-4">
+                        GHC {p.amountPaid.toFixed(2)}
+                      </div>
+
+                      {/* Method */}
+                      <div className="pl-4">
+                        <span className="px-2 py-0.5 bg-neutral-950 border border-neutral-800 rounded text-[9px] font-bold text-neutral-400">
+                          {p.paymentMethod}
+                        </span>
+                      </div>
+
+                      {/* Action */}
+                      <div className="text-right">
+                        <button
+                          onClick={async () => {
+                            if (window.confirm(`Are you sure you want to delete this payment of GHC ${p.amountPaid.toFixed(2)} for ${p.studentName}?`)) {
+                              await deleteExamsPayment(p.id);
+                              showToast(`Deleted payment of GHC ${p.amountPaid.toFixed(2)} for ${p.studentName}.`);
+                            }
+                          }}
+                          className="text-rose-400 hover:text-rose-500 transition p-1 hover:bg-rose-950/20 rounded cursor-pointer border-none bg-transparent"
+                          title="Delete payment record"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+
+                      {/* Notes / Collector */}
+                      {p.notes && (
+                        <div className="col-span-5 text-[10px] text-neutral-500 mt-1 pl-1 italic">
+                          Notes: {p.notes} (Collected by {p.collectedBy})
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Footer Summary */}
+            <div className="bg-neutral-950 border-t border-neutral-800 px-6 py-4 flex justify-between items-center text-[11px]">
+              <span className="text-neutral-500">Total Transactions: {modalPayments.length}</span>
+              <span className="text-white font-black">
+                Sum: <span className="text-emerald-400 font-black text-sm">GHC {modalPayments.reduce((sum, p) => sum + p.amountPaid, 0).toFixed(2)}</span>
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Floating custom toast alert container */}
+      {toastMessage && (
+        <div className="fixed bottom-6 right-6 z-50 bg-neutral-900 border-2 border-emerald-500 text-white font-mono text-xs px-4 py-3 shadow-2xl rounded-xl flex items-center gap-2 max-w-sm animate-fadeIn">
+          <span className="text-emerald-400 font-black">✔</span>
+          <span className="font-bold">{toastMessage}</span>
+        </div>
+      )}
     </>
   );
 }

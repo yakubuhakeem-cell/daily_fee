@@ -7,14 +7,17 @@ import React, { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { StudentClass, SchoolCategory, PaymentRecord } from '../types';
 import { 
-  FileSpreadsheet, Mail, Search, Calendar, ChevronRight, CheckCircle2, 
+  FileSpreadsheet, Mail, Search, Calendar, ChevronRight, ChevronDown, CheckCircle2, 
   HelpCircle, Settings, CheckSquare, PlusSquare, ArrowUpDown, X, Printer,
   UserCheck, CalendarRange, AlertTriangle, TrendingUp, UserMinus, Eye,
   ZoomIn, ZoomOut, FileText, Check, Info, MessageSquare, Share2,
-  Lock, Unlock, Users, Receipt, Coins, TrendingDown
+  Lock, Unlock, Users, Receipt, Coins, TrendingDown, Database
 } from 'lucide-react';
 import { SchoolLogo } from './SchoolLogo';
 import { VoiceSearchButton } from './VoiceSearchButton';
+import { AuditTrailTab } from './AuditTrailTab';
+import { DatabaseTab } from './DatabaseTab';
+import * as XLSX from 'xlsx';
 
 export const ReportPanel: React.FC = React.memo(() => {
   const { 
@@ -27,16 +30,45 @@ export const ReportPanel: React.FC = React.memo(() => {
     activeTerm,
     sendautomatedWhatsApp,
     examsPayments,
-    examsSettings
+    examsSettings,
+    terms
   } = useApp();
+
+  const paymentsIndexed = useMemo(() => {
+    const byStudentId = new Map<string, typeof payments>();
+    const byStudentIdAndDate = new Map<string, typeof payments[0]>();
+    
+    payments.forEach(p => {
+      if (!byStudentId.has(p.studentId)) {
+        byStudentId.set(p.studentId, []);
+      }
+      byStudentId.get(p.studentId)!.push(p);
+      byStudentIdAndDate.set(`${p.studentId}_${p.date}`, p);
+    });
+
+    return { byStudentId, byStudentIdAndDate };
+  }, [payments]);
 
   const [dateFilter, setDateFilter] = useState<string>(''); // empty means All Days
   const [classFilter, setClassFilter] = useState<string>('ALL');
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [visibleDailyCount, setVisibleDailyCount] = useState<number>(100);
 
   // Auditing & Month-To-Date (MTD) view states
-  const [auditViewMode, setAuditViewMode] = useState<'daily' | 'monthly' | 'ledger' | 'teller'>('daily');
+  const [auditViewMode, setAuditViewMode] = useState<'daily' | 'monthly' | 'ledger' | 'teller' | 'audit' | 'database'>('daily');
+
+  React.useEffect(() => {
+    setVisibleDailyCount(100);
+  }, [searchQuery, dateFilter, classFilter, categoryFilter, auditViewMode]);
+
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const showToast = (msg: string) => {
+    setSuccessMsg(msg);
+    setTimeout(() => {
+      setSuccessMsg(null);
+    }, 3000);
+  };
   const [auditSelectedMonth, setAuditSelectedMonth] = useState<string>(() => {
     return currentDate?.slice(0, 7) || '2026-06';
   });
@@ -95,13 +127,46 @@ export const ReportPanel: React.FC = React.memo(() => {
   const [termSummarySignatory, setTermSummarySignatory] = useState('Yakubu Hakeem (Headmaster)');
   const [termSummaryMemo, setTermSummaryMemo] = useState('Consolidated term billing record and verified registration statement. Please verify and resolve all outstanding balances with the administrative office.');
   const [termSummaryOnlyPending, setTermSummaryOnlyPending] = useState(false);
+  
+  const [selectedReportTermId, setSelectedReportTermId] = useState<string>(activeTerm?.id || '');
+
+  React.useEffect(() => {
+    if (activeTerm && !selectedReportTermId) {
+      setSelectedReportTermId(activeTerm.id);
+    }
+  }, [activeTerm]);
+
+  const reportTerm = useMemo(() => {
+    return terms.find(t => t.id === selectedReportTermId) || activeTerm;
+  }, [terms, selectedReportTermId, activeTerm]);
+
+  // Consolidated Ledger collapsible states
+  const [expandedCategories, setExpandedCategories] = useState<Record<SchoolCategory, boolean>>({
+    'Pre-school': false,
+    'Primary': false,
+    'JHS': false,
+  });
+  const [expandedClasses, setExpandedClasses] = useState<Record<StudentClass, boolean>>({
+    'Nursery': false,
+    'KG1': false,
+    'KG2': false,
+    'B1': false,
+    'B2': false,
+    'B3': false,
+    'B4': false,
+    'B5': false,
+    'B6': false,
+    'B7': false,
+    'B8': false,
+    'B9': false,
+  });
 
   // Directors' Smart Debt Report states
   const [showDirectorsDebtModal, setShowDirectorsDebtModal] = useState(false);
   const [directorsSearchQuery, setDirectorsSearchQuery] = useState('');
   const [directorsClassFilter, setDirectorsClassFilter] = useState('ALL');
   const [directorsOnlyPaymentType, setDirectorsOnlyPaymentType] = useState('ALL'); // ALL, DAILY, TERM
-  const [directorsMinDebt, setDirectorsMinDebt] = useState<number>(0);
+  const [directorsMinDebt, setDirectorsMinDebt] = useState<number>(20);
   const [directorsSignatory, setDirectorsSignatory] = useState('Yakubu Hakeem (Headmaster)');
   const [directorsChairperson, setDirectorsChairperson] = useState('Board of Directors Chairperson');
   const [directorsNotes, setDirectorsNotes] = useState('Official consolidated student debt list compiled for the Board of Directors review. These balances reflect total outstanding tuition, legacy arrears, and exam fees as of the end of the term. Prioritize these accounts for recovery actions in preparation for the upcoming academic term.');
@@ -183,6 +248,10 @@ export const ReportPanel: React.FC = React.memo(() => {
 
     return result;
   }, [payments, searchQuery, dateFilter, classFilter, categoryFilter, sortField, sortDirection]);
+
+  const displayedDailyPayments = useMemo(() => {
+    return filteredPayments.slice(0, visibleDailyCount);
+  }, [filteredPayments, visibleDailyCount]);
 
   // Filter payments specifically for bulk printing (with dynamic range option)
   const printFilteredPayments = useMemo(() => {
@@ -267,7 +336,7 @@ export const ReportPanel: React.FC = React.memo(() => {
 
   // Term Summary PDF data compilation
   const termSummaryReportsByStudent = useMemo(() => {
-    if (!activeTerm || !activeTerm.schoolDays) return [];
+    if (!reportTerm || !reportTerm.schoolDays) return [];
 
     let filteredList = students.filter(s => s.active !== false);
 
@@ -283,28 +352,33 @@ export const ReportPanel: React.FC = React.memo(() => {
       );
     }
 
-    const holidays = activeTerm.publicHolidays || [];
-    const termSchoolDays = activeTerm.schoolDays;
+    const holidays = reportTerm.publicHolidays || [];
+    const holidaysSet = new Set(holidays);
+    const termSchoolDays = reportTerm.schoolDays;
+    const termSchoolDaysSet = new Set(termSchoolDays);
 
     return filteredList.map(student => {
       // Find payments for this student inside the active term
-      const studentPayments = payments.filter(p => p.studentId === student.id && termSchoolDays.includes(p.date));
+      const allStudentPayments = paymentsIndexed.byStudentId.get(student.id) || [];
+      const studentPayments = allStudentPayments.filter(p => termSchoolDaysSet.has(p.date));
       
-      const presentPayments = studentPayments.filter(p => !p.isAbsent && p.verified);
-      const unverifiedPayments = studentPayments.filter(p => !p.isAbsent && !p.verified);
       const absentPayments = studentPayments.filter(p => p.isAbsent);
 
-      const presentCount = presentPayments.length + (includeUnverified ? unverifiedPayments.length : 0);
       const absentCount = absentPayments.length;
       
       // School days elapsed up to currentDate
-      const elapsedDays = termSchoolDays.filter(d => d <= currentDate);
+      const elapsedDays = termSchoolDays.filter(d => {
+        const afterEnrollment = student.enrollmentDate ? d >= student.enrollmentDate : true;
+        return d <= currentDate && afterEnrollment;
+      });
+
+      const teachingDays = elapsedDays.filter(dayStr => !holidaysSet.has(dayStr));
+      const presentCount = Math.max(0, teachingDays.length - absentCount);
 
       // Unpaid days up to currentDate
       const unpaidDays = elapsedDays.filter(dayStr => {
-        if (holidays.includes(dayStr)) return false;
-        const record = payments.find(p => p.studentId === student.id && p.date === dayStr);
-        return !record;
+        if (holidaysSet.has(dayStr)) return false;
+        return !paymentsIndexed.byStudentIdAndDate.has(`${student.id}_${dayStr}`);
       });
       const unpaidCount = unpaidDays.length;
 
@@ -329,7 +403,7 @@ export const ReportPanel: React.FC = React.memo(() => {
       }
 
       // Attendance rate
-      const denominator = presentCount + absentCount + unpaidCount;
+      const denominator = teachingDays.length;
       const attendanceRate = denominator > 0 ? (presentCount / denominator) * 100 : 100;
 
       return {
@@ -351,7 +425,7 @@ export const ReportPanel: React.FC = React.memo(() => {
       }
       return true;
     }).sort((a, b) => a.student.name.localeCompare(b.student.name));
-  }, [students, payments, activeTerm, currentDate, termSummarySearchQuery, termSummaryClassFilter, termSummaryOnlyPending, includeUnverified]);
+  }, [students, paymentsIndexed, reportTerm, currentDate, termSummarySearchQuery, termSummaryClassFilter, termSummaryOnlyPending, includeUnverified]);
 
   // Compiled term summary overall totals
   const termSummaryTotals = useMemo(() => {
@@ -379,18 +453,22 @@ export const ReportPanel: React.FC = React.memo(() => {
     if (!activeTerm || !activeTerm.schoolDays) return [];
 
     const holidays = activeTerm.publicHolidays || [];
+    const holidaysSet = new Set(holidays);
     const termSchoolDays = activeTerm.schoolDays;
+    const termSchoolDaysSet = new Set(termSchoolDays);
     const elapsedDays = termSchoolDays.filter(d => d <= currentDate);
 
     return students.filter(s => s.active !== false).map(student => {
       // Regular payments inside the active term
-      const studentPayments = payments.filter(p => p.studentId === student.id && termSchoolDays.includes(p.date));
+      const allStudentPayments = paymentsIndexed.byStudentId.get(student.id) || [];
+      const studentPayments = allStudentPayments.filter(p => termSchoolDaysSet.has(p.date));
 
       // Unpaid days up to currentDate
       const unpaidDays = elapsedDays.filter(dayStr => {
-        if (holidays.includes(dayStr)) return false;
-        const record = payments.find(p => p.studentId === student.id && p.date === dayStr);
-        return !record;
+        if (holidaysSet.has(dayStr)) return false;
+        const afterEnrollment = student.enrollmentDate ? dayStr >= student.enrollmentDate : true;
+        if (!afterEnrollment) return false;
+        return !paymentsIndexed.byStudentIdAndDate.has(`${student.id}_${dayStr}`);
       });
       const unpaidCount = unpaidDays.length;
 
@@ -415,10 +493,11 @@ export const ReportPanel: React.FC = React.memo(() => {
       }
 
       // Exams fees calculations (from examsPayments and examsSettings)
-      const examsBilled = examsSettings?.classFees?.[student.class]?.feeCharged || 0;
-      const studentExamsPayments = (examsPayments || []).filter(p => p.studentId === student.id);
-      const examsPaid = studentExamsPayments.reduce((sum, p) => sum + p.amountPaid, 0);
-      const examsDue = Math.max(0, examsBilled - examsPaid);
+      const isExamsEligible = (examsSettings?.eligibleClasses || ['KG1', 'KG2', 'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9']).includes(student.class);
+      const examsBilled = isExamsEligible ? (examsSettings?.classFees?.[student.class]?.feeCharged || 0) : 0;
+      const studentExamsPayments = isExamsEligible ? (examsPayments || []).filter(p => p.studentId === student.id) : [];
+      const examsPaid = isExamsEligible ? studentExamsPayments.reduce((sum, p) => sum + p.amountPaid, 0) : 0;
+      const examsDue = isExamsEligible ? Math.max(0, examsBilled - examsPaid) : 0;
 
       const totalBilled = tuitionBilled + examsBilled;
       const totalPaid = tuitionPaid + examsPaid;
@@ -440,7 +519,7 @@ export const ReportPanel: React.FC = React.memo(() => {
         parentPhone: student.parentPhone || student.phone || 'N/A'
       };
     });
-  }, [students, payments, examsPayments, examsSettings, activeTerm, currentDate, includeUnverified]);
+  }, [students, paymentsIndexed, examsPayments, examsSettings, activeTerm, currentDate, includeUnverified]);
 
   const filteredDirectorsDebt = useMemo(() => {
     let result = [...directorsDebtCompiledData];
@@ -887,7 +966,7 @@ export const ReportPanel: React.FC = React.memo(() => {
         future++;
       } else {
         const paidCount = activeStudents.filter(s => 
-          payments.some(p => p.studentId === s.id && p.date === dayStr)
+          paymentsIndexed.byStudentIdAndDate.has(`${s.id}_${dayStr}`)
         ).length;
 
         if (paidCount === 0) {
@@ -1165,7 +1244,7 @@ export const ReportPanel: React.FC = React.memo(() => {
               SAAKO HOLY CHILD ACADEMY
             </h2>
             <p style="font-size: 10px; color: #4b5563; font-weight: bold; text-transform: uppercase; font-family: monospace; margin: 4px 0 0 0; letter-spacing: 0.05em;">
-              Holiness is our Key, P. O. Box ls15, Sawla-Savannah. Tel: +233545029200 / +2330507274133
+              Holiness is our Key, P. O. Box LS 15, Sawla Savannah Region • Sawla, Jelinkon street, Savannah Region. Tel: +233545029200 / +2330507274133
             </p>
           </div>
           <div style="text-align: right; font-family: monospace;">
@@ -1402,7 +1481,7 @@ export const ReportPanel: React.FC = React.memo(() => {
                 <div style="background-color: #fff; height: 100%; width: 100%; border-radius: 50%; border: 1px solid #f59e0b; display: flex; flex-direction: column; align-items: center; justify-content: center; box-sizing: border-box; padding: 4px; line-height: 1.1;">
                   <span style="font-size: 7px; color: #312e81; font-weight: 900; display: block;">SAAKO TRUST</span>
                   <span style="font-size: 6px; color: #d97706; font-weight: 900; display: block; margin-top: 2px; letter-spacing: 0.05em;">VALID SEAL</span>
-                  <span style="font-size: 5px; color: #4338ca; display: block; font-weight: bold;">SAWLA-SAVANNAH</span>
+                  <span style="font-size: 5px; color: #4338ca; display: block; font-weight: bold;">SAWLA, JELINKON STREET, SAVANNAH REGION</span>
                 </div>
               </div>
               <span style="font-size: 7px; font-family: monospace; color: #6366f1; text-transform: uppercase; letter-spacing: 0.1em; margin-top: 4px; display: block; font-weight: bold;">OFFICIAL IMPRESS</span>
@@ -1434,36 +1513,104 @@ export const ReportPanel: React.FC = React.memo(() => {
   };
 
   const confirmExcelExport = () => {
-    // Building valid Comma Separated Spreadsheet Content
-    let csvContent = "data:text/csv;charset=utf-8,\uFEFF"; // Include BOM for Excel English support
-    csvContent += "Payment ID,Student Roll/ID,Student Name,Class Grade,Academic Group,Collections (GHC),Checked Date,Checked Timestamp,Collected By Teacher,Security Audit Status\r\n";
+    const wb = XLSX.utils.book_new();
 
-    filteredPayments.forEach(p => {
-      const row = [
-        p.id,
-        `="${p.studentId}"`, // Force Excel string format
-        `"${p.studentName.replace(/"/g, '""')}"`,
-        p.class,
-        p.category,
-        p.amount.toFixed(2),
-        p.date,
-        p.timestamp,
-        `"${p.collectedBy.replace(/"/g, '""')}"`,
-        p.verified ? 'Verified Ledger' : 'Pending Verification'
-      ];
-      csvContent += row.join(",") + "\r\n";
+    // Sheet 1: Daily School Fees Ledger (current filteredPayments)
+    const sheet1Data = filteredPayments.map(p => ({
+      "Payment ID": p.id,
+      "Student Roll/ID": p.studentId,
+      "Student Name": p.studentName,
+      "Class Grade": p.class,
+      "Academic Group": p.category,
+      "Collections (GHC)": Number(p.amount.toFixed(2)),
+      "Checked Date": p.date,
+      "Checked Timestamp": p.timestamp,
+      "Collected By Teacher": p.collectedBy,
+      "Security Audit Status": p.verified ? 'Verified Ledger' : 'Pending Verification'
+    }));
+
+    const ws1 = XLSX.utils.json_to_sheet(sheet1Data);
+    XLSX.utils.book_append_sheet(wb, ws1, "School Fees Ledger");
+
+    // Sheet 2: Daily Attendance Records for the selected month
+    const selectedYear = activeMonthInfo ? activeMonthInfo.year : new Date(currentDate).getFullYear();
+    const selectedMonth = activeMonthInfo ? activeMonthInfo.month : new Date(currentDate).getMonth();
+    const yearMonthPrefix = `${selectedYear}-${String(selectedMonth + 1).padStart(2, '0')}`;
+
+    const schoolDaysInMonth = activeTerm && activeTerm.schoolDays 
+      ? activeTerm.schoolDays.filter(d => d.startsWith(yearMonthPrefix))
+      : [];
+
+    const holidays = activeTerm?.publicHolidays || [];
+    const activeStudents = students.filter(s => s.active !== false);
+
+    const sheet2Data: any[] = [];
+
+    activeStudents.forEach(student => {
+      schoolDaysInMonth.forEach(dayStr => {
+        const afterEnrollment = student.enrollmentDate ? dayStr >= student.enrollmentDate : true;
+        if (!afterEnrollment) return; // Skip if student not enrolled yet
+
+        const pRecord = paymentsIndexed.byStudentIdAndDate.get(`${student.id}_${dayStr}`);
+        const isHoliday = holidays.includes(dayStr);
+        const isAbsent = pRecord?.isAbsent || false;
+        const isVerified = pRecord?.verified || false;
+        const isTermPayer = student.paymentType === 'Term';
+        const isPresentZeroPay = pRecord && pRecord.amount === 0 && !pRecord.isAbsent;
+
+        let attendanceStatus = 'Present';
+        let paymentStatus = 'Unpaid';
+        let amountGhc = 0;
+        let collectedBy = '- -';
+
+        if (isHoliday) {
+          attendanceStatus = 'Holiday';
+          paymentStatus = 'Exempt (Holiday)';
+        } else if (isAbsent) {
+          attendanceStatus = 'Absent';
+          paymentStatus = 'Exempt (Absent)';
+          collectedBy = pRecord?.collectedBy || '- -';
+        } else if (isPresentZeroPay) {
+          attendanceStatus = 'Present';
+          paymentStatus = 'Present (¢0)';
+          collectedBy = pRecord?.collectedBy || '- -';
+        } else if (pRecord) {
+          attendanceStatus = isVerified ? 'Present' : 'Present (Pending)';
+          paymentStatus = 'Paid';
+          amountGhc = pRecord.amount;
+          collectedBy = pRecord.collectedBy;
+        } else if (isTermPayer) {
+          attendanceStatus = 'Present';
+          paymentStatus = 'Paid (Term Scheme)';
+          collectedBy = 'System';
+        } else {
+          attendanceStatus = 'Present';
+          paymentStatus = 'Unpaid Arrears';
+        }
+
+        sheet2Data.push({
+          "Student ID": student.id,
+          "Student Name": student.studentName,
+          "Class Grade": student.class,
+          "Academic Group": student.category || 'ALL',
+          "Date": dayStr,
+          "Attendance Status": attendanceStatus,
+          "Payment Status": paymentStatus,
+          "Amount Paid (GHC)": amountGhc,
+          "Collected By": collectedBy
+        });
+      });
     });
 
-    const encodedUri = encodeURI(csvContent);
-    const downloadAnchor = document.createElement("a");
-    downloadAnchor.setAttribute("href", encodedUri);
-    
-    // Naming structure for audits
+    const ws2 = XLSX.utils.json_to_sheet(sheet2Data);
+    XLSX.utils.book_append_sheet(wb, ws2, "Daily Attendance Records");
+
+    // Generate XLSX file and trigger download
     const fileDateSuffix = dateFilter ? `_${dateFilter}` : "_FullHistory";
-    downloadAnchor.setAttribute("download", `DailySchoolFees_ExcelSheet${fileDateSuffix}.csv`);
-    document.body.appendChild(downloadAnchor);
-    downloadAnchor.click();
-    document.body.removeChild(downloadAnchor);
+    const monthName = activeMonthInfo ? activeMonthInfo.label.replace(/\s+/g, '_') : "SelectedMonth";
+    const filename = `DailySchoolFees_ExcelSheet_${monthName}${fileDateSuffix}.xlsx`;
+
+    XLSX.writeFile(wb, filename);
     setShowExportModal(false);
   };
 
@@ -1497,27 +1644,32 @@ export const ReportPanel: React.FC = React.memo(() => {
     if (!activeTerm || !activeTerm.schoolDays) return [];
 
     const holidays = activeTerm.publicHolidays || [];
+    const holidaysSet = new Set(holidays);
     const termSchoolDays = activeTerm.schoolDays;
+    const termSchoolDaysSet = new Set(termSchoolDays);
 
     return students.filter(s => s.active !== false).map(student => {
       // Find payments for this student inside the active term
-      const studentPayments = payments.filter(p => p.studentId === student.id && termSchoolDays.includes(p.date));
+      const allStudentPayments = paymentsIndexed.byStudentId.get(student.id) || [];
+      const studentPayments = allStudentPayments.filter(p => termSchoolDaysSet.has(p.date));
       
-      const presentPayments = studentPayments.filter(p => !p.isAbsent && p.verified);
-      const unverifiedPayments = studentPayments.filter(p => !p.isAbsent && !p.verified);
       const absentPayments = studentPayments.filter(p => p.isAbsent);
 
-      const presentCount = presentPayments.length + unverifiedPayments.length;
       const absentCount = absentPayments.length;
       
       // School days elapsed up to currentDate
-      const elapsedDays = termSchoolDays.filter(d => d <= currentDate);
+      const elapsedDays = termSchoolDays.filter(d => {
+        const afterEnrollment = student.enrollmentDate ? d >= student.enrollmentDate : true;
+        return d <= currentDate && afterEnrollment;
+      });
+
+      const teachingDays = elapsedDays.filter(dayStr => !holidaysSet.has(dayStr));
+      const presentCount = Math.max(0, teachingDays.length - absentCount);
 
       // Unpaid days up to currentDate
       const unpaidDays = elapsedDays.filter(dayStr => {
-        if (holidays.includes(dayStr)) return false;
-        const record = payments.find(p => p.studentId === student.id && p.date === dayStr);
-        return !record;
+        if (holidaysSet.has(dayStr)) return false;
+        return !paymentsIndexed.byStudentIdAndDate.has(`${student.id}_${dayStr}`);
       });
       const unpaidCount = unpaidDays.length;
 
@@ -1563,7 +1715,7 @@ export const ReportPanel: React.FC = React.memo(() => {
         paymentsList: studentPayments.sort((a, b) => b.date.localeCompare(a.date))
       };
     }).sort((a, b) => a.student.name.localeCompare(b.student.name));
-  }, [students, payments, activeTerm, currentDate]);
+  }, [students, paymentsIndexed, activeTerm, currentDate]);
 
   const filteredConsolidatedLedger = useMemo(() => {
     let result = [...consolidatedLedgerData];
@@ -1587,6 +1739,69 @@ export const ReportPanel: React.FC = React.memo(() => {
 
     return result;
   }, [consolidatedLedgerData, ledgerClassFilter, ledgerStatusFilter, ledgerSearchQuery]);
+
+  // Group filtered consolidated ledger by Category and Class, and pre-calculate all stats in one optimized pass
+  const ledgerStructure = useMemo(() => {
+    const categories: Record<SchoolCategory, Record<StudentClass, typeof filteredConsolidatedLedger>> = {
+      'Pre-school': {} as Record<StudentClass, typeof filteredConsolidatedLedger>,
+      'Primary': {} as Record<StudentClass, typeof filteredConsolidatedLedger>,
+      'JHS': {} as Record<StudentClass, typeof filteredConsolidatedLedger>,
+    };
+
+    const preSchoolClasses: StudentClass[] = ['Nursery', 'KG1', 'KG2'];
+    const primaryClasses: StudentClass[] = ['B1', 'B2', 'B3', 'B4', 'B5', 'B6'];
+    const jhsClasses: StudentClass[] = ['B7', 'B8', 'B9'];
+
+    preSchoolClasses.forEach(cls => { categories['Pre-school'][cls] = []; });
+    primaryClasses.forEach(cls => { categories['Primary'][cls] = []; });
+    jhsClasses.forEach(cls => { categories['JHS'][cls] = []; });
+
+    const categoryStats: Record<SchoolCategory, { studentCount: number; totalCharged: number; totalPaid: number; totalDue: number }> = {
+      'Pre-school': { studentCount: 0, totalCharged: 0, totalPaid: 0, totalDue: 0 },
+      'Primary': { studentCount: 0, totalCharged: 0, totalPaid: 0, totalDue: 0 },
+      'JHS': { studentCount: 0, totalCharged: 0, totalPaid: 0, totalDue: 0 },
+    };
+
+    const classStats: Record<StudentClass, { studentCount: number; totalCharged: number; totalPaid: number; totalDue: number }> = {} as any;
+    const allClassesList: StudentClass[] = [...preSchoolClasses, ...primaryClasses, ...jhsClasses];
+    allClassesList.forEach(cls => {
+      classStats[cls] = { studentCount: 0, totalCharged: 0, totalPaid: 0, totalDue: 0 };
+    });
+
+    filteredConsolidatedLedger.forEach(item => {
+      const s = item.student;
+      const cat = s.category || 'Primary';
+      const cls = s.class;
+
+      let resolvedCat = cat;
+      if (!categories[resolvedCat]) {
+        if (preSchoolClasses.includes(cls)) resolvedCat = 'Pre-school';
+        else if (jhsClasses.includes(cls)) resolvedCat = 'JHS';
+        else resolvedCat = 'Primary';
+      }
+
+      if (!categories[resolvedCat][cls]) {
+        categories[resolvedCat][cls] = [];
+      }
+      categories[resolvedCat][cls].push(item);
+
+      if (categoryStats[resolvedCat]) {
+        categoryStats[resolvedCat].studentCount++;
+        categoryStats[resolvedCat].totalCharged += item.totalCharged;
+        categoryStats[resolvedCat].totalPaid += item.totalPaid;
+        categoryStats[resolvedCat].totalDue += item.totalDue;
+      }
+
+      if (classStats[cls]) {
+        classStats[cls].studentCount++;
+        classStats[cls].totalCharged += item.totalCharged;
+        classStats[cls].totalPaid += item.totalPaid;
+        classStats[cls].totalDue += item.totalDue;
+      }
+    });
+
+    return { categories, categoryStats, classStats };
+  }, [filteredConsolidatedLedger]);
 
   // 2. Cashier Auditing / Teller Reconciliation Calculations
   const cashierAuditingData = useMemo(() => {
@@ -1656,17 +1871,6 @@ export const ReportPanel: React.FC = React.memo(() => {
             <Mail size={14} /> Summary Email
           </button>
 
-          {/* Bulk Print button */}
-          <button
-            onClick={() => {
-              setPrintSearchQuery(searchQuery);
-              setShowPrintModal(true);
-            }}
-            className="flex-1 sm:flex-initial text-[10px] font-black bg-neutral-950 hover:bg-neutral-850 hover:text-white text-amber-400 py-3.5 px-4 transition-all border-2 border-neutral-800 hover:border-amber-400 uppercase tracking-widest cursor-pointer flex items-center justify-center gap-1.5"
-          >
-            <Printer size={14} /> Bulk Print
-          </button>
-
           {/* Preview Report button */}
           <button
             onClick={() => {
@@ -1678,48 +1882,29 @@ export const ReportPanel: React.FC = React.memo(() => {
             <Eye size={14} /> Preview Report
           </button>
 
-          {/* Print Friendly button */}
-          <button
-            onClick={() => {
-              setShowPrintFriendlyModal(true);
-            }}
-            className="flex-1 sm:flex-initial text-[10px] font-black bg-neutral-950 hover:bg-neutral-850 hover:text-white text-blue-400 py-3.5 px-4 transition-all border-2 border-neutral-800 hover:border-blue-400 uppercase tracking-widest cursor-pointer flex items-center justify-center gap-1.5"
-          >
-            <Printer size={14} /> Print Friendly
-          </button>
-
-          {/* Print Report (Dedicated Window) button */}
-          <button
-            onClick={handlePrintReport}
-            className="flex-1 sm:flex-initial text-[10px] font-black bg-neutral-950 hover:bg-neutral-850 hover:text-white text-amber-500 py-3.5 px-4 transition-all border-2 border-neutral-800 hover:border-amber-500 uppercase tracking-widest cursor-pointer flex items-center justify-center gap-1.5"
-            title="Open audit ledger in stripped, print-ready dedicated browser window"
-          >
-            <Printer size={14} /> Print Report
-          </button>
-
-          {/* Term Summary PDF button */}
-          <button
-            onClick={() => {
-              setTermSummarySearchQuery(searchQuery);
-              setShowTermSummaryModal(true);
-            }}
-            className="flex-1 sm:flex-initial text-[10px] font-black bg-neutral-950 hover:bg-neutral-850 hover:text-white text-emerald-450 py-3.5 px-4 transition-all border-2 border-neutral-800 hover:border-emerald-400 uppercase tracking-widest cursor-pointer flex items-center justify-center gap-1.5"
-            title="Generate consolidated term-long summaries and statement sheets for all pupils"
-          >
-            <FileText size={14} /> Term Summary PDF
-          </button>
-
-          {/* Directors' Smart Debt PDF button */}
+          {/* Print Debt Summary (PDF) button */}
           <button
             onClick={() => {
               setDirectorsSearchQuery(searchQuery);
               setShowDirectorsDebtModal(true);
             }}
             className="flex-1 sm:flex-initial text-[10px] font-black bg-neutral-950 hover:bg-neutral-850 hover:text-white text-amber-400 py-3.5 px-4 transition-all border-2 border-neutral-800 hover:border-amber-400 uppercase tracking-widest cursor-pointer flex items-center justify-center gap-1.5"
-            title="Generate a comprehensive school-wide student debt ledger for the Board of Directors"
+            title={`Generate a simplified outstanding arrears statement for the board (15 pupils per page, minimum debt >= GHC ${directorsMinDebt.toFixed(2)})`}
             id="btn-directors-debt-summary"
           >
-            <FileText size={14} className="text-amber-400" /> Directors' Board Debt Summary
+            <FileText size={14} className="text-amber-400" /> Print Debt Summary (PDF)
+          </button>
+
+          {/* Printable Term Report Card generator */}
+          <button
+            onClick={() => {
+              setShowTermSummaryModal(true);
+            }}
+            className="flex-1 sm:flex-initial text-[10px] font-black bg-neutral-950 hover:bg-neutral-850 hover:text-white text-emerald-450 py-3.5 px-4 transition-all border-2 border-neutral-800 hover:border-emerald-400 uppercase tracking-widest cursor-pointer flex items-center justify-center gap-1.5"
+            title="Generate print-ready Term Report Statements for each student detailing attendance, total payments, and outstanding debt for a selected term."
+            id="btn-printable-term-reports"
+          >
+            <Printer size={14} className="text-emerald-400" /> Print Term Reports (PDF)
           </button>
 
           {/* Download CSV audit core */}
@@ -2276,6 +2461,30 @@ export const ReportPanel: React.FC = React.memo(() => {
             <Coins size={12} />
             Teller Reconciliation
           </button>
+          <button
+            type="button"
+            onClick={() => setAuditViewMode('audit')}
+            className={`flex-1 md:flex-initial px-4 py-2 text-[10px] uppercase font-mono font-black tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+              auditViewMode === 'audit'
+                ? 'bg-amber-400 text-black'
+                : 'text-neutral-400 hover:text-white'
+            }`}
+          >
+            <FileText size={12} />
+            System Activity Logs
+          </button>
+          <button
+            type="button"
+            onClick={() => setAuditViewMode('database')}
+            className={`flex-1 md:flex-initial px-4 py-2 text-[10px] uppercase font-mono font-black tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+              auditViewMode === 'database'
+                ? 'bg-amber-400 text-black'
+                : 'text-neutral-400 hover:text-white'
+            }`}
+          >
+            <Database size={12} />
+            Database Connect & Backups
+          </button>
         </div>
       </div>
 
@@ -2309,7 +2518,7 @@ export const ReportPanel: React.FC = React.memo(() => {
                     </td>
                   </tr>
                 ) : (
-                  filteredPayments.map((p) => (
+                  displayedDailyPayments.map((p) => (
                     <tr key={p.id} className="hover:bg-neutral-950/20">
                       <td className="p-4 font-mono text-neutral-450">{p.date}</td>
                       <td className="p-4 font-black text-white uppercase text-xs tracking-wide">
@@ -2353,6 +2562,16 @@ export const ReportPanel: React.FC = React.memo(() => {
               </tbody>
             </table>
           </div>
+          {filteredPayments.length > visibleDailyCount && (
+            <div className="p-4 bg-neutral-950 border-t border-neutral-800 text-center font-mono">
+              <button
+                onClick={() => setVisibleDailyCount(prev => prev + 100)}
+                className="px-4 py-2 text-[10px] font-black bg-neutral-900 hover:bg-neutral-850 text-amber-400 border border-neutral-800 hover:border-amber-400 uppercase tracking-widest cursor-pointer transition-colors"
+              >
+                Show More Records ({filteredPayments.length - visibleDailyCount} remaining)
+              </button>
+            </div>
+          )}
         </div>
       ) : auditViewMode === 'monthly' ? (
         /* Monthly Aggregated MTD Audit View */
@@ -2616,120 +2835,240 @@ export const ReportPanel: React.FC = React.memo(() => {
             </div>
           </div>
 
-          {/* Main Ledger Table */}
+          {/* Workstation Scroll Optimization Header */}
           <div className="bg-neutral-900 border-4 border-neutral-800 overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="bg-neutral-950 border-b-2 border-neutral-800 text-[10px] font-black text-neutral-400 uppercase tracking-widest font-mono">
-                    <th className="p-4">Student Info</th>
-                    <th className="p-4">Class / Category</th>
-                    <th className="p-4">Billing Scheme</th>
-                    <th className="p-4 text-right">Legacy Debt</th>
-                    <th className="p-4 text-right">Total Charged</th>
-                    <th className="p-4 text-right">Total Paid</th>
-                    <th className="p-4 text-right">Balance Due</th>
-                    <th className="p-4 text-center">Audit Status</th>
-                    <th className="p-4 text-center">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-neutral-850 text-neutral-300">
-                  {filteredConsolidatedLedger.length === 0 ? (
-                    <tr>
-                      <td colSpan={9} className="text-center py-12 text-neutral-500 font-black uppercase tracking-widest text-xs font-mono">
-                        No billing profiles match your query filters.
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredConsolidatedLedger.map((item) => {
-                      const s = item.student;
-                      return (
-                        <tr key={s.id} className="hover:bg-neutral-950/40 transition-colors">
-                          <td className="p-4 font-bold text-white">
-                            <div className="font-sans text-sm">{s.name}</div>
-                            <div className="text-[10px] font-mono text-neutral-400">{s.id} {s.rollNumber ? `• Roll: ${s.rollNumber}` : ''}</div>
-                          </td>
-                          <td className="p-4 font-mono">
-                            <span className="text-amber-400 font-bold">{s.class}</span>
-                            <span className="text-neutral-500 text-[10px] block font-sans">{s.category}</span>
-                          </td>
-                          <td className="p-4 font-bold">
-                            {item.isTermPayer ? (
-                              <span className="inline-block text-[9px] uppercase px-2 py-0.5 bg-green-950 text-green-400 border border-green-900">
-                                Term: GHC {item.termFeeAmount}
-                              </span>
-                            ) : (
-                              <span className="inline-block text-[9px] uppercase px-2 py-0.5 bg-blue-950 text-blue-400 border border-blue-900">
-                                Daily: GHC 5 Gate
-                              </span>
-                            )}
-                          </td>
-                          <td className="p-4 text-right font-mono text-neutral-400">
-                            GHC {item.legacyDebt.toFixed(2)}
-                          </td>
-                          <td className="p-4 text-right font-mono text-neutral-200">
-                            GHC {item.totalCharged.toFixed(2)}
-                          </td>
-                          <td className="p-4 text-right font-mono text-emerald-400">
-                            GHC {item.totalPaid.toFixed(2)}
-                          </td>
-                          <td className={`p-4 text-right font-mono font-black ${item.totalDue > 0 ? 'text-red-400' : 'text-neutral-400'}`}>
-                            GHC {item.totalDue.toFixed(2)}
-                          </td>
-                          <td className="p-4 text-center">
-                            {item.status === 'SETTLED' ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-neutral-950 text-emerald-400 text-[9px] uppercase tracking-widest font-black border border-neutral-850">
-                                <CheckCircle2 size={10} /> Settle
-                              </span>
-                            ) : item.status === 'HIGH_DEBT' ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-red-950/40 text-red-400 text-[9px] uppercase tracking-widest font-black border border-red-900/40 animate-pulse">
-                                <AlertTriangle size={10} /> High Debt
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-950/40 text-amber-400 text-[9px] uppercase tracking-widest font-black border border-amber-900/40">
-                                <Info size={10} /> Arrears
-                              </span>
-                            )}
-                          </td>
-                          <td className="p-4 text-center">
-                            <div className="flex justify-center items-center gap-2">
-                              <button
-                                onClick={() => setSelectedLedgerStudentId(s.id)}
-                                className="px-3 py-1.5 text-[9px] font-black bg-neutral-950 hover:bg-neutral-850 hover:text-white border border-neutral-800 uppercase tracking-widest cursor-pointer"
-                                title="View granular ledger details, invoices and print transcript"
-                              >
-                                View Ledger
-                              </button>
-                              
-                              {s.guardianPhone && item.totalDue > 0 && (
-                                <button
-                                  onClick={async () => {
-                                    const message = `Reminder: Your ward ${s.name} has an outstanding school fee balance of GHC ${item.totalDue.toFixed(2)} (Total Billed: GHC ${item.totalCharged.toFixed(2)}, Paid: GHC ${item.totalPaid.toFixed(2)}). Please settle this balance promptly. Thank you.`;
-                                    const resp = await sendautomatedWhatsApp(s.guardianPhone || '', message, s.id, s.name, 'debt-reminder');
-                                    if (resp.success) {
-                                      alert(`WhatsApp debt warning sent to guardian phone: ${s.guardianPhone}`);
-                                    } else {
-                                      alert(`Error dispatching warning: ${resp.error}`);
-                                    }
-                                  }}
-                                  className="px-2.5 py-1.5 text-[9px] font-black bg-emerald-600 hover:bg-emerald-500 text-white uppercase tracking-widest cursor-pointer flex items-center gap-1"
-                                  title="Send instant WhatsApp balance statement to guardian"
+            <div className="flex flex-wrap items-center justify-between gap-4 p-4 bg-neutral-950 border-b border-neutral-800">
+              <div className="text-[10px] font-black uppercase text-neutral-400 font-mono tracking-wider">
+                Workstation Scroll Control Panel
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => {
+                    setExpandedCategories({ 'Pre-school': true, 'Primary': true, 'JHS': true });
+                    setExpandedClasses({
+                      'Nursery': true, 'KG1': true, 'KG2': true,
+                      'B1': true, 'B2': true, 'B3': true, 'B4': true, 'B5': true, 'B6': true,
+                      'B7': true, 'B8': true, 'B9': true
+                    });
+                  }}
+                  className="px-3 py-1.5 text-[9px] font-black bg-neutral-900 hover:bg-neutral-850 text-amber-400 border border-neutral-800 hover:border-amber-400 uppercase tracking-widest cursor-pointer transition-colors"
+                >
+                  Expand All Divisions
+                </button>
+                <button
+                  onClick={() => {
+                    setExpandedCategories({ 'Pre-school': false, 'Primary': false, 'JHS': false });
+                    setExpandedClasses({
+                      'Nursery': false, 'KG1': false, 'KG2': false,
+                      'B1': false, 'B2': false, 'B3': false, 'B4': false, 'B5': false, 'B6': false,
+                      'B7': false, 'B8': false, 'B9': false
+                    });
+                  }}
+                  className="px-3 py-1.5 text-[9px] font-black bg-neutral-900 hover:bg-neutral-850 text-neutral-400 border border-neutral-800 uppercase tracking-widest cursor-pointer transition-colors"
+                >
+                  Collapse All
+                </button>
+              </div>
+            </div>
+
+            {/* Foldable Categories & Classes List */}
+            <div>
+              {filteredConsolidatedLedger.length === 0 ? (
+                <div className="text-center py-12 text-neutral-500 font-black uppercase tracking-widest text-xs font-mono">
+                  No billing profiles match your query filters.
+                </div>
+              ) : (
+                ((['Pre-school', 'Primary', 'JHS'] as SchoolCategory[]).map(cat => {
+                  const catStats = ledgerStructure.categoryStats[cat];
+                  if (!catStats || catStats.studentCount === 0) return null;
+
+                  const isCatExpanded = expandedCategories[cat];
+                  const categoryFullNames: Record<SchoolCategory, string> = {
+                    'Pre-school': 'PRE-SCHOOL DIVISION (NURSERY - KG2)',
+                    'Primary': 'PRIMARY SCHOOL DIVISION (B1 - B6)',
+                    'JHS': 'JUNIOR HIGH SCHOOL DIVISION (B7 - B9)'
+                  };
+                  const categoryClasses: Record<SchoolCategory, StudentClass[]> = {
+                    'Pre-school': ['Nursery', 'KG1', 'KG2'],
+                    'Primary': ['B1', 'B2', 'B3', 'B4', 'B5', 'B6'],
+                    'JHS': ['B7', 'B8', 'B9']
+                  };
+                  const classesInThisCat = categoryClasses[cat];
+
+                  return (
+                    <div key={cat} className="border-b border-neutral-800 last:border-0">
+                      {/* Category Collapsible Header */}
+                      <div 
+                        onClick={() => setExpandedCategories(prev => ({ ...prev, [cat]: !prev[cat] }))}
+                        className="flex items-center justify-between p-4 bg-neutral-950 hover:bg-neutral-900 cursor-pointer transition-colors border-l-4 border-amber-500"
+                      >
+                        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+                          <div className="flex items-center gap-1.5">
+                            {isCatExpanded ? <ChevronDown size={16} className="text-amber-400" /> : <ChevronRight size={16} className="text-amber-400" />}
+                            <span className="text-xs font-black tracking-widest text-white uppercase font-mono">{categoryFullNames[cat]}</span>
+                          </div>
+                          <span className="text-[10px] font-mono text-neutral-400">
+                            ({catStats.studentCount} active profiles)
+                          </span>
+                        </div>
+                        
+                        {/* Division Summary Stats */}
+                        <div className="hidden md:flex items-center gap-6 text-[10px] font-mono">
+                          <div><span className="text-neutral-500 uppercase">Charged:</span> <span className="text-neutral-300 font-bold">GHC {catStats.totalCharged.toFixed(2)}</span></div>
+                          <div><span className="text-neutral-500 uppercase">Paid:</span> <span className="text-emerald-400 font-bold">GHC {catStats.totalPaid.toFixed(2)}</span></div>
+                          <div><span className="text-neutral-500 uppercase">Due:</span> <span className={`${catStats.totalDue > 0 ? 'text-red-400 font-black' : 'text-neutral-400'}`}>GHC {catStats.totalDue.toFixed(2)}</span></div>
+                        </div>
+                      </div>
+
+                      {/* Grade Classes under Category */}
+                      {isCatExpanded && (
+                        <div className="p-4 space-y-4 bg-neutral-900/40">
+                          {classesInThisCat.map(cls => {
+                            const classStats = ledgerStructure.classStats[cls];
+                            if (!classStats || classStats.studentCount === 0) return null;
+
+                            const isClassExpanded = expandedClasses[cls];
+                            const studentsInClass = ledgerStructure.categories[cat][cls] || [];
+
+                            return (
+                              <div key={cls} className="bg-neutral-950 border border-neutral-850 rounded-sm overflow-hidden">
+                                {/* Class Header */}
+                                <div
+                                  onClick={() => setExpandedClasses(prev => ({ ...prev, [cls]: !prev[cls] }))}
+                                  className="flex items-center justify-between px-4 py-3 bg-neutral-900 hover:bg-neutral-850 cursor-pointer transition-colors"
                                 >
-                                  <MessageSquare size={10} /> Alert
-                                </button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
+                                  <div className="flex items-center gap-2">
+                                    {isClassExpanded ? <ChevronDown size={14} className="text-neutral-400" /> : <ChevronRight size={14} className="text-neutral-400" />}
+                                    <span className="text-xs font-bold text-amber-400 font-mono">GRADE: {cls}</span>
+                                    <span className="text-[10px] text-neutral-500">({classStats.studentCount} pupils)</span>
+                                  </div>
+
+                                  <div className="flex items-center gap-4 text-[9.5px] font-mono">
+                                    <span className="hidden sm:inline text-neutral-500">Charged: GHC {classStats.totalCharged.toFixed(2)}</span>
+                                    <span className="hidden sm:inline text-emerald-400">Paid: GHC {classStats.totalPaid.toFixed(2)}</span>
+                                    <span className={`font-bold ${classStats.totalDue > 0 ? 'text-red-400' : 'text-neutral-400'}`}>
+                                      Due: GHC {classStats.totalDue.toFixed(2)}
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {/* Class Table of Pupils */}
+                                {isClassExpanded && (
+                                  <div className="overflow-x-auto border-t border-neutral-850">
+                                    <table className="w-full text-left text-xs">
+                                      <thead>
+                                        <tr className="bg-neutral-950 border-b border-neutral-850 text-[9px] font-black text-neutral-400 uppercase tracking-widest font-mono">
+                                          <th className="p-3 pl-4">Student Info</th>
+                                          <th className="p-3">Class / Category</th>
+                                          <th className="p-3">Billing Scheme</th>
+                                          <th className="p-3 text-right">Legacy Debt</th>
+                                          <th className="p-3 text-right">Total Charged</th>
+                                          <th className="p-3 text-right">Total Paid</th>
+                                          <th className="p-3 text-right">Balance Due</th>
+                                          <th className="p-3 text-center">Audit Status</th>
+                                          <th className="p-3 pr-4 text-center">Actions</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-neutral-850 text-neutral-300">
+                                        {studentsInClass.map(item => {
+                                          const s = item.student;
+                                          return (
+                                            <tr key={s.id} className="hover:bg-neutral-900/40 transition-colors">
+                                              <td className="p-3 pl-4 font-bold text-white">
+                                                <div className="font-sans text-xs">{s.name}</div>
+                                                <div className="text-[9px] font-mono text-neutral-400">{s.id} {s.rollNumber ? `• Roll: ${s.rollNumber}` : ''}</div>
+                                              </td>
+                                              <td className="p-3 font-mono">
+                                                <span className="text-amber-400 font-bold text-xs">{s.class}</span>
+                                                <span className="text-neutral-500 text-[9px] block font-sans">{s.category}</span>
+                                              </td>
+                                              <td className="p-3 font-bold text-xs">
+                                                {item.isTermPayer ? (
+                                                  <span className="inline-block text-[8px] uppercase px-1.5 py-0.5 bg-green-950 text-green-400 border border-green-900">
+                                                    Term: GHC {item.termFeeAmount}
+                                                  </span>
+                                                ) : (
+                                                  <span className="inline-block text-[8px] uppercase px-1.5 py-0.5 bg-blue-950 text-blue-400 border border-blue-900">
+                                                    Daily: GHC 5 Gate
+                                                  </span>
+                                                )}
+                                              </td>
+                                              <td className="p-3 text-right font-mono text-neutral-400">
+                                                GHC {item.legacyDebt.toFixed(2)}
+                                              </td>
+                                              <td className="p-3 text-right font-mono text-neutral-200">
+                                                GHC {item.totalCharged.toFixed(2)}
+                                              </td>
+                                              <td className="p-3 text-right font-mono text-emerald-400">
+                                                GHC {item.totalPaid.toFixed(2)}
+                                              </td>
+                                              <td className={`p-3 text-right font-mono font-black ${item.totalDue > 0 ? 'text-red-400' : 'text-neutral-400'}`}>
+                                                GHC {item.totalDue.toFixed(2)}
+                                              </td>
+                                              <td className="p-3 text-center">
+                                                {item.status === 'SETTLED' ? (
+                                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-neutral-950 text-emerald-400 text-[8px] uppercase tracking-widest font-black border border-neutral-850">
+                                                    <CheckCircle2 size={8} /> Settle
+                                                  </span>
+                                                ) : item.status === 'HIGH_DEBT' ? (
+                                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-red-950/40 text-red-400 text-[8px] uppercase tracking-widest font-black border border-red-900/40 animate-pulse">
+                                                    <AlertTriangle size={8} /> High Debt
+                                                  </span>
+                                                ) : (
+                                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-amber-950/40 text-amber-400 text-[8px] uppercase tracking-widest font-black border border-amber-900/40">
+                                                    <Info size={8} /> Arrears
+                                                  </span>
+                                                )}
+                                              </td>
+                                              <td className="p-3 pr-4 text-center">
+                                                <div className="flex justify-center items-center gap-2">
+                                                  <button
+                                                    onClick={() => setSelectedLedgerStudentId(s.id)}
+                                                    className="px-2 py-1 text-[8px] font-black bg-neutral-950 hover:bg-neutral-850 hover:text-white border border-neutral-800 uppercase tracking-widest cursor-pointer"
+                                                    title="View granular ledger details, invoices and print transcript"
+                                                  >
+                                                    View Ledger
+                                                  </button>
+                                                  
+                                                  {s.guardianPhone && item.totalDue > 0 && (
+                                                    <button
+                                                      onClick={async () => {
+                                                        const message = `Reminder: Your ward ${s.name} has an outstanding school fee balance of GHC ${item.totalDue.toFixed(2)} (Total Billed: GHC ${item.totalCharged.toFixed(2)}, Paid: GHC ${item.totalPaid.toFixed(2)}). Please settle this balance promptly. Thank you.`;
+                                                        const resp = await sendautomatedWhatsApp(s.guardianPhone || '', message, s.id, s.name, 'debt-reminder');
+                                                        if (resp.success) {
+                                                          alert(`WhatsApp debt warning sent to guardian phone: ${s.guardianPhone}`);
+                                                        } else {
+                                                          alert(`Error dispatching warning: ${resp.error}`);
+                                                        }
+                                                      }}
+                                                      className="px-2 py-1 text-[8px] font-black bg-emerald-600 hover:bg-emerald-500 text-white uppercase tracking-widest cursor-pointer flex items-center gap-1"
+                                                      title="Send instant WhatsApp balance statement to guardian"
+                                                    >
+                                                      <MessageSquare size={8} /> Alert
+                                                    </button>
+                                                  )}
+                                                </div>
+                                              </td>
+                                            </tr>
+                                          );
+                                        })}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                }))
+              )}
             </div>
           </div>
         </div>
-      ) : (
+      ) : auditViewMode === 'teller' ? (
         /* ==================== 2. END OF DAY CASHIER AUDITING / TELLER RECONCILIATION ==================== */
         <div className="space-y-6">
           {/* Calendar selector and stats row */}
@@ -3011,6 +3350,16 @@ export const ReportPanel: React.FC = React.memo(() => {
               </div>
             )}
           </div>
+        </div>
+      ) : auditViewMode === 'audit' ? (
+        <div className="bg-neutral-900 border-4 border-neutral-800 p-6 space-y-6">
+          <AuditTrailTab />
+        </div>
+      ) : (
+        <div className="bg-neutral-900 border-4 border-neutral-800 p-6 space-y-6">
+          <DatabaseTab showToast={showToast} setActiveTab={(tab) => {
+            showToast("Security & MFA Hub configuration can be managed from the Pupil Enrollment Core tab.");
+          }} />
         </div>
       )}
 
@@ -3579,25 +3928,30 @@ B7 to B9: GHC [SUM]`}
                   const sGuardian = sProfile?.guardianPhone || 'No Guardian Verified';
                   const totalPaid = group.paymentsList.reduce((sum, p) => sum + p.amount, 0);
 
+                  const allStudentPayments = sProfile ? (paymentsIndexed.byStudentId.get(sProfile.id) || []) : [];
+
                   // Calculate Student overall historical total collected fees and arrears/outstanding debt
-                  const totalPaymentsAllTime = payments
-                    .filter(p => p.studentId === group.studentId && p.verified)
+                  const totalPaymentsAllTime = allStudentPayments
+                    .filter(p => p.verified)
                     .reduce((sum, p) => sum + p.amount, 0);
 
                   let totalDebt = 0;
                   let unpaidDaysCount = 0;
                   if (activeTerm && activeTerm.schoolDays && sProfile) {
                     const holidays = activeTerm.publicHolidays || [];
-                    const pastSchoolDays = activeTerm.schoolDays.filter(d => d < currentDate && !holidays.includes(d));
+                    const pastSchoolDays = activeTerm.schoolDays.filter(d => {
+                      const afterEnrollment = sProfile.enrollmentDate ? d >= sProfile.enrollmentDate : true;
+                      return d < currentDate && !holidays.includes(d) && afterEnrollment;
+                    });
                     const unpaidDays = pastSchoolDays.filter(dStr => {
-                      return !payments.some(p => p.studentId === sProfile.id && p.date === dStr);
+                      return !paymentsIndexed.byStudentIdAndDate.has(`${sProfile.id}_${dStr}`);
                     });
                     unpaidDaysCount = unpaidDays.length;
                     if (sProfile.paymentType === 'Term') {
                       const tFee = sProfile.termFee || 350;
                       const legacyD = sProfile.legacyDebt || 0;
-                      const totalPaidAllTime = payments
-                        .filter(p => p.studentId === sProfile.id && !p.isAbsent)
+                      const totalPaidAllTime = allStudentPayments
+                        .filter(p => !p.isAbsent)
                         .reduce((sum, p) => sum + p.amount, 0);
                       totalDebt = Math.max(0, tFee + legacyD - totalPaidAllTime);
                     } else {
@@ -3606,17 +3960,20 @@ B7 to B9: GHC [SUM]`}
                     }
                   }
 
-                  const schoolOwesStudent = payments
-                    .filter(p => p.studentId === group.studentId && p.verified && p.date > currentDate)
+                  const schoolOwesStudent = allStudentPayments
+                    .filter(p => p.verified && p.date > currentDate)
                     .reduce((sum, p) => sum + p.amount, 0);
 
                   const studentHistoryList = (() => {
                     if (!activeTerm || !activeTerm.schoolDays || !sProfile) return [];
                     const holidays = activeTerm.publicHolidays || [];
-                    const pastSchoolDays = activeTerm.schoolDays.filter(d => d <= currentDate);
+                    const pastSchoolDays = activeTerm.schoolDays.filter(d => {
+                      const afterEnrollment = sProfile.enrollmentDate ? d >= sProfile.enrollmentDate : true;
+                      return d <= currentDate && afterEnrollment;
+                    });
 
                     return pastSchoolDays.map((dayStr) => {
-                      const pRecord = payments.find(p => p.studentId === group.studentId && p.date === dayStr);
+                      const pRecord = paymentsIndexed.byStudentIdAndDate.get(`${group.studentId}_${dayStr}`);
                       const isHoliday = holidays.includes(dayStr);
                       const isAbsent = pRecord?.isAbsent || false;
                       const isVerified = pRecord?.verified || false;
@@ -3646,7 +4003,7 @@ B7 to B9: GHC [SUM]`}
                         paymentRef = 'TERM-SCHEME';
                         collector = 'System';
                       } else {
-                        const isDayUnpaid = !payments.some(p => p.studentId === sProfile.id && p.date === dayStr);
+                        const isDayUnpaid = !paymentsIndexed.byStudentIdAndDate.has(`${sProfile.id}_${dayStr}`);
                         if (!isDayUnpaid) {
                           statusLabel = 'Present (Pre-paid)';
                           feeLabel = 'Covered (Prepaid)';
@@ -3905,7 +4262,7 @@ B7 to B9: GHC [SUM]`}
               </div>
               <div className="space-y-1">
                 <p className="text-[10px] text-amber-400 font-mono tracking-widest font-black uppercase">Ledger Export Auditor</p>
-                <h3 className="text-lg font-black uppercase tracking-tight">CSV Export Pre-Audit Summary</h3>
+                <h3 className="text-lg font-black uppercase tracking-tight">Excel Export Pre-Audit Summary</h3>
               </div>
             </div>
 
@@ -3977,7 +4334,7 @@ B7 to B9: GHC [SUM]`}
             {/* Warning note */}
             <div className="p-3 bg-amber-400/10 border border-amber-400/20 text-[10px] font-mono text-amber-300 flex items-center gap-2">
               <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-ping shrink-0"></span>
-              <span>CSV document triggers physical browser download immediately.</span>
+              <span>Excel workbook triggers physical browser download immediately.</span>
             </div>
 
             {/* Actions block */}
@@ -4389,7 +4746,7 @@ B7 to B9: GHC [SUM]`}
                         SAAKO HOLY CHILD ACADEMY
                       </h2>
                       <p className="text-[10px] text-neutral-600 font-black uppercase tracking-widest font-mono leading-none mt-1">
-                        Holiness is our Key, P. O. Box ls15, Sawla-Savannah. Tel: +233545029200 / +2330507274133
+                        Holiness is our Key, P. O. Box LS 15, Sawla Savannah Region • Sawla, Jelinkon street, Savannah Region. Tel: +233545029200 / +2330507274133
                       </p>
                     </div>
 
@@ -4839,7 +5196,7 @@ B7 to B9: GHC [SUM]`}
                           SAAKO HOLY CHILD ACADEMY
                         </h2>
                         <p className="text-[10px] text-neutral-600 font-black uppercase tracking-widest font-mono leading-none mt-1">
-                          Holiness is our Key, P. O. Box ls15, Sawla-Savannah. Tel: +233545029200 / +2330507274133
+                          Holiness is our Key, P. O. Box LS 15, Sawla Savannah Region • Sawla, Jelinkon street, Savannah Region. Tel: +233545029200 / +2330507274133
                         </p>
                       </div>
 
@@ -5081,6 +5438,22 @@ B7 to B9: GHC [SUM]`}
 
             {/* Config & Filters */}
             <div className="space-y-4 flex-1">
+              {/* Academic Term Filter */}
+              <div className="space-y-1.5">
+                <span className="text-[10px] font-mono uppercase font-black text-amber-400 tracking-wider">Select Academic Term</span>
+                <select
+                  value={selectedReportTermId}
+                  onChange={(e) => setSelectedReportTermId(e.target.value)}
+                  className="w-full bg-neutral-950 border-2 border-amber-500/25 px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-400 cursor-pointer font-mono font-bold"
+                >
+                  {terms.map(t => (
+                    <option key={t.id} value={t.id} className="bg-neutral-950 text-white">
+                      {t.name} {t.active ? '(Active Term)' : '(Archived Term)'}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               {/* Search filter */}
               <div className="space-y-1.5">
                 <span className="text-[10px] font-mono uppercase font-black text-neutral-400 tracking-wider">Search Student</span>
@@ -5234,7 +5607,7 @@ B7 to B9: GHC [SUM]`}
               ) : (
                 termSummaryReportsByStudent.map((item, index) => {
                   const student = item.student;
-                  const refCode = `SHC-TERM-${(activeTerm?.id || 'TERM').substring(0,6).toUpperCase()}-${student.id.substring(0,6).toUpperCase()}`;
+                  const refCode = `SHC-TERM-${(reportTerm?.id || 'TERM').substring(0,6).toUpperCase()}-${student.id.substring(0,6).toUpperCase()}`;
                   
                   return (
                     <div 
@@ -5277,7 +5650,7 @@ B7 to B9: GHC [SUM]`}
                               Statement Date: {currentDate}
                             </div>
                             <div className="text-[9px] font-mono text-neutral-500 font-bold uppercase">
-                              Term Period: {activeTerm?.name || 'Academic Semester'}
+                              Term Period: {reportTerm?.name || 'Academic Semester'}
                             </div>
                           </div>
                         </div>
@@ -5535,8 +5908,8 @@ B7 to B9: GHC [SUM]`}
           <style dangerouslySetInnerHTML={{ __html: `
             @media print {
               @page {
-                size: portrait;
-                margin: 12mm 15mm;
+                size: A4 portrait;
+                margin: 0 !important;
               }
               body * {
                 visibility: hidden !important;
@@ -5551,20 +5924,24 @@ B7 to B9: GHC [SUM]`}
                 position: absolute;
                 left: 0;
                 top: 0;
-                width: 100% !important;
+                width: 210mm !important;
                 margin: 0 !important;
                 padding: 0 !important;
                 background: white !important;
               }
               .print-directors-page {
-                page-break-after: auto !important;
-                break-after: auto !important;
-                margin-bottom: 25px !important;
-                padding: 0 !important;
+                page-break-after: always !important;
+                break-after: always !important;
+                margin: 0 !important;
+                padding: 15mm !important;
                 border: none !important;
                 box-shadow: none !important;
                 background: white !important;
                 color: black !important;
+                width: 210mm !important;
+                min-height: 297mm !important;
+                box-sizing: border-box !important;
+                display: block !important;
               }
               .print-avoid-break {
                 page-break-inside: avoid !important;
@@ -5754,204 +6131,139 @@ B7 to B9: GHC [SUM]`}
 
             {/* Print Area */}
             <div id="print-directors-debt-area" className="space-y-6">
-              <div className="print-directors-page bg-white text-black p-10 shadow-2xl max-w-[210mm] mx-auto min-h-[297mm] flex flex-col justify-between relative border border-neutral-300 font-sans text-left">
-                <div className="space-y-6">
-                  {/* Print Document Header */}
-                  <div className="border-b-4 border-black pb-4 flex justify-between items-start">
-                    <div className="flex items-center gap-3 text-left">
-                      <SchoolLogo size={42} className="shrink-0" lightBackground={true} />
-                      <div className="space-y-1">
-                        <span className="text-[10px] font-black uppercase tracking-wider text-black bg-neutral-200 px-2 py-0.5 font-mono">
-                          SAAKO HOLY CHILD ACADEMY
-                        </span>
-                        <h1 className="text-lg font-black text-black uppercase tracking-tight">
-                          Board of Directors Smart Debt Assessment
-                        </h1>
-                        <p className="text-[8px] font-mono uppercase text-neutral-500 tracking-wider">
-                          Faith, Discipline & Academic Excellence • GES Registered No. G/GAR/AN/12/342
-                        </p>
+              {(() => {
+                const finalPrintList = filteredDirectorsDebt.filter(item => item.totalDue >= directorsMinDebt);
+
+                const classesWithDebtors = classes.map(cls => {
+                  const debtors = finalPrintList.filter(item => item.student.class === cls);
+                  return { class: cls, debtors };
+                }).filter(g => g.debtors.length > 0);
+
+                if (classesWithDebtors.length === 0) {
+                  return (
+                    <div className="print-directors-page bg-white text-black p-10 shadow-2xl max-w-[210mm] mx-auto min-h-[297mm] flex flex-col justify-between border border-neutral-300 font-sans text-center">
+                      <div className="my-auto">
+                        <p className="text-sm font-bold text-neutral-500">No debtor records found matching the filters with balance &gt;= GHC {directorsMinDebt.toFixed(2)}.</p>
                       </div>
                     </div>
-                    
-                    <div className="text-right">
-                      <div className="text-[8px] font-black uppercase bg-black text-amber-400 px-2.5 py-1 font-mono tracking-widest inline-block mb-1">
-                        DIRECTORS STUDY DOCUMENT
-                      </div>
-                      <div className="text-[9px] font-mono text-neutral-500">
-                        Date Compiled: {currentDate}
-                      </div>
-                      <div className="text-[9px] font-mono text-neutral-500 font-bold uppercase">
-                        Reference Term: {activeTerm?.name || 'Current Term'}
-                      </div>
-                    </div>
-                  </div>
+                  );
+                }
 
-                  {/* Core Executive Metrics */}
-                  <div>
-                    <h3 className="text-xs font-black text-black uppercase tracking-wider mb-2 border-b border-neutral-300 pb-1">
-                      I. Executive Financial Recovery Summary
-                    </h3>
-                    <div className="grid grid-cols-5 gap-3 text-center uppercase font-mono">
-                      <div className="border border-neutral-300 p-2.5 bg-neutral-50">
-                        <span className="text-neutral-500 text-[8px] block leading-tight">TOTAL EXPECTED</span>
-                        <strong className="text-xs font-bold text-black font-mono">GHC {directorsReportTotals.totalBilled.toFixed(2)}</strong>
-                      </div>
-                      <div className="border border-neutral-300 p-2.5 bg-neutral-50">
-                        <span className="text-neutral-500 text-[8px] block leading-tight">FUNDS COLLECTED</span>
-                        <strong className="text-xs font-bold text-emerald-750 font-mono font-mono">GHC {directorsReportTotals.totalPaid.toFixed(2)}</strong>
-                      </div>
-                      <div className="border border-neutral-300 p-2.5 bg-red-50/40 border-red-200">
-                        <span className="text-red-655 text-[8px] block font-black leading-tight font-sans">OUTSTANDING DEBT</span>
-                        <strong className="text-xs font-black text-red-655 font-mono">GHC {directorsReportTotals.totalDue.toFixed(2)}</strong>
-                      </div>
-                      <div className="border border-neutral-300 p-2.5 bg-neutral-50">
-                        <span className="text-neutral-500 text-[8px] block leading-tight">RECOVERY PROGRESS</span>
-                        <strong className="text-xs font-bold text-black font-mono">{directorsReportTotals.recoveryRate.toFixed(1)}%</strong>
-                      </div>
-                      <div className="border border-neutral-300 p-2.5 bg-neutral-50">
-                        <span className="text-neutral-500 text-[8px] block leading-tight">DEBTOR ACCOUNTS</span>
-                        <strong className="text-xs font-bold text-black font-mono">{directorsReportTotals.debtorsCount} PUPILS</strong>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Class-by-Class Table Summary */}
-                  <div className="print-avoid-break">
-                    <h3 className="text-xs font-black text-black uppercase tracking-wider mb-2 border-b border-neutral-300 pb-1">
-                      II. Class-by-Class Debt Exposure Assessment
-                    </h3>
-                    <table className="w-full text-left text-[9px] font-mono uppercase tracking-tight border-collapse">
-                      <thead>
-                        <tr className="bg-neutral-100 border-y border-neutral-300 text-[8px] font-bold text-neutral-600">
-                          <th className="py-1 px-2 text-left">Class Grade</th>
-                          <th className="py-1 px-2 text-center">Pupils</th>
-                          <th className="py-1 px-2 text-center">Owed Accounts</th>
-                          <th className="py-1 px-2 text-right">Tuition Owed (GHC)</th>
-                          <th className="py-1 px-2 text-right">Exams Owed (GHC)</th>
-                          <th className="py-1 px-2 text-right">Total Arrears (GHC)</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {directorsClassBreakdown.map((item) => {
-                          if (item.totalDue === 0 && item.pupilsCount === 0) return null;
-                          return (
-                            <tr key={item.class} className="border-b border-neutral-200 hover:bg-neutral-50">
-                              <td className="py-1 px-2 font-bold text-black">{item.class}</td>
-                              <td className="py-1 px-2 text-center text-neutral-500">{item.pupilsCount}</td>
-                              <td className={`py-1 px-2 text-center font-bold ${item.debtorsCount > 0 ? 'text-red-650' : 'text-neutral-400'}`}>
-                                {item.debtorsCount}
-                              </td>
-                              <td className="py-1 px-2 text-right font-bold text-neutral-600">GHC {item.tuitionDue.toFixed(2)}</td>
-                              <td className="py-1 px-2 text-right font-bold text-neutral-600">GHC {item.examsDue.toFixed(2)}</td>
-                              <td className={`py-1 px-2 text-right font-black ${item.totalDue > 0 ? 'text-red-650 bg-red-50/10' : 'text-emerald-700'}`}>
-                                GHC {item.totalDue.toFixed(2)}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                        <tr className="bg-neutral-50 font-bold border-t-2 border-neutral-400 text-[10px]">
-                          <td className="py-1.5 px-2">Total Exposure</td>
-                          <td className="py-1.5 px-2 text-center">-</td>
-                          <td className="py-1.5 px-2 text-center text-red-600">{directorsReportTotals.debtorsCount}</td>
-                          <td className="py-1.5 px-2 text-right">GHC {directorsReportTotals.totalTuitionDue.toFixed(2)}</td>
-                          <td className="py-1.5 px-2 text-right">GHC {directorsReportTotals.totalExamsDue.toFixed(2)}</td>
-                          <td className="py-1.5 px-2 text-right text-red-600 font-black">
-                            GHC {directorsReportTotals.totalDue.toFixed(2)}
-                          </td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-
-                  {/* Board Study Memo instructions */}
-                  {directorsNotes && (
-                    <div className="bg-neutral-50 border-l-4 border-amber-400 p-3 text-[9.5px] font-sans leading-relaxed text-neutral-700 print-avoid-break">
-                      <strong className="text-black uppercase text-[8px] font-mono block font-black mb-1">Administrative Directives & Board Action Directives:</strong>
-                      "{directorsNotes}"
-                    </div>
-                  )}
-
-                  {/* Detailed Pupils Debt Breakdown Ledger */}
-                  <div>
-                    <h3 className="text-xs font-black text-black uppercase tracking-wider mb-2 border-b border-neutral-300 pb-1 print-avoid-break">
-                      III. Detailed Student Outstanding Arrears Ledger
-                    </h3>
-
-                    <div className="space-y-4">
-                      {classes.map(cls => {
-                        const classDebtors = filteredDirectorsDebt.filter(item => item.student.class === cls && item.totalDue > 0);
-                        if (classDebtors.length === 0) return null;
-
-                        const classDueSub = classDebtors.reduce((sum, item) => sum + item.totalDue, 0);
-
-                        return (
-                          <div key={cls} className="border border-neutral-300 rounded p-3 space-y-2 print-avoid-break bg-white">
-                            <div className="flex justify-between items-center bg-neutral-100 p-1 px-2 text-[9px] font-mono font-bold text-black border-b border-neutral-300 uppercase">
-                              <span>CLASS / GRADE: {cls} ({classDebtors.length} Debtor Accounts)</span>
-                              <span>Exposure Subtotal: <strong className="text-red-600">GHC {classDueSub.toFixed(2)}</strong></span>
+                return classesWithDebtors.map(({ class: cls, debtors }) => {
+                  return (
+                    <div 
+                      key={cls} 
+                      className="print-directors-page bg-white text-black p-10 shadow-2xl max-w-[210mm] mx-auto min-h-[297mm] flex flex-col justify-between border border-neutral-300 font-sans text-left relative"
+                      style={{ pageBreakAfter: 'always', breakAfter: 'always' }}
+                    >
+                      <div className="space-y-6 flex-1 flex flex-col">
+                        {/* Print Document Header */}
+                        <div className="border-b-4 border-black pb-4 flex justify-between items-start">
+                          <div className="flex items-center gap-3 text-left">
+                            <SchoolLogo size={36} className="shrink-0" lightBackground={true} />
+                            <div className="space-y-1">
+                              <span className="text-[9px] font-black uppercase tracking-wider text-black bg-neutral-200 px-2 py-0.5 font-mono">
+                                SAAKO HOLY CHILD ACADEMY
+                              </span>
+                              <h1 className="text-sm font-black text-black uppercase tracking-tight">
+                                Outstanding Arrears Statement
+                              </h1>
+                              <p className="text-[7.5px] font-mono uppercase text-neutral-500 tracking-wider">
+                                Faith, Discipline & Academic Excellence • GES Registered No. G/GAR/AN/12/342
+                              </p>
                             </div>
+                          </div>
+                          
+                          <div className="text-right">
+                            <div className="text-[8px] font-black uppercase bg-black text-amber-400 px-2 py-0.5 font-mono tracking-wider inline-block">
+                              BOARD STUDY SHEETS
+                            </div>
+                            <div className="text-[8.5px] font-mono text-neutral-500 mt-1">
+                              Date Compiled: {currentDate}
+                            </div>
+                            <div className="text-[8.5px] font-mono text-neutral-500 font-bold uppercase">
+                              Grade: {cls}
+                            </div>
+                          </div>
+                        </div>
 
-                            <table className="w-full text-left text-[8px] font-mono uppercase tracking-tight border-collapse">
-                              <thead>
-                                <tr className="border-b border-neutral-250 text-neutral-500 font-semibold text-[7.5px]">
-                                  <th className="py-0.5 px-1 text-left">Pupil Student Name</th>
-                                  <th className="py-0.5 px-1 text-center">Structure</th>
-                                  <th className="py-0.5 px-1 text-center">Contact Phone</th>
-                                  <th className="py-0.5 px-1 text-right">Tuition Due</th>
-                                  <th className="py-0.5 px-1 text-right">Exams Due</th>
-                                  <th className="py-0.5 px-1 text-right">Total Due</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {classDebtors.map(item => (
-                                  <tr key={item.student.id} className="border-b border-neutral-100 hover:bg-neutral-50 text-[8.5px]">
-                                    <td className="py-1 px-1 font-bold text-black">{item.student.name}</td>
-                                    <td className="py-1 px-1 text-center text-neutral-600">{item.isTermPayer ? 'Term' : 'Daily'}</td>
-                                    <td className="py-1 px-1 text-center font-bold text-neutral-700 select-all">{item.parentPhone}</td>
-                                    <td className="py-1 px-1 text-right text-neutral-600 font-mono">GHC {item.tuitionDue.toFixed(2)}</td>
-                                    <td className="py-1 px-1 text-right text-neutral-600 font-mono">GHC {item.examsDue.toFixed(2)}</td>
-                                    <td className="py-1 px-1 text-right text-red-655 font-extrabold bg-red-50/5 font-mono">
+                        {/* Directive Notice */}
+                        <div className="bg-neutral-50 border-l-4 border-amber-400 p-2.5 text-[8.5px] font-sans leading-relaxed text-neutral-700">
+                          <span className="text-black uppercase text-[7.5px] font-mono block font-black mb-0.5">BOARDROOM DIRECTIVE SUMMARY:</span>
+                          This statement contains only the names of pupils in <strong>{cls}</strong> and their total outstanding balance left to be paid. Detailed payment logs and adding sheets are available on request from the Accounts Department. Pupils with balances under GHC {directorsMinDebt.toFixed(2)} have been excluded.
+                        </div>
+
+                        {/* Simplified Debtors Table */}
+                        <div className="flex-1 mt-2">
+                          <table className="w-full text-left text-[9px] font-sans border-collapse">
+                            <thead>
+                              <tr className="border-b-2 border-black font-extrabold uppercase text-[8px] text-black bg-neutral-100">
+                                <th className="py-2 px-2 text-center w-12">No.</th>
+                                <th className="py-2 px-2">Pupil Student Name</th>
+                                <th className="py-2 px-2">Parent Contact</th>
+                                <th className="py-2 px-2 text-right w-48">Outstanding Balance (GHC)</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {debtors.map((item, idx) => {
+                                return (
+                                  <tr key={item.student.id} className="border-b border-neutral-200 hover:bg-neutral-50">
+                                    <td className="py-2 px-2 text-center text-neutral-500 font-mono text-[8px]">{idx + 1}</td>
+                                    <td className="py-2 px-2 font-black text-black text-[9px] tracking-wide">{item.student.name}</td>
+                                    <td className="py-2 px-2 font-mono text-neutral-600 text-[8.5px]">{item.student.guardianPhone || 'No Contact Listed'}</td>
+                                    <td className="py-2 px-2 text-right font-mono font-black text-[10px] text-red-600 bg-red-50/10">
                                       GHC {item.totalDue.toFixed(2)}
                                     </td>
                                   </tr>
-                                ))}
-                              </tbody>
-                            </table>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+
+                      {/* Footer & Signature Section */}
+                      <div className="space-y-4 pt-4 border-t border-neutral-300 mt-8 print-avoid-break">
+                        <div className="grid grid-cols-2 gap-10 text-[9px] leading-relaxed">
+                          <div className="space-y-3">
+                            <span className="text-neutral-500 font-bold uppercase text-[7.5px] block">PREPARED BY (ADMINISTRATOR):</span>
+                            <div className="h-6 border-b border-neutral-400 w-36"></div>
+                            <div>
+                              <span className="text-black font-extrabold uppercase block font-sans">{directorsSignatory}</span>
+                              <span className="text-neutral-500 block text-[8px] font-sans">Institutional Auditor & Registrar</span>
+                            </div>
                           </div>
-                        );
-                      })}
-                    </div>
-                  </div>
 
-                  {/* Signatures Panel */}
-                  <div className="grid grid-cols-2 gap-10 pt-8 border-t border-neutral-300 print-avoid-break">
-                    <div className="space-y-4 text-[10px] leading-relaxed">
-                      <span className="text-neutral-500 font-bold uppercase text-[8px] block">PREPARED BY (ADMINISTRATOR):</span>
-                      <div className="h-10 border-b border-black w-44"></div>
-                      <div>
-                        <span className="text-black font-extrabold uppercase block font-sans">{directorsSignatory}</span>
-                        <span className="text-neutral-500 block text-[9px] font-sans">Institutional Auditor & Registrar</span>
+                          <div className="space-y-3 text-right">
+                            <span className="text-neutral-500 font-bold uppercase text-[7.5px] block">APPROVED FOR BOARD ROOM STUDY BY:</span>
+                            <div className="h-6 border-b border-neutral-400 w-36 ml-auto"></div>
+                            <div>
+                              <span className="text-black font-extrabold uppercase block font-sans">{directorsChairperson}</span>
+                              <span className="text-neutral-500 block text-[8px] font-sans">Governing Board Authority</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Running footer info */}
+                        <div className="flex justify-between items-center text-[7px] font-mono text-neutral-400 pt-2 border-t border-neutral-150">
+                          <span>RUN CODE: SAAKO-BOARD-{currentDate.replace(/-/g, "")}-{(activeTerm?.id || 'TERM').substring(0, 8).toUpperCase()}</span>
+                          <span>SYSTEM PORTAL GENERATION • CONFIDENTIAL FOR BOARD STUDY ONLY</span>
+                        </div>
                       </div>
                     </div>
-
-                    <div className="space-y-4 text-[10px] leading-relaxed text-right">
-                      <span className="text-neutral-500 font-bold uppercase text-[8px] block">APPROVED FOR BOARD ROOM STUDY BY:</span>
-                      <div className="h-10 border-b border-black w-44 ml-auto"></div>
-                      <div>
-                        <span className="text-black font-extrabold uppercase block font-sans">{directorsChairperson}</span>
-                        <span className="text-neutral-500 block text-[9px] font-sans">Governing Board Authority</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Print Run footer info */}
-                <div className="flex justify-between items-center text-[7.5px] font-mono font-black text-neutral-400 pt-3 border-t border-neutral-200 mt-10">
-                  <span>RUN CODE: SAAKO-BOARD-{currentDate.replace(/-/g, "")}-{(activeTerm?.id || 'TERM').substring(0, 8).toUpperCase()}</span>
-                  <span>SYSTEM PORTAL GENERATION • CONFIDENTIAL FOR BOARD STUDY ONLY</span>
-                </div>
-              </div>
+                  );
+                });
+              })()}
             </div>
+          </div>
+        </div>
+      )}
+      {/* Toast Alert Header */}
+      {successMsg && (
+        <div className="fixed bottom-4 right-4 z-[9999] bg-amber-400 text-black border-4 border-neutral-800 p-4 text-xs font-black flex items-center justify-between shadow-[4px_4px_0px_0px_rgba(255,255,255,0.1)] font-mono uppercase tracking-widest animate-fade-in">
+          <div className="flex items-center gap-2">
+            <Check size={16} className="bg-black/10 p-0.5" />
+            <span>{successMsg}</span>
           </div>
         </div>
       )}

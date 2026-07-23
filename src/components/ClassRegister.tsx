@@ -6,7 +6,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useApp, PendingAlert, calculateStudentFinancialState } from '../context/AppContext';
 import { StudentClass, Student, SchoolCategory, PaymentRecord } from '../types';
-import { Check, X, Search, Landmark, BellRing, ChevronRight, ChevronLeft, CheckSquare, Users, MessageSquareCode, CalendarDays, CalendarPlus, CalendarX, Plus, ChevronDown, Trash2, Coins, History, Printer, Camera, Upload, Copy, Pencil, QrCode, AlertCircle, User, Phone, DollarSign, Award, ShieldAlert, CheckCircle2, TrendingUp, Info, Download, MessageSquare, RefreshCw, Layers, Smartphone, Send, Link } from 'lucide-react';
+import { Check, X, Search, Landmark, BellRing, ChevronRight, ChevronLeft, CheckSquare, Users, MessageSquareCode, CalendarDays, CalendarPlus, CalendarX, Plus, ChevronDown, Trash2, Coins, History, Printer, Camera, Upload, Copy, Pencil, QrCode, AlertCircle, User, Phone, DollarSign, Award, ShieldAlert, CheckCircle2, TrendingUp, Info, Download, MessageSquare, RefreshCw, Layers, Smartphone, Send, Link, Settings, Mic } from 'lucide-react';
 import { motion } from 'motion/react';
 import { Html5Qrcode } from 'html5-qrcode';
 import { SchoolLogo } from './SchoolLogo';
@@ -34,6 +34,7 @@ export const ClassRegister: React.FC = React.memo(() => {
     deleteStudentPayments,
     terms,
     activeTerm,
+    viewingTermId,
     addTerm,
     editTerm,
     setActiveTerm,
@@ -74,8 +75,8 @@ export const ClassRegister: React.FC = React.memo(() => {
   const [searchQuery, setSearchQuery] = useState('');
   const [highlightedStudentId, setHighlightedStudentId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<'all' | 'unmarked' | 'present' | 'absent' | 'arrears' | 'term_payers'>('all');
-  const [sortBy, setSortBy] = useState<'name' | 'checkin' | 'rollNumber'>('name');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [sortBy, setSortBy] = useState<'name' | 'checkin' | 'rollNumber'>('checkin');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
 
   const toggleSort = (field: 'name' | 'checkin' | 'rollNumber') => {
     if (sortBy === field) {
@@ -109,8 +110,8 @@ export const ClassRegister: React.FC = React.memo(() => {
   useEffect(() => {
     setStatusFilter('all');
     setSearchQuery('');
-    setSortBy('name');
-    setSortOrder('asc');
+    setSortBy('checkin');
+    setSortOrder('desc');
   }, [selectedClass]);
 
   useEffect(() => {
@@ -194,6 +195,235 @@ export const ClassRegister: React.FC = React.memo(() => {
   const [qrCustomAmountInput, setQrCustomAmountInput] = useState<string>('');
   const [scanHistoryList, setScanHistoryList] = useState<{ id: string; studentId: string; studentName: string; rollNumber: string; class: string; timestamp: string; statusText: string; success: boolean }[]>([]);
   const lastScanTimeRef = React.useRef<{ code: string; time: number } | null>(null);
+
+  // Voice Check-In (Voice Register Assistant) states
+  const [isVoiceRegisterOpen, setIsVoiceRegisterOpen] = useState(false);
+  const [isVoiceListening, setIsVoiceListening] = useState(false);
+  const [voiceTranscript, setVoiceTranscript] = useState('');
+  const [voiceFeedback, setVoiceFeedback] = useState<{ text: string; type: 'success' | 'warning' | 'error' } | null>(null);
+  const [voiceHistory, setVoiceHistory] = useState<{ id: string; command: string; result: string; success: boolean }[]>([]);
+
+  // Function to process voice commands
+  const processVoiceCommand = (rawPhrase: string) => {
+    if (isHoliday) {
+      const fbMsg = "Class registry is locked. Date selected is a public holiday.";
+      setVoiceFeedback({ text: fbMsg, type: 'error' });
+      playBeep('error');
+      return;
+    }
+
+    const clean = rawPhrase.trim().toLowerCase();
+    if (!clean) return;
+
+    let action: 'checkin' | 'absent' = 'checkin';
+    let targetQuery = clean;
+
+    if (clean.includes('absent') || clean.includes('mark absent') || clean.includes('missing')) {
+      action = 'absent';
+      targetQuery = clean
+        .replace(/\bmark\s+absent\b/g, '')
+        .replace(/\babsent\b/g, '')
+        .replace(/\bmissing\b/g, '')
+        .trim();
+    } else if (clean.includes('check in') || clean.includes('check-in') || clean.includes('checkin') || clean.includes('present') || clean.includes('register')) {
+      action = 'checkin';
+      targetQuery = clean
+        .replace(/\bcheck\s+in\b/g, '')
+        .replace(/\bcheck-in\b/g, '')
+        .replace(/\bcheckin\b/g, '')
+        .replace(/\bpresent\b/g, '')
+        .replace(/\bregister\b/g, '')
+        .trim();
+    }
+
+    targetQuery = targetQuery
+      .replace(/\b(pupil|student|please|is|for|the|mark|status)\b/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (!targetQuery) {
+      const fbMsg = `Could not extract pupil name from: "${rawPhrase}"`;
+      setVoiceFeedback({ text: fbMsg, type: 'error' });
+      playBeep('error');
+      setVoiceHistory(prev => [{ id: Math.random().toString(), command: rawPhrase, result: fbMsg, success: false }, ...prev].slice(0, 5));
+      return;
+    }
+
+    // Search active class first
+    let matchedStudent = classStudents.find(s => s.name.toLowerCase().includes(targetQuery));
+    let classSwitched = false;
+
+    if (!matchedStudent) {
+      // Search all active students globally
+      const globalMatches = students.filter(s => s.active && s.name.toLowerCase().includes(targetQuery));
+      if (globalMatches.length === 1) {
+        matchedStudent = globalMatches[0];
+        classSwitched = true;
+      } else if (globalMatches.length > 1) {
+        const exactMatch = globalMatches.find(s => s.name.toLowerCase() === targetQuery);
+        if (exactMatch) {
+          matchedStudent = exactMatch;
+          classSwitched = true;
+        } else {
+          const fbMsg = `Multiple pupils found matching "${targetQuery}". Be more specific!`;
+          setVoiceFeedback({ text: fbMsg, type: 'warning' });
+          playBeep('warning');
+          setVoiceHistory(prev => [{ id: Math.random().toString(), command: rawPhrase, result: fbMsg, success: false }, ...prev].slice(0, 5));
+          return;
+        }
+      }
+    }
+
+    if (!matchedStudent) {
+      const fbMsg = `No active pupil found matching "${targetQuery}"`;
+      setVoiceFeedback({ text: fbMsg, type: 'error' });
+      playBeep('error');
+      setVoiceHistory(prev => [{ id: Math.random().toString(), command: rawPhrase, result: fbMsg, success: false }, ...prev].slice(0, 5));
+      return;
+    }
+
+    // Switch class if needed
+    if (classSwitched) {
+      setSelectedClass(matchedStudent.class);
+    }
+
+    const studentId = matchedStudent.id;
+    const studentName = matchedStudent.name;
+    const sClass = matchedStudent.class;
+
+    if (action === 'checkin') {
+      const isAlreadyPaid = payments.some(p => p.studentId === studentId && p.date === currentDate && !p.id.endsWith('_debt') && !p.isAbsent);
+      if (isAlreadyPaid) {
+        const fbMsg = `"${studentName}" (${sClass}) is already checked in today.`;
+        setVoiceFeedback({ text: fbMsg, type: 'warning' });
+        playBeep('warning');
+        setVoiceHistory(prev => [{ id: Math.random().toString(), command: rawPhrase, result: fbMsg, success: true }, ...prev].slice(0, 5));
+      } else {
+        recordPayment(studentId, true);
+        const discountAmount = matchedStudent.discount || 0;
+        const actualAmount = Math.max(0, baseDailyFee - discountAmount);
+        const successText = `Successfully checked in "${studentName}" (${sClass})! GHC ${actualAmount.toFixed(2)} logged.`;
+        
+        setVoiceFeedback({ text: successText, type: 'success' });
+        playBeep('success');
+        showToast(successText);
+        setVoiceHistory(prev => [{ id: Math.random().toString(), command: rawPhrase, result: `Checked in (GHC ${actualAmount.toFixed(2)})`, success: true }, ...prev].slice(0, 5));
+        scrollToNextUnpaid(studentId);
+      }
+    } else if (action === 'absent') {
+      const isAlreadyAbsent = payments.some(p => p.studentId === studentId && p.date === currentDate && p.isAbsent);
+      if (isAlreadyAbsent) {
+        const fbMsg = `"${studentName}" (${sClass}) is already marked absent.`;
+        setVoiceFeedback({ text: fbMsg, type: 'warning' });
+        playBeep('warning');
+        setVoiceHistory(prev => [{ id: Math.random().toString(), command: rawPhrase, result: fbMsg, success: true }, ...prev].slice(0, 5));
+      } else {
+        recordAbsent(studentId);
+        const successText = `Marked "${studentName}" (${sClass}) as absent today.`;
+        
+        setVoiceFeedback({ text: successText, type: 'success' });
+        playBeep('success');
+        showToast(successText);
+        setVoiceHistory(prev => [{ id: Math.random().toString(), command: rawPhrase, result: `Marked absent`, success: true }, ...prev].slice(0, 5));
+        scrollToNextUnpaid(studentId);
+      }
+    }
+  };
+
+  // Voice Check-In Web Speech Listener effect
+  useEffect(() => {
+    if (!isVoiceListening || !isVoiceRegisterOpen) return;
+
+    const SpeechRecognition = 
+      (window as any).SpeechRecognition || 
+      (window as any).webkitSpeechRecognition;
+    
+    if (!SpeechRecognition) {
+      setVoiceFeedback({ text: 'Speech recognition is not supported in this browser.', type: 'error' });
+      setIsVoiceListening(false);
+      return;
+    }
+
+    let recognition: any = null;
+    let shouldRestart = true;
+
+    const startRecognition = () => {
+      try {
+        recognition = new SpeechRecognition();
+        recognition.continuous = false;
+        recognition.interimResults = true;
+        recognition.lang = 'en-US';
+
+        recognition.onstart = () => {
+          setVoiceFeedback({ text: 'Listening... speak clearly (e.g. "Check in Kwame")', type: 'warning' });
+        };
+
+        recognition.onresult = (event: any) => {
+          let interimTranscript = '';
+          let finalTranscript = '';
+
+          for (let i = event.resultIndex; i < event.results.length; ++i) {
+            if (event.results[i].isFinal) {
+              finalTranscript += event.results[i][0].transcript;
+            } else {
+              interimTranscript += event.results[i][0].transcript;
+            }
+          }
+
+          const currentTranscript = finalTranscript || interimTranscript;
+          setVoiceTranscript(currentTranscript);
+
+          if (finalTranscript) {
+            processVoiceCommand(finalTranscript.trim());
+          }
+        };
+
+        recognition.onerror = (event: any) => {
+          console.error('Voice register error:', event.error);
+          if (event.error === 'no-speech') {
+            // Silently swallow speech timeouts to allow continuous loop
+          } else {
+            setVoiceFeedback({ text: `Microphone error: ${event.error}`, type: 'error' });
+          }
+        };
+
+        recognition.onend = () => {
+          if (shouldRestart && isVoiceListening && isVoiceRegisterOpen) {
+            setTimeout(() => {
+              if (shouldRestart && isVoiceListening && isVoiceRegisterOpen) {
+                try {
+                  recognition.start();
+                } catch (e) {
+                  // Ignore restart errors
+                }
+              }
+            }, 300);
+          } else {
+            setIsVoiceListening(false);
+          }
+        };
+
+        recognition.start();
+      } catch (err: any) {
+        console.error('Failed to start speech recognition:', err);
+        setVoiceFeedback({ text: 'Microphone permission or start failure.', type: 'error' });
+        setIsVoiceListening(false);
+      }
+    };
+
+    startRecognition();
+
+    return () => {
+      shouldRestart = false;
+      if (recognition) {
+        try {
+          recognition.abort();
+        } catch (e) {
+          // Ignore abort errors
+        }
+      }
+    };
+  }, [isVoiceListening, isVoiceRegisterOpen]);
 
   const addQrFeedback = (text: string, type: 'success' | 'warning' | 'error') => {
     const id = Math.random().toString(36).substring(2, 9);
@@ -696,14 +926,32 @@ export const ClassRegister: React.FC = React.memo(() => {
     const file = e.target.files?.[0];
     if (file && selectedPhotoStudent) {
       const reader = new FileReader();
-      reader.onloadend = () => {
-        if (typeof reader.result === 'string') {
-          updateStudent({
-            ...selectedPhotoStudent,
-            photoUrl: reader.result
-          });
+      reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const size = Math.min(img.width, img.height);
+          canvas.width = 200;
+          canvas.height = 200;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            const xOffset = (img.width - size) / 2;
+            const yOffset = (img.height - size) / 2;
+            ctx.drawImage(img, xOffset, yOffset, size, size, 0, 0, 200, 200);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+            updateStudent({
+              ...selectedPhotoStudent,
+              photoUrl: dataUrl
+            });
+          } else {
+            updateStudent({
+              ...selectedPhotoStudent,
+              photoUrl: event.target?.result as string
+            });
+          }
           setSelectedPhotoStudent(null);
-        }
+        };
+        img.src = event.target?.result as string;
       };
       reader.readAsDataURL(file);
     }
@@ -751,6 +999,19 @@ export const ClassRegister: React.FC = React.memo(() => {
   // Transaction History modal states
   const [historyStudent, setHistoryStudent] = useState<Student | null>(null);
   const [historyModalTab, setHistoryModalTab] = useState<'profile' | 'ledger' | 'print' | 'momo'>('profile');
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [editedName, setEditedName] = useState('');
+  const [editedPhone, setEditedPhone] = useState('');
+  const [editedPhotoUrl, setEditedPhotoUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (historyStudent) {
+      setEditedName(historyStudent.name);
+      setEditedPhone(historyStudent.guardianPhone || '');
+      setEditedPhotoUrl(historyStudent.photoUrl || null);
+      setIsEditingProfile(false);
+    }
+  }, [historyStudent]);
 
   // Mobile Money simulation and payment link generation states
   const [momoAmountInput, setMomoAmountInput] = useState<string>('');
@@ -850,6 +1111,7 @@ export const ClassRegister: React.FC = React.memo(() => {
   } | null>(null);
   const [customWAContact, setCustomWAContact] = useState('');
   const [selectedStaffPhone, setSelectedStaffPhone] = useState('');
+  const [reminderChannel, setReminderChannel] = useState<'whatsapp' | 'sms'>('whatsapp');
 
   useEffect(() => {
     setSelectedStudentIds([]);
@@ -1402,6 +1664,7 @@ export const ClassRegister: React.FC = React.memo(() => {
       const isAbsent = pRecord?.isAbsent || false;
       const isVerified = pRecord?.verified || false;
       const isTermPayer = historyStudent.paymentType === 'Term';
+      const isBeforeEnrollment = historyStudent.enrollmentDate ? dayStr < historyStudent.enrollmentDate : false;
       
       let statusLabel = 'Unpaid Arrears';
       let statusColor = 'text-red-650 font-extrabold';
@@ -1410,7 +1673,12 @@ export const ClassRegister: React.FC = React.memo(() => {
       let paymentRef = '- -';
       let collector = '- -';
       
-      if (isHoliday) {
+      if (isBeforeEnrollment) {
+        statusLabel = 'Not Enrolled Yet';
+        statusColor = 'text-neutral-400 font-medium';
+        statusBg = 'bg-neutral-100 text-neutral-500 border-neutral-200';
+        feeLabel = 'Exempt';
+      } else if (isHoliday) {
         statusLabel = 'Holiday';
         statusColor = 'text-neutral-500 font-medium';
         statusBg = 'bg-neutral-100 text-neutral-600 border-neutral-200';
@@ -3254,16 +3522,35 @@ export const ClassRegister: React.FC = React.memo(() => {
               </div>
             </div>
 
-            {/* Right: Camera Scan Trigger */}
-            <button
-              id="qr-scanner-trigger"
-              onClick={() => setIsQrModalOpen(true)}
-              className="bg-amber-400 hover:bg-amber-300 text-black py-3 px-5 text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 border-2 border-amber-400 transition-colors cursor-pointer shrink-0 w-full lg:w-48 animate-pulse hover:animate-none"
-              title="Open QR scanner camera station"
-            >
-              <QrCode size={14} className="stroke-[3]" />
-              <span>Camera Scan</span>
-            </button>
+            {/* Right: Camera Scan & Voice Check-In Triggers */}
+            <div className="flex flex-col sm:flex-row items-stretch gap-2 shrink-0 w-full lg:w-auto">
+              <button
+                id="voice-checkin-trigger"
+                type="button"
+                onClick={() => {
+                  setIsVoiceRegisterOpen(true);
+                  setIsVoiceListening(true);
+                  setVoiceTranscript('');
+                  setVoiceFeedback(null);
+                }}
+                className="bg-emerald-500 hover:bg-emerald-400 text-black py-3 px-4 text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 border-2 border-emerald-500 transition-colors cursor-pointer shrink-0 w-full lg:w-44"
+                title="Open voice register assistant to check in pupils via voice commands"
+              >
+                <Mic size={14} className="stroke-[3]" />
+                <span>Voice Register</span>
+              </button>
+
+              <button
+                id="qr-scanner-trigger"
+                type="button"
+                onClick={() => setIsQrModalOpen(true)}
+                className="bg-amber-400 hover:bg-amber-300 text-black py-3 px-5 text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 border-2 border-amber-400 transition-colors cursor-pointer shrink-0 w-full lg:w-44 animate-pulse hover:animate-none"
+                title="Open QR scanner camera station"
+              >
+                <QrCode size={14} className="stroke-[3]" />
+                <span>Camera Scan</span>
+              </button>
+            </div>
           </div>
 
           {/* Row 2: REGISTRY STATS & BULK OPERATIONS (Cleanly separated to prevent squeezing, wrapping gracefully) */}
@@ -3797,7 +4084,7 @@ export const ClassRegister: React.FC = React.memo(() => {
                       {isAbsent ? (
                         <span 
                           title="Marked as absent for today"
-                          className="text-[10px] font-black px-2.5 py-0.5 bg-rose-950/80 border border-rose-800 text-rose-400 font-mono tracking-wider uppercase rounded-xs flex items-center gap-1.5 shrink-0"
+                          className="text-[10px] font-black px-2.5 py-1 bg-neutral-950 border-2 border-neutral-800 text-rose-450 font-mono tracking-wider uppercase rounded-xs flex items-center gap-1.5 shrink-0"
                         >
                           <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
                           Absent
@@ -3805,26 +4092,18 @@ export const ClassRegister: React.FC = React.memo(() => {
                       ) : isPaid ? (
                         <span 
                           title="Fully paid / covered for today"
-                          className="text-[10px] font-black px-2.5 py-0.5 bg-emerald-950/80 border border-emerald-800 text-emerald-400 font-mono tracking-wider uppercase rounded-xs flex items-center gap-1.5 shrink-0"
+                          className="text-[10px] font-black px-2.5 py-1 bg-emerald-500/10 border-2 border-emerald-500 text-emerald-400 font-mono tracking-wider uppercase rounded-xs flex items-center gap-1.5 shrink-0 shadow-[0_0_10px_rgba(16,185,129,0.15)]"
                         >
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                          Paid
-                        </span>
-                      ) : paidInfo ? (
-                        <span 
-                          title="Registered present, but payment for today is incomplete"
-                          className="text-[10px] font-black px-2.5 py-0.5 bg-amber-955/60 border border-amber-600/75 text-amber-400 font-mono tracking-wider uppercase rounded-xs flex items-center gap-1.5 shrink-0"
-                        >
-                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-                          Partial
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                          PAID
                         </span>
                       ) : (
                         <span 
-                          title="Awaiting gate check-in or daily register marking"
-                          className="text-[10px] font-black px-2.5 py-0.5 bg-neutral-950 border border-neutral-800 text-neutral-400 font-mono tracking-wider uppercase rounded-xs flex items-center gap-1.5 shrink-0"
+                          title={paidInfo ? "Registered present, but payment for today is incomplete" : "Awaiting gate check-in or daily register marking"}
+                          className="text-[10px] font-black px-2.5 py-1 bg-rose-500/10 border-2 border-rose-500 text-rose-400 font-mono tracking-wider uppercase rounded-xs flex items-center gap-1.5 shrink-0 shadow-[0_0_10px_rgba(244,63,94,0.15)] animate-pulse"
                         >
-                          <span className="w-1.5 h-1.5 rounded-full bg-neutral-600" />
-                          Pending
+                          <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                          UNPAID {paidInfo ? '(PARTIAL)' : '(PENDING)'}
                         </span>
                       )}
                       {isNextToPay && (
@@ -4971,6 +5250,148 @@ export const ClassRegister: React.FC = React.memo(() => {
         </div>
       )}
 
+      {/* Voice Check-In Assistant Modal Overlay */}
+      {isVoiceRegisterOpen && (
+        <div id="voice-register-modal-overlay" className="fixed inset-0 bg-neutral-950/90 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fadeIn">
+          <div className="bg-neutral-900 border-4 border-neutral-800 max-w-2xl w-full p-6 md:p-8 shadow-[8px_8px_0px_0px_#10b981] flex flex-col gap-6 overflow-y-auto max-h-[90vh]">
+            
+            <div className="flex items-center justify-between pb-3 border-b-2 border-neutral-850">
+              <div className="flex items-center gap-3">
+                <Mic size={22} className={`${isVoiceListening ? "text-emerald-400 animate-pulse" : "text-neutral-500"} stroke-[2.5]`} />
+                <div>
+                  <h3 className="text-sm font-black uppercase tracking-widest text-white">Voice Register Assistant</h3>
+                  <p className="text-[9px] font-mono text-neutral-500 uppercase tracking-wider font-bold">SAAKO HOLY CHILD ACADEMY Hands-Free Registry</p>
+                </div>
+              </div>
+              <button 
+                type="button"
+                onClick={() => {
+                  setIsVoiceListening(false);
+                  setIsVoiceRegisterOpen(false);
+                }}
+                className="text-neutral-550 hover:text-white font-black font-mono text-xs uppercase p-1 cursor-pointer"
+              >
+                ✕ Close
+              </button>
+            </div>
+
+            {/* Microphone Indicator Station */}
+            <div className="flex flex-col items-center justify-center p-6 bg-neutral-950 border-2 border-neutral-850 rounded-none text-center space-y-4 relative overflow-hidden">
+              {/* CSS Pulse Waves */}
+              {isVoiceListening && (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <div className="absolute w-24 h-24 rounded-full bg-emerald-500/10 animate-ping" />
+                  <div className="absolute w-36 h-36 rounded-full bg-emerald-500/5 animate-ping [animation-delay:0.5s]" />
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setIsVoiceListening(prev => !prev)}
+                className={`relative z-10 w-20 h-20 rounded-full flex items-center justify-center border-4 transition-all duration-300 cursor-pointer ${
+                  isVoiceListening 
+                    ? 'bg-emerald-500/20 border-emerald-400 text-emerald-400 shadow-[0_0_20px_rgba(16,185,129,0.3)] hover:bg-emerald-500/30' 
+                    : 'bg-neutral-900 border-neutral-850 text-neutral-500 hover:border-neutral-700 hover:text-neutral-300'
+                }`}
+                title={isVoiceListening ? "Click to Pause" : "Click to Start Listening"}
+              >
+                <Mic size={32} className={isVoiceListening ? "animate-bounce" : ""} />
+              </button>
+
+              <div className="space-y-1 relative z-10">
+                <span className={`text-[10px] font-mono font-black uppercase tracking-widest px-2.5 py-1 ${
+                  isVoiceListening ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-neutral-900 text-neutral-500'
+                }`}>
+                  {isVoiceListening ? 'MIC ACTIVE - LISTENING' : 'MIC PAUSED'}
+                </span>
+                <p className="text-[9px] text-neutral-550 font-mono font-bold uppercase pt-1">
+                  {isVoiceListening ? 'Speak checking commands clearly' : 'Click microphone to resume voice control'}
+                </p>
+              </div>
+            </div>
+
+            {/* Realtime Transcript Panel */}
+            <div className="space-y-2">
+              <span className="text-[9px] font-mono uppercase font-black text-neutral-500 tracking-wider block">Live Transcript</span>
+              <div className="bg-neutral-950 p-4 border border-neutral-850 min-h-16 flex items-center justify-center">
+                {voiceTranscript ? (
+                  <p className="text-xs font-mono font-black text-white italic text-center">
+                    "{voiceTranscript}"
+                  </p>
+                ) : (
+                  <p className="text-xs font-mono font-black text-neutral-700 uppercase tracking-widest text-center">
+                    ... Waiting for Speech ...
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* Live Feedback Message */}
+            {voiceFeedback && (
+              <div className={`p-4 border-l-4 font-mono text-[10px] uppercase font-black tracking-wider ${
+                voiceFeedback.type === 'success' 
+                  ? 'bg-emerald-950/20 border-emerald-500 text-emerald-400' 
+                  : voiceFeedback.type === 'warning' 
+                    ? 'bg-amber-950/20 border-amber-500 text-amber-400' 
+                    : 'bg-red-950/20 border-red-500 text-red-400'
+              }`}>
+                <div className="flex items-center gap-2">
+                  <span>{voiceFeedback.type === 'success' ? '✔' : '⚠️'}</span>
+                  <span>{voiceFeedback.text}</span>
+                </div>
+              </div>
+            )}
+
+            {/* Helper Tips */}
+            <div className="bg-neutral-950 p-4 border border-neutral-850 space-y-2">
+              <h4 className="text-[9px] font-mono uppercase font-black text-neutral-400 tracking-widest">Supported Commands</h4>
+              <ul className="text-[9px] font-mono font-bold text-neutral-550 space-y-1">
+                <li>• <strong className="text-amber-400 font-black">"Check in Kwame Mensah"</strong> or <strong className="text-amber-400 font-black">"Present Kwame Mensah"</strong> - Registers daily fee attendance</li>
+                <li>• <strong className="text-amber-400 font-black">"Absent Kwame Mensah"</strong> or <strong className="text-amber-400 font-black">"Mark Kwame Mensah absent"</strong> - Marks absent</li>
+                <li>• Just speaking a name like <strong className="text-amber-400 font-black">"Kwame Mensah"</strong> will default to checking them in!</li>
+              </ul>
+            </div>
+
+            {/* Command History Logs */}
+            <div className="space-y-2">
+              <h4 className="text-[9px] font-mono uppercase font-black text-neutral-500 tracking-wider">Processed Commands history</h4>
+              <div className="bg-neutral-950 p-4 border border-neutral-850 max-h-32 overflow-y-auto space-y-2 divide-y divide-neutral-900/60 font-mono text-[9px]">
+                {voiceHistory.length === 0 ? (
+                  <div className="text-neutral-600 uppercase font-black tracking-widest text-center py-2">
+                    No commands processed in this session
+                  </div>
+                ) : (
+                  voiceHistory.map(hist => (
+                    <div key={hist.id} className="pt-2 first:pt-0 flex justify-between items-center font-bold">
+                      <div className="space-y-0.5">
+                        <span className="text-neutral-400 uppercase tracking-tight block">Said: "{hist.command}"</span>
+                        <span className={`block uppercase tracking-wide ${hist.success ? 'text-emerald-400' : 'text-red-500'}`}>{hist.result}</span>
+                      </div>
+                      <span className={hist.success ? 'text-emerald-400' : 'text-red-500'}>
+                        {hist.success ? '✔' : '✖'}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Footer Control */}
+            <button
+              type="button"
+              onClick={() => {
+                setIsVoiceListening(false);
+                setIsVoiceRegisterOpen(false);
+              }}
+              className="w-full bg-neutral-950 hover:bg-neutral-850 border-2 border-neutral-800 text-neutral-450 hover:text-white py-3 px-4 font-mono font-black text-[10px] uppercase tracking-widest transition-all hover:border-emerald-400 hover:text-emerald-400 cursor-pointer text-center"
+            >
+              Shutdown Voice Assistant
+            </button>
+
+          </div>
+        </div>
+      )}
+
       {/* SMS Guardian Notification Modal Overlay */}
       {guardianSmsStudent && (
         <div className="fixed inset-0 bg-neutral-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
@@ -5433,23 +5854,32 @@ export const ClassRegister: React.FC = React.memo(() => {
         const totalArrearsGhc = histArrears;
 
         // Calculate core attendance percentage
-        const elapsedDaysStr = activeTerm ? activeTerm.schoolDays.filter(d => d <= currentDate && !(activeTerm.publicHolidays || []).includes(d)) : [];
+        const elapsedDaysStr = activeTerm ? activeTerm.schoolDays.filter(d => {
+          const afterEnrollment = historyStudent.enrollmentDate ? d >= historyStudent.enrollmentDate : true;
+          return d <= currentDate && !(activeTerm.publicHolidays || []).includes(d) && afterEnrollment;
+        }) : [];
         const elapsedDays = elapsedDaysStr.length;
         const clearedDays = payments.filter(p => p.studentId === historyStudent.id && p.date <= currentDate && !p.id.endsWith('_debt')).length;
-        const attendancePct = elapsedDays > 0 ? Math.min(100, Math.round((clearedDays / elapsedDays) * 100)) : 100;
 
         // Times present over total number of school days for that term
         const termSchoolDaysList = activeTerm ? activeTerm.schoolDays : [];
         const holidaysList = activeTerm?.publicHolidays || [];
-        const schoolDaysNoHolidays = termSchoolDaysList.filter(d => !holidaysList.includes(d));
+        const schoolDaysNoHolidays = termSchoolDaysList.filter(d => {
+          const afterEnrollment = historyStudent.enrollmentDate ? d >= historyStudent.enrollmentDate : true;
+          return !holidaysList.includes(d) && afterEnrollment;
+        });
         const schoolDaysNoHolidaysCount = schoolDaysNoHolidays.length;
 
         const presentDaysTerm = activeTerm ? activeTerm.schoolDays.filter(d => {
           if (d > currentDate) return false;
           if (holidaysList.includes(d)) return false;
+          const afterEnrollment = historyStudent.enrollmentDate ? d >= historyStudent.enrollmentDate : true;
+          if (!afterEnrollment) return false;
           const record = payments.find(p => p.studentId === historyStudent.id && p.date === d);
           return !(record?.isAbsent);
         }).length : 0;
+
+        const attendancePct = elapsedDays > 0 ? Math.min(100, Math.round((presentDaysTerm / elapsedDays) * 100)) : 100;
 
         return (
           <>
@@ -5535,16 +5965,23 @@ export const ClassRegister: React.FC = React.memo(() => {
                           
                           {/* Profile Avatar Frame with Active Ring */}
                           <div className="relative group/avatar">
-                            {historyStudent.photoUrl ? (
+                            {editedPhotoUrl ? (
+                              <img
+                                src={editedPhotoUrl}
+                                alt={editedName || historyStudent.name}
+                                className="w-24 h-24 rounded-full object-cover border-4 border-neutral-800 group-hover/avatar:border-amber-400 transition-colors"
+                                referrerPolicy="no-referrer"
+                              />
+                            ) : historyStudent.photoUrl ? (
                               <img
                                 src={historyStudent.photoUrl}
-                                alt={historyStudent.name}
+                                alt={editedName || historyStudent.name}
                                 className="w-24 h-24 rounded-full object-cover border-4 border-neutral-800 group-hover/avatar:border-amber-400 transition-colors"
                                 referrerPolicy="no-referrer"
                               />
                             ) : (
                               <div className="w-24 h-24 rounded-full bg-neutral-900 border-4 border-neutral-800 flex items-center justify-center text-3xl font-black text-amber-400 tracking-tighter uppercase font-mono">
-                                {historyStudent.name.slice(0, 2).toUpperCase()}
+                                {(editedName || historyStudent.name).slice(0, 2).toUpperCase()}
                               </div>
                             )}
                             
@@ -5558,7 +5995,7 @@ export const ClassRegister: React.FC = React.memo(() => {
                             <span className="text-[9px] font-mono font-black uppercase tracking-widest text-amber-500 py-0.5 px-2 bg-amber-955 border border-amber-800 inline-block rounded-xs">
                               {historyStudent.rollNumber}
                             </span>
-                            <h4 className="text-base font-black text-white uppercase tracking-tight truncate max-w-xs">{historyStudent.name}</h4>
+                            <h4 className="text-base font-black text-white uppercase tracking-tight truncate max-w-xs">{editedName || historyStudent.name}</h4>
                             <p className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest font-bold">
                               {historyStudent.class} • {historyStudent.category}
                             </p>
@@ -5667,113 +6104,266 @@ export const ClassRegister: React.FC = React.memo(() => {
                               <MessageSquare size={12} />
                               <span>Share via WhatsApp</span>
                             </button>
+                            
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsEditingProfile(!isEditingProfile);
+                              }}
+                              className={`w-full py-2.5 px-3 text-[9px] font-mono font-black uppercase tracking-wider flex items-center justify-center gap-1.5 border transition-all cursor-pointer ${
+                                isEditingProfile
+                                  ? 'bg-neutral-900 hover:bg-neutral-850 text-amber-400 border-neutral-800'
+                                  : 'bg-amber-500 hover:bg-amber-400 text-black border-amber-600'
+                              }`}
+                              title="Edit Pupil's Name, Contact, or Photo"
+                            >
+                              <Settings size={12} />
+                              <span>{isEditingProfile ? 'View Profile Info' : 'Edit Pupil Profile'}</span>
+                            </button>
                           </div>
                         </div>
 
                         {/* Column 2: Detailed Personal Records (8/12 width) */}
-                        <div className="md:col-span-8 space-y-5">
-                          <div>
-                            <h4 className="text-[10px] font-mono uppercase font-black tracking-widest text-neutral-500 mb-2">Student Credentials & Registration File</h4>
-                            
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                              <div className="bg-neutral-950 p-3 border border-neutral-850">
-                                <span className="text-[9px] font-mono uppercase text-neutral-550 block font-bold">Cohorted Segment Grade</span>
-                                <span className="text-sm font-black text-white">{historyStudent.class} ({historyStudent.category})</span>
+                        {isEditingProfile ? (
+                          <div className="md:col-span-8 space-y-5">
+                            <div className="bg-neutral-950 p-6 border-2 border-neutral-800 space-y-5">
+                              <div className="flex items-center gap-2 border-b border-neutral-850 pb-3">
+                                <Settings className="text-amber-400 stroke-[2.5]" size={16} />
+                                <h4 className="text-xs font-black uppercase tracking-wider text-white font-mono">Edit Pupil Profile</h4>
                               </div>
-                              <div className="bg-neutral-950 p-3 border border-neutral-850">
-                                <span className="text-[9px] font-mono uppercase text-neutral-550 block font-bold">System ID / Roll Number</span>
-                                <span className="text-sm font-bold text-amber-400 font-mono tracking-wide">{historyStudent.rollNumber}</span>
-                              </div>
-                              <div className="bg-neutral-950 p-3 border border-neutral-850">
-                                <span className="text-[9px] font-mono uppercase text-neutral-550 block font-bold">Standard Single-Day Attendance Fee</span>
-                                <span className="text-sm font-black text-neutral-300">GHC 5.00</span>
-                              </div>
-                              <div className="bg-neutral-950 p-3 border border-neutral-850">
-                                <span className="text-[9px] font-mono uppercase text-neutral-550 block font-bold">Daily Discount / Scholarship</span>
-                                {discountValue > 0 ? (
-                                  <span className="text-sm font-black text-emerald-400 flex items-center gap-1 font-mono">
-                                    <Award size={14} className="stroke-[2.5]" />
-                                    GHC {discountValue.toFixed(2)} ({discountValue === 5 ? '100% Scholarship' : 'Special rate'})
-                                  </span>
-                                ) : (
-                                  <span className="text-sm font-bold text-neutral-500 uppercase tracking-wide">None (Standard rate)</span>
-                                )}
-                              </div>
-                            </div>
-                          </div>
 
-                          {/* Attendance summary statistics */}
-                          <div className="bg-neutral-950 p-4 border border-neutral-850 space-y-3">
-                            <div className="flex justify-between items-center text-[10px] uppercase font-mono font-black">
-                              <span className="text-neutral-500">Attendance Clear Rate</span>
-                              <span className="text-white font-mono">{attendancePct}%</span>
-                            </div>
-                            
-                            {/* Graphic high-contrast loading bar */}
-                            <div className="w-full bg-neutral-900 border border-neutral-800 h-3 p-0.5 rounded-none overflow-hidden flex items-stretch">
-                              <div 
-                                className={`h-full transition-all duration-500 rounded-none ${
-                                  attendancePct >= 85 ? 'bg-emerald-500' : attendancePct >= 65 ? 'bg-amber-400' : 'bg-red-500'
-                                }`}
-                                style={{ width: `${attendancePct}%` }}
-                              />
-                            </div>
+                              <div className="space-y-4 font-sans">
+                                {/* Student Name */}
+                                <div className="space-y-1.5">
+                                  <label className="block text-[10px] font-black uppercase tracking-widest text-neutral-400 font-mono">
+                                    Full Pupil Name
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={editedName}
+                                    onChange={(e) => setEditedName(e.target.value)}
+                                    className="w-full bg-neutral-900 border border-neutral-850 focus:border-amber-400 p-3 text-xs font-mono font-bold text-white uppercase outline-none transition-colors"
+                                    placeholder="Enter student full name"
+                                  />
+                                </div>
 
-                            <div className="flex justify-between items-center text-[8.5px] text-neutral-500 uppercase font-mono leading-tight font-bold">
-                              <span>Term days elapsed: {elapsedDays} days</span>
-                              <span>Cleared & Cleansed Days: {clearedDays} days</span>
-                            </div>
+                                {/* Guardian Phone */}
+                                <div className="space-y-1.5">
+                                  <label className="block text-[10px] font-black uppercase tracking-widest text-neutral-400 font-mono">
+                                    Guardian Contact Phone
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={editedPhone}
+                                    onChange={(e) => setEditedPhone(e.target.value)}
+                                    className="w-full bg-neutral-900 border border-neutral-850 focus:border-amber-400 p-3 text-xs font-mono font-bold text-white outline-none transition-colors"
+                                    placeholder="Enter guardian phone number"
+                                  />
+                                </div>
 
-                            {/* Precise Term-wide Presence Attendance Counter */}
-                            <div className="pt-2 border-t border-neutral-850 flex justify-between items-center text-[10px] uppercase font-mono font-black">
-                              <span className="text-neutral-400">Term Attendance (Present/Total)</span>
-                              <span className="text-amber-400 font-black font-mono">
-                                {presentDaysTerm} / {schoolDaysNoHolidaysCount} DAYS
-                              </span>
-                            </div>
-                          </div>
-
-                          {/* Active Balance/Arrears Alert Notification Banner */}
-                          {unpaidDaysList.length > 0 ? (
-                            <div className="bg-red-950/40 border-2 border-red-900/60 p-4 space-y-2 relative overflow-hidden">
-                              <div className="absolute top-2 right-2 text-red-500/25 pointer-events-none">
-                                <ShieldAlert size={44} />
+                                {/* Photo Uploader */}
+                                <div className="space-y-1.5">
+                                  <label className="block text-[10px] font-black uppercase tracking-widest text-neutral-400 font-mono">
+                                    Profile Photo File
+                                  </label>
+                                  <div className="flex items-center gap-4">
+                                    <div className="relative w-16 h-16 bg-neutral-900 border border-neutral-850 overflow-hidden shrink-0">
+                                      {editedPhotoUrl ? (
+                                        <img src={editedPhotoUrl} alt="Preview" className="w-full h-full object-cover" />
+                                      ) : (
+                                        <div className="w-full h-full flex items-center justify-center text-xs font-mono text-neutral-600 font-black">
+                                          NO PIC
+                                        </div>
+                                      )}
+                                    </div>
+                                    <div className="space-y-2 flex-1">
+                                      <label className="inline-block py-2 px-3.5 bg-neutral-900 hover:bg-neutral-850 text-[10px] text-neutral-300 font-mono font-black uppercase tracking-widest border border-neutral-800 hover:border-neutral-600 transition-colors cursor-pointer text-center">
+                                        Upload Image File
+                                        <input
+                                          type="file"
+                                          accept="image/*"
+                                          className="sr-only"
+                                          onChange={(e) => {
+                                            const file = e.target.files?.[0];
+                                            if (file) {
+                                              const reader = new FileReader();
+                                              reader.onload = (event) => {
+                                                const img = new Image();
+                                                img.onload = () => {
+                                                  const canvas = document.createElement('canvas');
+                                                  const size = Math.min(img.width, img.height);
+                                                  canvas.width = 200;
+                                                  canvas.height = 200;
+                                                  const ctx = canvas.getContext('2d');
+                                                  if (ctx) {
+                                                    const xOffset = (img.width - size) / 2;
+                                                    const yOffset = (img.height - size) / 2;
+                                                    ctx.drawImage(img, xOffset, yOffset, size, size, 0, 0, 200, 200);
+                                                    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+                                                    setEditedPhotoUrl(dataUrl);
+                                                  } else {
+                                                    setEditedPhotoUrl(event.target?.result as string);
+                                                  }
+                                                };
+                                                img.src = event.target?.result as string;
+                                              };
+                                              reader.readAsDataURL(file);
+                                            }
+                                          }}
+                                        />
+                                      </label>
+                                      <p className="text-[9px] font-mono text-neutral-500 font-bold uppercase leading-relaxed">
+                                        Formats: JPG, PNG, GIF. Max size 2MB. Replaces current photo instantly.
+                                      </p>
+                                    </div>
+                                  </div>
+                                </div>
                               </div>
-                              <h5 className="text-[11px] font-mono uppercase font-black text-red-400 flex items-center gap-1.5">
-                                <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-ping" />
-                                Financial Deficit Detected
-                              </h5>
-                              <p className="text-[10px] text-neutral-400 font-bold uppercase leading-relaxed max-w-md">
-                                Student has {unpaidDaysList.length} unpaid register days. Total arrears of <strong className="text-red-400">GHC {totalArrearsGhc.toFixed(2)}</strong> must be settled immediately at the Gate Desk to ensure access standing.
-                              </p>
-                              <div className="pt-1 select-none">
+
+                              <div className="flex gap-2 pt-4 border-t border-neutral-850">
                                 <button
                                   type="button"
-                                  onClick={() => setHistoryModalTab('ledger')}
-                                  className="text-[9px] font-mono font-black uppercase text-amber-400 hover:text-amber-300 hover:underline inline-flex items-center gap-1 cursor-pointer"
+                                  onClick={() => {
+                                    if (!editedName.trim()) {
+                                      alert('Error: Pupil name cannot be empty.');
+                                      return;
+                                    }
+                                    const updatedStudent = {
+                                      ...historyStudent,
+                                      name: editedName.trim(),
+                                      guardianPhone: editedPhone.trim() || undefined,
+                                      photoUrl: editedPhotoUrl || undefined
+                                    };
+                                    updateStudent(updatedStudent);
+                                    setHistoryStudent(updatedStudent);
+                                    setIsEditingProfile(false);
+                                    showToast(`Profile changes saved successfully for ${editedName}!`);
+                                  }}
+                                  className="flex-1 py-2.5 bg-amber-400 hover:bg-amber-300 text-black text-[10px] font-mono font-black uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
                                 >
-                                  Go to Ledger Action Desk <ChevronRight size={10} className="stroke-[3]" />
+                                  <CheckCircle2 size={13} />
+                                  Save Profile Changes
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditedName(historyStudent.name);
+                                    setEditedPhone(historyStudent.guardianPhone || '');
+                                    setEditedPhotoUrl(historyStudent.photoUrl || null);
+                                    setIsEditingProfile(false);
+                                  }}
+                                  className="py-2.5 px-4 bg-neutral-900 hover:bg-neutral-850 text-neutral-400 hover:text-white text-[10px] font-mono font-black uppercase tracking-wider border border-neutral-800 transition-colors cursor-pointer"
+                                >
+                                  Cancel
                                 </button>
                               </div>
                             </div>
-                          ) : (
-                            <div className="bg-emerald-950/40 border border-emerald-900 p-4 flex items-start gap-3">
-                              <CheckCircle2 size={18} className="text-emerald-400 shrink-0 mt-0.5" />
-                              <div className="space-y-0.5">
-                                <h5 className="text-[11px] font-mono uppercase font-black text-emerald-450">Good Standing Account Profile</h5>
-                                <p className="text-[9.5px] text-neutral-550 uppercase font-bold leading-normal">
-                                  All attendance checking periods for this student are fully settled. Student profile is fully verified and cleared.
-                                </p>
+                          </div>
+                        ) : (
+                          <div className="md:col-span-8 space-y-5">
+                            <div>
+                              <h4 className="text-[10px] font-mono uppercase font-black tracking-widest text-neutral-500 mb-2">Student Credentials & Registration File</h4>
+                              
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div className="bg-neutral-950 p-3 border border-neutral-850">
+                                  <span className="text-[9px] font-mono uppercase text-neutral-550 block font-bold">Cohorted Segment Grade</span>
+                                  <span className="text-sm font-black text-white">{historyStudent.class} ({historyStudent.category})</span>
+                                </div>
+                                <div className="bg-neutral-950 p-3 border border-neutral-850">
+                                  <span className="text-[9px] font-mono uppercase text-neutral-550 block font-bold">System ID / Roll Number</span>
+                                  <span className="text-sm font-bold text-amber-400 font-mono tracking-wide">{historyStudent.rollNumber}</span>
+                                </div>
+                                <div className="bg-neutral-950 p-3 border border-neutral-850">
+                                  <span className="text-[9px] font-mono uppercase text-neutral-550 block font-bold">Standard Single-Day Attendance Fee</span>
+                                  <span className="text-sm font-black text-neutral-300">GHC 5.00</span>
+                                </div>
+                                <div className="bg-neutral-950 p-3 border border-neutral-850">
+                                  <span className="text-[9px] font-mono uppercase text-neutral-550 block font-bold">Daily Discount / Scholarship</span>
+                                  {discountValue > 0 ? (
+                                    <span className="text-sm font-black text-emerald-400 flex items-center gap-1 font-mono">
+                                      <Award size={14} className="stroke-[2.5]" />
+                                      GHC {discountValue.toFixed(2)} ({discountValue === 5 ? '100% Scholarship' : 'Special rate'})
+                                    </span>
+                                  ) : (
+                                    <span className="text-sm font-bold text-neutral-500 uppercase tracking-wide">None (Standard rate)</span>
+                                  )}
+                                </div>
                               </div>
                             </div>
-                          )}
 
-                          <div className="bg-neutral-950 p-3.5 border border-neutral-900">
-                            <p className="text-[8.5px] text-neutral-650 uppercase font-bold text-center leading-relaxed font-mono">
-                              * Core credential modifications like student deletion, active/inactive toggles, photo replacements should be completed in pupils panel list.
-                            </p>
+                            {/* Attendance summary statistics */}
+                            <div className="bg-neutral-950 p-4 border border-neutral-850 space-y-3">
+                              <div className="flex justify-between items-center text-[10px] uppercase font-mono font-black">
+                                <span className="text-neutral-500">Attendance Clear Rate</span>
+                                <span className="text-white font-mono">{attendancePct}%</span>
+                              </div>
+                              
+                              {/* Graphic high-contrast loading bar */}
+                              <div className="w-full bg-neutral-900 border border-neutral-800 h-3 p-0.5 rounded-none overflow-hidden flex items-stretch">
+                                <div 
+                                  className={`h-full transition-all duration-500 rounded-none ${
+                                    attendancePct >= 85 ? 'bg-emerald-500' : attendancePct >= 65 ? 'bg-amber-400' : 'bg-red-500'
+                                  }`}
+                                  style={{ width: `${attendancePct}%` }}
+                                />
+                              </div>
+
+                              <div className="flex justify-between items-center text-[8.5px] text-neutral-500 uppercase font-mono leading-tight font-bold">
+                                <span>Term days elapsed: {elapsedDays} days</span>
+                                <span>Cleared & Cleansed Days: {clearedDays} days</span>
+                              </div>
+
+                              {/* Precise Term-wide Presence Attendance Counter */}
+                              <div className="pt-2 border-t border-neutral-850 flex justify-between items-center text-[10px] uppercase font-mono font-black">
+                                <span className="text-neutral-400">Term Attendance (Present/Total)</span>
+                                <span className="text-amber-400 font-black font-mono">
+                                  {presentDaysTerm} / {schoolDaysNoHolidaysCount} DAYS
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Active Balance/Arrears Alert Notification Banner */}
+                            {unpaidDaysList.length > 0 ? (
+                              <div className="bg-red-950/40 border-2 border-red-900/60 p-4 space-y-2 relative overflow-hidden">
+                                <div className="absolute top-2 right-2 text-red-500/25 pointer-events-none">
+                                  <ShieldAlert size={44} />
+                                </div>
+                                <h5 className="text-[11px] font-mono uppercase font-black text-red-400 flex items-center gap-1.5">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-ping" />
+                                  Financial Deficit Detected
+                                </h5>
+                                <p className="text-[10px] text-neutral-400 font-bold uppercase leading-relaxed max-w-md">
+                                  Student has {unpaidDaysList.length} unpaid register days. Total arrears of <strong className="text-red-400">GHC {totalArrearsGhc.toFixed(2)}</strong> must be settled immediately at the Gate Desk to ensure access standing.
+                                </p>
+                                <div className="pt-1 select-none">
+                                  <button
+                                    type="button"
+                                    onClick={() => setHistoryModalTab('ledger')}
+                                    className="text-[9px] font-mono font-black uppercase text-amber-400 hover:text-amber-300 hover:underline inline-flex items-center gap-1 cursor-pointer"
+                                  >
+                                    Go to Ledger Action Desk <ChevronRight size={10} className="stroke-[3]" />
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="bg-emerald-950/40 border border-emerald-900 p-4 flex items-start gap-3">
+                                <CheckCircle2 size={18} className="text-emerald-400 shrink-0 mt-0.5" />
+                                <div className="space-y-0.5">
+                                  <h5 className="text-[11px] font-mono uppercase font-black text-emerald-450">Good Standing Account Profile</h5>
+                                  <p className="text-[9.5px] text-neutral-550 uppercase font-bold leading-normal">
+                                    All attendance checking periods for this student are fully settled. Student profile is fully verified and cleared.
+                                  </p>
+                                </div>
+                              </div>
+                            )}
+
+                            <div className="bg-neutral-950 p-3.5 border border-neutral-900">
+                              <p className="text-[8.5px] text-neutral-650 uppercase font-bold text-center leading-relaxed font-mono">
+                                * Core credential modifications like student deletion, active/inactive toggles, photo replacements should be completed in pupils panel list.
+                              </p>
+                            </div>
                           </div>
-                        </div>
+                        )}
                       </div>
                     </div>
                   )}
@@ -8350,7 +8940,7 @@ export const ClassRegister: React.FC = React.memo(() => {
                       SAAKO HOLY CHILD ACADEMY
                     </h2>
                     <p className="text-[9px] text-neutral-600 uppercase font-mono tracking-wide">
-                      Sawla-Savannah Region • Holiness is our Key • Tel: +233545029200
+                      P. O. Box LS 15, Sawla Savannah Region • Sawla, Jelinkon street, Savannah Region • Holiness is our Key • Tel: +233545029200
                     </p>
                   </div>
 
@@ -8627,6 +9217,7 @@ export const ClassRegister: React.FC = React.memo(() => {
                 setWhatsAppShareModal(null);
                 setCustomWAContact('');
                 setSelectedStaffPhone('');
+                setReminderChannel('whatsapp');
                 playFeedbackSound('click');
               }}
               className="absolute top-4 right-4 text-neutral-400 hover:text-white font-mono text-xs p-1 cursor-pointer font-black border border-neutral-800 hover:border-red-500 hover:text-red-500 px-1.5 py-0.5 transition-all"
@@ -8635,10 +9226,38 @@ export const ClassRegister: React.FC = React.memo(() => {
             </button>
 
             <div className="space-y-1">
-              <span className="text-[9px] font-mono font-black uppercase tracking-widest text-amber-400">WhatsApp Delivery Center</span>
+              <span className="text-[9px] font-mono font-black uppercase tracking-widest text-amber-400">
+                {reminderChannel === 'whatsapp' ? 'WhatsApp Delivery Center' : 'SMS Delivery Center'}
+              </span>
               <h3 className="text-base font-black uppercase tracking-tight font-mono text-white">
                 Share: {whatsAppShareModal.student.name}'s {whatsAppShareModal.type.replace('_', ' ')}
               </h3>
+            </div>
+
+            {/* Communication Channel Tabs */}
+            <div className="flex border-2 border-neutral-800 p-1 bg-neutral-950/85">
+              <button
+                type="button"
+                onClick={() => setReminderChannel('whatsapp')}
+                className={`flex-1 py-2 text-center font-mono text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer ${
+                  reminderChannel === 'whatsapp'
+                    ? 'bg-emerald-950 border border-emerald-800 text-emerald-400 shadow-sm'
+                    : 'text-neutral-500 hover:text-neutral-300'
+                }`}
+              >
+                💬 WhatsApp Mode
+              </button>
+              <button
+                type="button"
+                onClick={() => setReminderChannel('sms')}
+                className={`flex-1 py-2 text-center font-mono text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer ${
+                  reminderChannel === 'sms'
+                    ? 'bg-amber-955 border border-amber-800 text-amber-400 shadow-sm'
+                    : 'text-neutral-500 hover:text-neutral-300'
+                }`}
+              >
+                📱 SMS Mode
+              </button>
             </div>
 
             {/* Message Preview */}
@@ -8662,119 +9281,32 @@ export const ClassRegister: React.FC = React.memo(() => {
             </div>
 
             <div className="border-t border-neutral-850 my-2 pt-2 space-y-3">
-              <span className="text-[10px] font-mono font-black uppercase tracking-wider text-amber-400 block">Choose WhatsApp Contact Option:</span>
+              <span className="text-[10px] font-mono font-black uppercase tracking-wider text-amber-400 block">
+                {reminderChannel === 'whatsapp' ? 'Choose WhatsApp Contact Option:' : 'Choose SMS Contact Option:'}
+              </span>
 
-              {/* Option 1: Open WhatsApp Contact Picker */}
-              <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-emerald-500/40 transition-all rounded-xs space-y-2">
-                <div>
-                  <h4 className="text-xs font-black uppercase font-mono text-emerald-400">1. WhatsApp Contact Picker (Universal Share)</h4>
-                  <p className="text-[9.5px] text-neutral-400 font-bold leading-tight">
-                    Launches WhatsApp so you can search and choose ANY contact or group directly from your WhatsApp chats.
-                  </p>
-                </div>
-                <button
-                  onClick={async () => {
-                    const urlText = encodeURIComponent(whatsAppShareModal.messageText);
-                    const waUrl = `https://api.whatsapp.com/send?text=${urlText}`;
-                    if (typeof window !== 'undefined') {
-                      window.open(waUrl, '_blank', 'noopener,noreferrer');
-                      showToast("WhatsApp Contact Picker opened!");
-                    }
-                    // Trigger background logging
-                    try {
-                      await sendautomatedWhatsApp(
-                        'Universal Share Picker',
-                        whatsAppShareModal.messageText,
-                        whatsAppShareModal.student.id,
-                        whatsAppShareModal.student.name,
-                        whatsAppShareModal.type
-                      );
-                    } catch (e) {}
-                    setWhatsAppShareModal(null);
-                    setCustomWAContact('');
-                    setSelectedStaffPhone('');
-                  }}
-                  className="w-full bg-emerald-950 hover:bg-emerald-900 text-emerald-400 hover:text-emerald-300 border border-emerald-800 py-2 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded-xs flex items-center justify-center gap-1.5"
-                >
-                  <MessageSquare size={12} />
-                  <span>Choose Contact & Send on WhatsApp</span>
-                </button>
-              </div>
-
-              {/* Option 2: Send to Guardian */}
-              {whatsAppShareModal.defaultPhone && (
-                <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
-                  <div>
-                    <h4 className="text-xs font-black uppercase font-mono text-white">2. Registered Parent/Guardian</h4>
-                    <p className="text-[9.5px] text-neutral-400 font-bold leading-tight">
-                      Registered Number: <span className="text-amber-400 font-black">{whatsAppShareModal.defaultPhone}</span>
-                    </p>
-                  </div>
-                  <button
-                    onClick={async () => {
-                      let targetPhone = whatsAppShareModal.defaultPhone.replace(/\D/g, "");
-                      if (targetPhone.startsWith("0") && targetPhone.length === 10) {
-                        targetPhone = "233" + targetPhone.substring(1);
-                      }
-                      const urlText = encodeURIComponent(whatsAppShareModal.messageText);
-                      const waUrl = `https://api.whatsapp.com/send?phone=${targetPhone}&text=${urlText}`;
-                      if (typeof window !== 'undefined') {
-                        window.open(waUrl, '_blank', 'noopener,noreferrer');
-                        showToast(`WhatsApp opened with Guardian (${whatsAppShareModal.defaultPhone})!`);
-                      }
-                      // Trigger background logging
-                      try {
-                        await sendautomatedWhatsApp(
-                          whatsAppShareModal.defaultPhone,
-                          whatsAppShareModal.messageText,
-                          whatsAppShareModal.student.id,
-                          whatsAppShareModal.student.name,
-                          whatsAppShareModal.type
-                        );
-                      } catch (e) {}
-                      setWhatsAppShareModal(null);
-                      setCustomWAContact('');
-                      setSelectedStaffPhone('');
-                    }}
-                    className="w-full bg-neutral-950 hover:bg-neutral-850 text-white hover:text-amber-400 border border-neutral-800 py-2 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded-xs"
-                  >
-                    💬 Send directly to Guardian ({whatsAppShareModal.defaultPhone})
-                  </button>
-                </div>
-              )}
-
-              {/* Option 3: Send to school staff/teacher */}
-              {users && users.length > 0 && (
-                <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
-                  <h4 className="text-xs font-black uppercase font-mono text-white">3. School Staff / Class Teacher</h4>
-                  <div className="flex gap-2">
-                    <select
-                      value={selectedStaffPhone}
-                      onChange={(e) => setSelectedStaffPhone(e.target.value)}
-                      className="bg-neutral-950 border border-neutral-800 rounded-xs text-[10px] font-mono font-bold text-white px-2 py-1.5 flex-1 focus:outline-none focus:border-amber-400"
-                    >
-                      <option value="">-- SELECT STAFF MEMBER --</option>
-                      {users.map(u => (
-                        u.phone ? <option key={u.id} value={u.phone}>{u.name} ({u.role || 'Staff'}) - {u.phone}</option> : null
-                      ))}
-                    </select>
+              {reminderChannel === 'whatsapp' ? (
+                <>
+                  {/* Option 1: Open WhatsApp Contact Picker */}
+                  <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-emerald-500/40 transition-all rounded-xs space-y-2">
+                    <div>
+                      <h4 className="text-xs font-black uppercase font-mono text-emerald-400">1. WhatsApp Contact Picker (Universal Share)</h4>
+                      <p className="text-[9.5px] text-neutral-400 font-bold leading-tight">
+                        Launches WhatsApp so you can search and choose ANY contact or group directly from your WhatsApp chats.
+                      </p>
+                    </div>
                     <button
-                      disabled={!selectedStaffPhone}
                       onClick={async () => {
-                        let targetPhone = selectedStaffPhone.replace(/\D/g, "");
-                        if (targetPhone.startsWith("0") && targetPhone.length === 10) {
-                          targetPhone = "233" + targetPhone.substring(1);
-                        }
                         const urlText = encodeURIComponent(whatsAppShareModal.messageText);
-                        const waUrl = `https://api.whatsapp.com/send?phone=${targetPhone}&text=${urlText}`;
+                        const waUrl = `https://api.whatsapp.com/send?text=${urlText}`;
                         if (typeof window !== 'undefined') {
                           window.open(waUrl, '_blank', 'noopener,noreferrer');
-                          showToast(`WhatsApp opened with Staff member!`);
+                          showToast("WhatsApp Contact Picker opened!");
                         }
                         // Trigger background logging
                         try {
                           await sendautomatedWhatsApp(
-                            selectedStaffPhone,
+                            'Universal Share Picker',
                             whatsAppShareModal.messageText,
                             whatsAppShareModal.student.id,
                             whatsAppShareModal.student.name,
@@ -8785,58 +9317,354 @@ export const ClassRegister: React.FC = React.memo(() => {
                         setCustomWAContact('');
                         setSelectedStaffPhone('');
                       }}
-                      className="bg-amber-400 hover:bg-amber-500 disabled:opacity-40 disabled:hover:bg-amber-400 text-black px-4 py-1.5 text-[10px] font-mono font-black uppercase rounded-xs cursor-pointer"
+                      className="w-full bg-emerald-950 hover:bg-emerald-900 text-emerald-400 hover:text-emerald-300 border border-emerald-800 py-2 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded-xs flex items-center justify-center gap-1.5"
                     >
-                      Send
+                      <MessageSquare size={12} />
+                      <span>Choose Contact & Send on WhatsApp</span>
                     </button>
                   </div>
-                </div>
-              )}
 
-              {/* Option 4: Custom Number */}
-              <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
-                <h4 className="text-xs font-black uppercase font-mono text-white">4. Type Custom Phone Number</h4>
-                <div className="flex gap-2">
-                  <input
-                    type="tel"
-                    value={customWAContact}
-                    onChange={(e) => setCustomWAContact(e.target.value)}
-                    placeholder="e.g. 0244000000"
-                    className="bg-neutral-950 border border-neutral-800 rounded-xs text-[10px] font-mono font-bold text-white px-2 py-1.5 flex-1 focus:outline-none focus:border-amber-400"
-                  />
-                  <button
-                    disabled={!customWAContact.trim()}
-                    onClick={async () => {
-                      let targetPhone = customWAContact.replace(/\D/g, "");
-                      if (targetPhone.startsWith("0") && targetPhone.length === 10) {
-                        targetPhone = "233" + targetPhone.substring(1);
-                      }
-                      const urlText = encodeURIComponent(whatsAppShareModal.messageText);
-                      const waUrl = `https://api.whatsapp.com/send?phone=${targetPhone}&text=${urlText}`;
-                      if (typeof window !== 'undefined') {
-                        window.open(waUrl, '_blank', 'noopener,noreferrer');
-                        showToast(`WhatsApp opened with custom recipient!`);
-                      }
-                      // Trigger background logging
-                      try {
-                        await sendautomatedWhatsApp(
-                          customWAContact,
-                          whatsAppShareModal.messageText,
-                          whatsAppShareModal.student.id,
-                          whatsAppShareModal.student.name,
-                          whatsAppShareModal.type
-                        );
-                      } catch (e) {}
-                      setWhatsAppShareModal(null);
-                      setCustomWAContact('');
-                      setSelectedStaffPhone('');
-                    }}
-                    className="bg-amber-400 hover:bg-amber-500 disabled:opacity-40 disabled:hover:bg-amber-400 text-black px-4 py-1.5 text-[10px] font-mono font-black uppercase rounded-xs cursor-pointer"
-                  >
-                    Send
-                  </button>
-                </div>
-              </div>
+                  {/* Option 2: Send to Guardian */}
+                  {whatsAppShareModal.defaultPhone && (
+                    <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
+                      <div>
+                        <h4 className="text-xs font-black uppercase font-mono text-white">2. Registered Parent/Guardian</h4>
+                        <p className="text-[9.5px] text-neutral-400 font-bold leading-tight">
+                          Registered Number: <span className="text-amber-400 font-black">{whatsAppShareModal.defaultPhone}</span>
+                        </p>
+                      </div>
+                      <button
+                        onClick={async () => {
+                          let targetPhone = whatsAppShareModal.defaultPhone.replace(/\D/g, "");
+                          if (targetPhone.startsWith("0") && targetPhone.length === 10) {
+                            targetPhone = "233" + targetPhone.substring(1);
+                          }
+                          const urlText = encodeURIComponent(whatsAppShareModal.messageText);
+                          const waUrl = `https://api.whatsapp.com/send?phone=${targetPhone}&text=${urlText}`;
+                          if (typeof window !== 'undefined') {
+                            window.open(waUrl, '_blank', 'noopener,noreferrer');
+                            showToast(`WhatsApp opened with Guardian (${whatsAppShareModal.defaultPhone})!`);
+                          }
+                          // Trigger background logging
+                          try {
+                            await sendautomatedWhatsApp(
+                              whatsAppShareModal.defaultPhone,
+                              whatsAppShareModal.messageText,
+                              whatsAppShareModal.student.id,
+                              whatsAppShareModal.student.name,
+                              whatsAppShareModal.type
+                            );
+                          } catch (e) {}
+                          setWhatsAppShareModal(null);
+                          setCustomWAContact('');
+                          setSelectedStaffPhone('');
+                        }}
+                        className="w-full bg-neutral-950 hover:bg-neutral-850 text-white hover:text-amber-400 border border-neutral-800 py-2 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded-xs"
+                      >
+                        💬 Send directly to Guardian ({whatsAppShareModal.defaultPhone})
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Option 3: Send to school staff/teacher */}
+                  {users && users.length > 0 && (
+                    <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
+                      <h4 className="text-xs font-black uppercase font-mono text-white">3. School Staff / Class Teacher</h4>
+                      <div className="flex gap-2">
+                        <select
+                          value={selectedStaffPhone}
+                          onChange={(e) => setSelectedStaffPhone(e.target.value)}
+                          className="bg-neutral-950 border border-neutral-800 rounded-xs text-[10px] font-mono font-bold text-white px-2 py-1.5 flex-1 focus:outline-none focus:border-amber-400"
+                        >
+                          <option value="">-- SELECT STAFF MEMBER --</option>
+                          {users.map(u => (
+                            u.phone ? <option key={u.id} value={u.phone}>{u.name} ({u.role || 'Staff'}) - {u.phone}</option> : null
+                          ))}
+                        </select>
+                        <button
+                          disabled={!selectedStaffPhone}
+                          onClick={async () => {
+                            let targetPhone = selectedStaffPhone.replace(/\D/g, "");
+                            if (targetPhone.startsWith("0") && targetPhone.length === 10) {
+                              targetPhone = "233" + targetPhone.substring(1);
+                            }
+                            const urlText = encodeURIComponent(whatsAppShareModal.messageText);
+                            const waUrl = `https://api.whatsapp.com/send?phone=${targetPhone}&text=${urlText}`;
+                            if (typeof window !== 'undefined') {
+                              window.open(waUrl, '_blank', 'noopener,noreferrer');
+                              showToast(`WhatsApp opened with Staff member!`);
+                            }
+                            // Trigger background logging
+                            try {
+                              await sendautomatedWhatsApp(
+                                selectedStaffPhone,
+                                whatsAppShareModal.messageText,
+                                whatsAppShareModal.student.id,
+                                whatsAppShareModal.student.name,
+                                whatsAppShareModal.type
+                              );
+                            } catch (e) {}
+                            setWhatsAppShareModal(null);
+                            setCustomWAContact('');
+                            setSelectedStaffPhone('');
+                          }}
+                          className="bg-amber-400 hover:bg-amber-500 disabled:opacity-40 disabled:hover:bg-amber-400 text-black px-4 py-1.5 text-[10px] font-mono font-black uppercase rounded-xs cursor-pointer"
+                        >
+                          Send
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Option 4: Custom Number */}
+                  <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
+                    <h4 className="text-xs font-black uppercase font-mono text-white">4. Type Custom Phone Number</h4>
+                    <div className="flex gap-2">
+                      <input
+                        type="tel"
+                        value={customWAContact}
+                        onChange={(e) => setCustomWAContact(e.target.value)}
+                        placeholder="e.g. 0244000000"
+                        className="bg-neutral-950 border border-neutral-800 rounded-xs text-[10px] font-mono font-bold text-white px-2 py-1.5 flex-1 focus:outline-none focus:border-amber-400"
+                      />
+                      <button
+                        disabled={!customWAContact.trim()}
+                        onClick={async () => {
+                          let targetPhone = customWAContact.replace(/\D/g, "");
+                          if (targetPhone.startsWith("0") && targetPhone.length === 10) {
+                            targetPhone = "233" + targetPhone.substring(1);
+                          }
+                          const urlText = encodeURIComponent(whatsAppShareModal.messageText);
+                          const waUrl = `https://api.whatsapp.com/send?phone=${targetPhone}&text=${urlText}`;
+                          if (typeof window !== 'undefined') {
+                            window.open(waUrl, '_blank', 'noopener,noreferrer');
+                            showToast(`WhatsApp opened with custom recipient!`);
+                          }
+                          // Trigger background logging
+                          try {
+                            await sendautomatedWhatsApp(
+                              customWAContact,
+                              whatsAppShareModal.messageText,
+                              whatsAppShareModal.student.id,
+                              whatsAppShareModal.student.name,
+                              whatsAppShareModal.type
+                            );
+                          } catch (e) {}
+                          setWhatsAppShareModal(null);
+                          setCustomWAContact('');
+                          setSelectedStaffPhone('');
+                        }}
+                        className="bg-amber-400 hover:bg-amber-500 disabled:opacity-40 disabled:hover:bg-amber-400 text-black px-4 py-1.5 text-[10px] font-mono font-black uppercase rounded-xs cursor-pointer"
+                      >
+                        Send
+                      </button>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  {/* Option 1: Universal SMS Picker */}
+                  <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-500/40 transition-all rounded-xs space-y-2">
+                    <div>
+                      <h4 className="text-xs font-black uppercase font-mono text-amber-400">1. SMS Client App Picker (Universal)</h4>
+                      <p className="text-[9.5px] text-neutral-400 font-bold leading-tight">
+                        Launches your device's native SMS messaging app prefilled with this check-in/payment confirmation text.
+                      </p>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        const smsUrl = `sms:?body=${encodeURIComponent(whatsAppShareModal.messageText)}`;
+                        if (typeof window !== 'undefined') {
+                          window.open(smsUrl, '_blank');
+                          showToast("Native SMS picker launched!");
+                        }
+                        // Copy message automatically for safety
+                        navigator.clipboard.writeText(whatsAppShareModal.messageText);
+                        // Trigger background logging
+                        try {
+                          await sendautomatedWhatsApp(
+                            'Universal SMS Picker',
+                            whatsAppShareModal.messageText,
+                            whatsAppShareModal.student.id,
+                            whatsAppShareModal.student.name,
+                            'sms-' + whatsAppShareModal.type
+                          );
+                        } catch (e) {}
+                        setWhatsAppShareModal(null);
+                        setCustomWAContact('');
+                        setSelectedStaffPhone('');
+                        setReminderChannel('whatsapp');
+                      }}
+                      className="w-full bg-amber-955 hover:bg-amber-900 text-amber-400 hover:text-amber-300 border border-amber-850 py-2 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded-xs flex items-center justify-center gap-1.5"
+                    >
+                      <Smartphone size={12} />
+                      <span>Choose Contact & Send via Native SMS</span>
+                    </button>
+                  </div>
+
+                  {/* Option 2: Send SMS directly to Guardian */}
+                  {whatsAppShareModal.defaultPhone && (
+                    <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
+                      <div>
+                        <h4 className="text-xs font-black uppercase font-mono text-white">2. Registered Parent/Guardian (SMS)</h4>
+                        <p className="text-[9.5px] text-neutral-400 font-bold leading-tight">
+                          Registered Phone: <span className="text-amber-400 font-black">{whatsAppShareModal.defaultPhone}</span>
+                        </p>
+                      </div>
+                      <div className="flex flex-col sm:flex-row gap-2">
+                        <button
+                          onClick={async () => {
+                            let cleanPhone = whatsAppShareModal.defaultPhone.replace(/\D/g, "");
+                            const smsUrl = `sms:${cleanPhone}?body=${encodeURIComponent(whatsAppShareModal.messageText)}`;
+                            if (typeof window !== 'undefined') {
+                              window.open(smsUrl, '_blank');
+                              showToast(`SMS App launched for ${whatsAppShareModal.defaultPhone}!`);
+                            }
+                            navigator.clipboard.writeText(whatsAppShareModal.messageText);
+                            // Trigger background logging
+                            try {
+                              await sendautomatedWhatsApp(
+                                whatsAppShareModal.defaultPhone,
+                                whatsAppShareModal.messageText,
+                                whatsAppShareModal.student.id,
+                                whatsAppShareModal.student.name,
+                                'sms-' + whatsAppShareModal.type
+                              );
+                            } catch (e) {}
+                            setWhatsAppShareModal(null);
+                            setCustomWAContact('');
+                            setSelectedStaffPhone('');
+                            setReminderChannel('whatsapp');
+                          }}
+                          className="flex-1 bg-neutral-950 hover:bg-neutral-850 text-white hover:text-amber-400 border border-neutral-800 py-2 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded-xs"
+                        >
+                          📱 Open Native SMS
+                        </button>
+
+                        <button
+                          onClick={async () => {
+                            showToast("Dispatching via cloud SMS carrier gateway...");
+                            try {
+                              const res = await sendautomatedWhatsApp(
+                                whatsAppShareModal.defaultPhone,
+                                whatsAppShareModal.messageText,
+                                whatsAppShareModal.student.id,
+                                whatsAppShareModal.student.name,
+                                'sms-' + whatsAppShareModal.type
+                              );
+                              if (res && res.success) {
+                                showToast("SMS dispatch token registered & logged successfully!");
+                              } else {
+                                showToast("Logged (Simulation Mode) successfully.");
+                              }
+                            } catch (e) {
+                              showToast("Logged (Simulation Mode).");
+                            }
+                            setWhatsAppShareModal(null);
+                            setCustomWAContact('');
+                            setSelectedStaffPhone('');
+                            setReminderChannel('whatsapp');
+                          }}
+                          className="bg-amber-400 hover:bg-amber-500 text-black px-4 py-2 text-[10px] font-mono font-black uppercase rounded-xs cursor-pointer text-center"
+                        >
+                          Send via Cloud API
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Option 3: Send SMS to school staff/teacher */}
+                  {users && users.length > 0 && (
+                    <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
+                      <h4 className="text-xs font-black uppercase font-mono text-white">3. School Staff / Class Teacher (SMS)</h4>
+                      <div className="flex gap-2">
+                        <select
+                          value={selectedStaffPhone}
+                          onChange={(e) => setSelectedStaffPhone(e.target.value)}
+                          className="bg-neutral-950 border border-neutral-800 rounded-xs text-[10px] font-mono font-bold text-white px-2 py-1.5 flex-1 focus:outline-none focus:border-amber-400"
+                        >
+                          <option value="">-- SELECT STAFF MEMBER --</option>
+                          {users.map(u => (
+                            u.phone ? <option key={u.id} value={u.phone}>{u.name} ({u.role || 'Staff'}) - {u.phone}</option> : null
+                          ))}
+                        </select>
+                        <button
+                          disabled={!selectedStaffPhone}
+                          onClick={async () => {
+                            let cleanPhone = selectedStaffPhone.replace(/\D/g, "");
+                            const smsUrl = `sms:${cleanPhone}?body=${encodeURIComponent(whatsAppShareModal.messageText)}`;
+                            if (typeof window !== 'undefined') {
+                              window.open(smsUrl, '_blank');
+                              showToast(`SMS App launched for ${selectedStaffPhone}!`);
+                            }
+                            navigator.clipboard.writeText(whatsAppShareModal.messageText);
+                            // Trigger background logging
+                            try {
+                              await sendautomatedWhatsApp(
+                                selectedStaffPhone,
+                                whatsAppShareModal.messageText,
+                                whatsAppShareModal.student.id,
+                                whatsAppShareModal.student.name,
+                                'sms-' + whatsAppShareModal.type
+                              );
+                            } catch (e) {}
+                            setWhatsAppShareModal(null);
+                            setCustomWAContact('');
+                            setSelectedStaffPhone('');
+                            setReminderChannel('whatsapp');
+                          }}
+                          className="bg-amber-400 hover:bg-amber-500 disabled:opacity-40 disabled:hover:bg-amber-400 text-black px-4 py-1.5 text-[10px] font-mono font-black uppercase rounded-xs cursor-pointer"
+                        >
+                          Send SMS
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Option 4: Custom Number (SMS) */}
+                  <div className="bg-neutral-950/40 p-3 border border-neutral-850 hover:border-amber-400/40 transition-all rounded-xs space-y-2">
+                    <h4 className="text-xs font-black uppercase font-mono text-white">4. Type Custom Phone Number (SMS)</h4>
+                    <div className="flex gap-2">
+                      <input
+                        type="tel"
+                        value={customWAContact}
+                        onChange={(e) => setCustomWAContact(e.target.value)}
+                        placeholder="e.g. 0244000000"
+                        className="bg-neutral-950 border border-neutral-800 rounded-xs text-[10px] font-mono font-bold text-white px-2 py-1.5 flex-1 focus:outline-none focus:border-amber-400"
+                      />
+                      <button
+                        disabled={!customWAContact.trim()}
+                        onClick={async () => {
+                          let cleanPhone = customWAContact.replace(/\D/g, "");
+                          const smsUrl = `sms:${cleanPhone}?body=${encodeURIComponent(whatsAppShareModal.messageText)}`;
+                          if (typeof window !== 'undefined') {
+                            window.open(smsUrl, '_blank');
+                            showToast(`SMS App launched for ${customWAContact}!`);
+                          }
+                          navigator.clipboard.writeText(whatsAppShareModal.messageText);
+                          // Trigger background logging
+                          try {
+                            await sendautomatedWhatsApp(
+                              customWAContact,
+                              whatsAppShareModal.messageText,
+                              whatsAppShareModal.student.id,
+                              whatsAppShareModal.student.name,
+                              'sms-' + whatsAppShareModal.type
+                            );
+                          } catch (e) {}
+                          setWhatsAppShareModal(null);
+                          setCustomWAContact('');
+                          setSelectedStaffPhone('');
+                          setReminderChannel('whatsapp');
+                        }}
+                        className="bg-amber-400 hover:bg-amber-500 disabled:opacity-40 disabled:hover:bg-amber-400 text-black px-4 py-1.5 text-[10px] font-mono font-black uppercase rounded-xs cursor-pointer"
+                      >
+                        Send SMS
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
 
             </div>
           </div>

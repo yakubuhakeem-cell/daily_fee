@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { 
   FileText, 
@@ -19,6 +19,11 @@ export function AuditTrailTab() {
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<'all' | 'students' | 'payments' | 'expenses' | 'settings' | 'security' | 'other'>('all');
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [visibleLogsCount, setVisibleLogsCount] = useState(50);
+
+  useEffect(() => {
+    setVisibleLogsCount(50);
+  }, [search, categoryFilter]);
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -37,6 +42,8 @@ export function AuditTrailTab() {
 
     return matchesSearch && matchesCategory;
   });
+
+  const displayedLogs = filteredLogs.slice(0, visibleLogsCount);
 
   // Calculate counts for stats cards
   const totalCount = auditLogs.length;
@@ -191,8 +198,8 @@ export function AuditTrailTab() {
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-900 text-neutral-300">
-              {filteredLogs.length > 0 ? (
-                filteredLogs.map(log => (
+              {displayedLogs.length > 0 ? (
+                displayedLogs.map(log => (
                   <tr key={log.id} className="hover:bg-neutral-900/40 transition-colors">
                     <td className="p-4 text-neutral-400 select-none flex items-center gap-1.5">
                       <Clock size={11} className="text-neutral-500" />
@@ -247,6 +254,16 @@ export function AuditTrailTab() {
             </tbody>
           </table>
         </div>
+        {filteredLogs.length > visibleLogsCount && (
+          <div className="p-4 bg-neutral-900 border-t-2 border-neutral-850 text-center">
+            <button
+              onClick={() => setVisibleLogsCount(prev => prev + 50)}
+              className="px-4 py-2 text-[10px] font-black bg-neutral-950 hover:bg-neutral-850 text-amber-400 border border-neutral-800 hover:border-amber-400 uppercase tracking-widest cursor-pointer transition-colors"
+            >
+              Show More Logs ({filteredLogs.length - visibleLogsCount} remaining)
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

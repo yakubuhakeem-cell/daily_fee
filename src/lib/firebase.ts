@@ -17,7 +17,7 @@ import {
   memoryLocalCache
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { Student, PaymentRecord, UserAccount, Term, Expense, WorkerSalary, SystemSettings, BudgetTarget, AuditLog } from '../types';
+import { Student, PaymentRecord, UserAccount, Term, Expense, WorkerSalary, SystemSettings, BudgetTarget, AuditLog, TeacherEvaluation, JournalEntry } from '../types';
 
 const dbId = (!firebaseConfig.firestoreDatabaseId || firebaseConfig.firestoreDatabaseId === 'default') 
   ? undefined 
@@ -606,6 +606,100 @@ export const db = {
       return res.ok;
     } catch (e) {
       console.error("Local Server API saveAuditLog error: ", e);
+      return false;
+    }
+  },
+
+  async purgeDemoData(): Promise<{ success: boolean; purgedStudentsCount: number; purgedPaymentsCount: number; purgedUsersCount: number }> {
+    try {
+      const res = await fetch("/api/purge-demo", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        }
+      });
+      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+      return await res.json();
+    } catch (e) {
+      console.error("Local Server API purgeDemoData error: ", e);
+      return { success: false, purgedStudentsCount: 0, purgedPaymentsCount: 0, purgedUsersCount: 0 };
+    }
+  },
+
+  async getTeacherEvaluations(): Promise<TeacherEvaluation[] | null> {
+    try {
+      const res = await fetch("/api/evaluations");
+      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+      return await res.json();
+    } catch (e) {
+      console.error("Local Server API getTeacherEvaluations error: ", e);
+      return null;
+    }
+  },
+
+  async saveTeacherEvaluation(evaluation: TeacherEvaluation): Promise<boolean> {
+    try {
+      const res = await fetch("/api/evaluations", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(evaluation),
+      });
+      return res.ok;
+    } catch (e) {
+      console.error("Local Server API saveTeacherEvaluation error: ", e);
+      return false;
+    }
+  },
+
+  async deleteTeacherEvaluation(evaluationId: string): Promise<boolean> {
+    try {
+      const res = await fetch(`/api/evaluations/${evaluationId}`, {
+        method: "DELETE",
+      });
+      return res.ok;
+    } catch (e) {
+      console.error("Local Server API deleteTeacherEvaluation error: ", e);
+      return false;
+    }
+  },
+
+  async getJournalEntries(): Promise<JournalEntry[] | null> {
+    try {
+      const res = await fetch("/api/journal_entries");
+      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+      return await res.json();
+    } catch (e) {
+      console.error("Local Server API getJournalEntries error: ", e);
+      return null;
+    }
+  },
+
+  async saveJournalEntry(entry: JournalEntry): Promise<boolean> {
+    try {
+      const res = await fetch("/api/journal_entries", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(entry),
+      });
+      return res.ok;
+    } catch (e) {
+      console.error("Local Server API saveJournalEntry error: ", e);
+      return false;
+    }
+  },
+
+  async deleteJournalEntry(entryId: string): Promise<boolean> {
+    try {
+      const res = await fetch(`/api/journal_entries/${entryId}`, {
+        method: "DELETE",
+      });
+      return res.ok;
+    } catch (e) {
+      console.error("Local Server API deleteJournalEntry error: ", e);
       return false;
     }
   }
