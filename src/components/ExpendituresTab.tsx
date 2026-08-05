@@ -586,6 +586,7 @@ export const ExpendituresTab: React.FC = () => {
         <div className="flex gap-2 p-1 bg-neutral-950 border border-neutral-800 w-full sm:w-auto">
           <button
             onClick={() => setActiveSubTab('expenses')}
+            title="Daily Expenses: Log operational receipts, utility disbursements, school supplies, and maintenance costs"
             className={`px-5 py-2 font-black text-[11px] uppercase tracking-wider transition-all flex items-center gap-2 ${
               activeSubTab === 'expenses'
                 ? 'bg-amber-400 text-black'
@@ -597,6 +598,7 @@ export const ExpendituresTab: React.FC = () => {
           </button>
           <button
             onClick={() => setActiveSubTab('salaries')}
+            title="Workers & Salaries: Track staff payroll, monthly wage disbursements, advance payments, and worker history"
             className={`px-5 py-2 font-black text-[11px] uppercase tracking-wider transition-all flex items-center gap-2 ${
               activeSubTab === 'salaries'
                 ? 'bg-amber-400 text-black'
@@ -608,6 +610,7 @@ export const ExpendituresTab: React.FC = () => {
           </button>
           <button
             onClick={() => setActiveSubTab('analytics')}
+            title="Flow Statements: Analyze expense distribution categories, cash outflow charts, and monthly totals"
             className={`px-5 py-2 font-black text-[11px] uppercase tracking-wider transition-all flex items-center gap-2 ${
               activeSubTab === 'analytics'
                 ? 'bg-amber-400 text-black'
@@ -1905,14 +1908,57 @@ export const ExpendituresTab: React.FC = () => {
               </div>
 
               {/* Search & Bulk Select bar */}
-              <div className="flex flex-col sm:flex-row justify-between items-center gap-2 shrink-0 bg-neutral-950/40 p-2 border border-neutral-850 rounded">
+              <div className="flex flex-col lg:flex-row justify-between items-center gap-2 shrink-0 bg-neutral-950/40 p-2 border border-neutral-850 rounded">
                 <input
                   type="text"
                   placeholder="Filter staff by name/role..."
                   value={bulkSearch}
                   onChange={e => setBulkSearch(e.target.value)}
-                  className="bg-neutral-900 border border-neutral-800 text-xs px-3 py-1.5 w-full sm:w-64 rounded focus:outline-none focus:border-emerald-400 text-white font-bold"
+                  className="bg-neutral-900 border border-neutral-800 text-xs px-3 py-1.5 w-full lg:w-56 rounded focus:outline-none focus:border-emerald-400 text-white font-bold"
                 />
+
+                {/* Percentage Wage Adjustment Quick Bar */}
+                <div className="flex flex-wrap items-center gap-1.5 bg-neutral-900/80 px-2.5 py-1 border border-neutral-800 rounded">
+                  <span className="text-[10px] font-mono font-bold text-amber-400 flex items-center gap-1">
+                    ⚡ Adjust Base (%):
+                  </span>
+                  {[5, 10, 15, 20].map(pct => (
+                    <button
+                      key={pct}
+                      type="button"
+                      onClick={() => {
+                        setBulkStaffList(prev => prev.map(s => {
+                          if (!s.selected) return s;
+                          const current = s.baseSalary || 0;
+                          const nextVal = Math.max(0, Math.round((current * (1 + pct / 100)) * 100) / 100);
+                          return { ...s, baseSalary: nextVal };
+                        }));
+                        playFeedbackSound('click');
+                      }}
+                      className="px-2 py-0.5 bg-neutral-950 hover:bg-amber-500/20 text-[10px] font-mono font-bold text-amber-400 border border-amber-500/30 hover:border-amber-400 rounded transition-colors cursor-pointer"
+                      title={`Increase selected staff base wages by +${pct}%`}
+                    >
+                      +{pct}%
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBulkStaffList(prev => prev.map(s => {
+                        if (!s.selected) return s;
+                        const current = s.baseSalary || 0;
+                        const nextVal = Math.max(0, Math.round((current * 0.95) * 100) / 100);
+                        return { ...s, baseSalary: nextVal };
+                      }));
+                      playFeedbackSound('click');
+                    }}
+                    className="px-2 py-0.5 bg-neutral-950 hover:bg-rose-500/20 text-[10px] font-mono font-bold text-rose-400 border border-rose-500/30 hover:border-rose-400 rounded transition-colors cursor-pointer"
+                    title="Reduce selected staff base wages by -5%"
+                  >
+                    -5%
+                  </button>
+                </div>
+
                 <div className="flex items-center gap-3">
                   <button
                     type="button"

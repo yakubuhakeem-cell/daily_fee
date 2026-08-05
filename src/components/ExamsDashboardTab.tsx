@@ -139,7 +139,7 @@ export function ExamsDashboardTab() {
 
   // Safe standard settings loader
   const safeSettings = useMemo(() => {
-    const defaultEligible = CLASSES_LIST.filter(cls => cls !== 'Nursery');
+    const defaultEligible = [...CLASSES_LIST];
     const base = (examsSettings && examsSettings.classFees) ? examsSettings : {
       classFees: CLASSES_LIST.reduce((acc, cls) => {
         const cat = getClassCategory(cls);
@@ -162,8 +162,8 @@ export function ExamsDashboardTab() {
   // Group exams fee payments by date and then by class for easy daily auditing
   const dailyClassTotals = useMemo(() => {
     const activeTermPayments = examsPayments.filter(p => {
-      if (p.termId !== currentTermId) return false;
-      return safeSettings.eligibleClasses?.includes(p.class);
+      if (p.termId && p.termId !== currentTermId) return false;
+      return true;
     });
     
     // Grouping structure: { "YYYY-MM-DD": { "B1": total_amount, "KG1": total_amount } }
@@ -240,11 +240,9 @@ export function ExamsDashboardTab() {
     return examsPayments.filter(p => 
       p.datePaid === selectedClassDetail.date && 
       p.class === selectedClassDetail.class &&
-      p.termId === currentTermId
+      (!p.termId || p.termId === currentTermId)
     );
   }, [examsPayments, selectedClassDetail, currentTermId]);
-
-
 
   // Active student list
   const activeStudents = useMemo(() => {
@@ -304,8 +302,8 @@ export function ExamsDashboardTab() {
   // Calculations
   const metrics = useMemo(() => {
     const activeTermPayments = examsPayments.filter(p => {
-      if (p.termId !== currentTermId) return false;
-      return safeSettings.eligibleClasses?.includes(p.class);
+      if (p.termId && p.termId !== currentTermId) return false;
+      return true;
     });
     
     let totalRevenueExpected = 0;
@@ -758,24 +756,28 @@ export function ExamsDashboardTab() {
       <div className="flex border-b border-neutral-800">
         <button 
           onClick={() => setActiveSubTab('insights')}
+          title="Insights & Financials: View exam fee collections vs printing costs, net balance, and payment statistics"
           className={`px-5 py-3 text-xs uppercase tracking-wider font-mono border-b-2 font-black transition ${activeSubTab === 'insights' ? 'border-amber-400 text-amber-400' : 'border-transparent text-neutral-400 hover:text-white'}`}
         >
           Insights & Financials
         </button>
         <button 
           onClick={() => setActiveSubTab('collection')}
+          title="Pupil Fee Collection: Record individual exam payments, filter paid/unpaid status, and issue receipts"
           className={`px-5 py-3 text-xs uppercase tracking-wider font-mono border-b-2 font-black transition ${activeSubTab === 'collection' ? 'border-amber-400 text-amber-400' : 'border-transparent text-neutral-400 hover:text-white'}`}
         >
           Pupil Fee Collection
         </button>
         <button 
           onClick={() => setActiveSubTab('companies')}
+          title="Company Invoices: Track exam printing vendor invoices, production bills, and corporate expenses"
           className={`px-5 py-3 text-xs uppercase tracking-wider font-mono border-b-2 font-black transition ${activeSubTab === 'companies' ? 'border-amber-400 text-amber-400' : 'border-transparent text-neutral-400 hover:text-white'}`}
         >
           Company Invoices ({adjustedExamsExpenses.length})
         </button>
         <button 
           onClick={() => setActiveSubTab('configuration')}
+          title="Fee Configuration: Set exam fee amounts per pupil, term targets, and assessment guidelines"
           className={`px-5 py-3 text-xs uppercase tracking-wider font-mono border-b-2 font-black transition ${activeSubTab === 'configuration' ? 'border-amber-400 text-amber-400' : 'border-transparent text-neutral-400 hover:text-white'}`}
         >
           Fee Configuration

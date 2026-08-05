@@ -6,9 +6,11 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
 import { useApp, getStudentB9ExpiryDate, getDiscountedTermFee } from '../context/AppContext';
-import { StudentClass, Student, UserRole, SchoolCategory } from '../types';
-import { Plus, UserPlus, Trash2, Edit2, ShieldAlert, Check, X, ToggleLeft, ToggleRight, Database, Server, RefreshCw, Copy, Share2, Users, BellRing, MessageSquareCode, UserCheck, Camera, Upload, Download, Search, QrCode, Printer, Contact, Award, DollarSign, Info, MessageSquare, Smartphone, Sliders, Bot, FileText, FileSignature, CalendarDays, ChevronDown, ChevronRight, Scale, LayoutGrid, List } from 'lucide-react';
-import { getClassCategory } from '../initialData';
+import { StudentClass, Student, UserRole, SchoolCategory, TeacherEthicsEvaluation } from '../types';
+import { Plus, UserPlus, Trash2, Edit2, ShieldAlert, Check, X, ToggleLeft, ToggleRight, Database, Server, RefreshCw, Copy, Share2, Users, BellRing, MessageSquareCode, UserCheck, Camera, Upload, Download, Search, QrCode, Printer, Contact, Award, DollarSign, Info, MessageSquare, Smartphone, Sliders, Bot, FileText, FileSignature, CalendarDays, ChevronDown, ChevronRight, Scale, LayoutGrid, List, Sparkles, KeyRound, Percent, TrendingUp, Coins, BadgePercent, ArrowUpRight, CheckCircle, AlertTriangle } from 'lucide-react';
+import { getClassCategory, generateRandomPassword } from '../initialData';
+import { getStudentPickupCode } from '../utils/pickupCode';
+import { PickupPassesModal } from './PickupPassesModal';
 import { ExpendituresTab } from './ExpendituresTab';
 import { LedgerTab } from './LedgerTab';
 import { WhatsAppLogsTab } from './WhatsAppLogsTab';
@@ -173,6 +175,7 @@ export const AdminPanel: React.FC = React.memo(() => {
     toggleMfaForUser,
     registerStaff,
     updateStaff,
+    adjustStaffSalariesByPercentage,
     deleteStaff,
     toggleStaffActive,
     currentUser,
@@ -237,6 +240,17 @@ export const AdminPanel: React.FC = React.memo(() => {
     'JHS': true,
   });
   const [expandedStudentIds, setExpandedStudentIds] = useState<Record<string, boolean>>({});
+  const [showPickupPassesModal, setShowPickupPassesModal] = useState(false);
+
+  // Percentage Wage / Salary Adjustment Modal states
+  const [showSalaryAdjustModal, setShowSalaryAdjustModal] = useState(false);
+  const [adjustTargetRole, setAdjustTargetRole] = useState<string>('All');
+  const [adjustPercentage, setAdjustPercentage] = useState<number>(10);
+  const [adjustMode, setAdjustMode] = useState<'increase' | 'decrease'>('increase');
+  const [adjustReason, setAdjustReason] = useState<string>('Annual School Wage Boost & Promotion Adjustment');
+  const [selectedStaffIdsForAdjust, setSelectedStaffIdsForAdjust] = useState<string[]>([]);
+  const [salaryAdjustSearch, setSalaryAdjustSearch] = useState<string>('');
+  const [salaryAdjustSuccessMsg, setSalaryAdjustSuccessMsg] = useState<string | null>(null);
 
   // Appointment Letter & Renewal Modal states
   const [appointmentModalUser, setAppointmentModalUser] = useState<any | null>(null);
@@ -255,6 +269,68 @@ export const AdminPanel: React.FC = React.memo(() => {
   const [appStaffSignature, setAppStaffSignature] = useState<string>('');
   const [appManagementSignature, setAppManagementSignature] = useState<string>('');
   const [appPersonalAddress, setAppPersonalAddress] = useState<string>('');
+
+  // Teacher Professional & Ethics Evaluation state for Appointment / Re-appointment modal
+  const [ethicsAcademicYear, setEthicsAcademicYear] = useState('2025/2026 Academic Year');
+  const [selectedPositiveEthics, setSelectedPositiveEthics] = useState<string[]>([
+    'Punctuality & Morning Assembly Attendance',
+    'Scheme of Learning & Lesson Notes Submission',
+    'Student Mentorship & Pastoral Care',
+    'Assessment & Grading Integrity',
+    'Professional Conduct & Staff Collaboration'
+  ]);
+  const [selectedNegativeEthics, setSelectedNegativeEthics] = useState<string[]>([]);
+  const [ethicsQualificationStatus, setEthicsQualificationStatus] = useState<'Qualified (Full Increment)' | 'Qualified (Partial Increment)' | 'Withheld (Ethics Review)' | 'Maintained (No Change)'>('Qualified (Full Increment)');
+  const [ethicsIncrementPercentage, setEthicsIncrementPercentage] = useState<number>(10);
+  const [ethicsPreviousSalary, setEthicsPreviousSalary] = useState<number>(0);
+  const [ethicsEvaluationNotes, setEthicsEvaluationNotes] = useState<string>('Teacher demonstrated exemplary professional ethics, regular attendance, and high student engagement in the previous academic year.');
+  const [includeEthicsAnnexure, setIncludeEthicsAnnexure] = useState<boolean>(true);
+
+  const ALL_POSITIVE_ETHICS = [
+    'Punctuality & Morning Assembly Attendance',
+    'Scheme of Learning & Daily Lesson Notes Submission',
+    'Classroom Discipline & Positive Behavior Management',
+    'Student Mentorship, Pastoral Care & Anti-Bullying Vigilance',
+    'Assessment Integrity & Timely Exam Marking / Report Entry',
+    'Active Pupil Attendance Register Marking & Truancy Tracking',
+    'Integration of Teaching Aids, ICT & Interactive Learning Tools',
+    'Active Duty Supervision (Gate, Playground, Dining & Assembly)',
+    'Clean Disciplinary Record & Strict Code of Conduct Compliance',
+    'Clean, Organized & Stimulating Classroom Environment Maintenance',
+    'Regular Parent-Teacher Communication & Student Progress Reporting',
+    'Professional Staff Collaboration, Peer Mentorship & Support',
+    'Involvement in Co-Curricular Activities, Clubs & Sports',
+    'Active Participation in Continuing Professional Development (CPD)',
+    'Careful Care, Preservation & Inventory of School Property & Books'
+  ];
+
+  const ALL_NEGATIVE_ETHICS = [
+    'Habitual Lateness or Unexcused Absence from Campus / Class',
+    'Delayed Lesson Notes or Scheme of Learning Submission',
+    'Delayed Assessment Marking, Report Card Entry or Grading Errors',
+    'Poor Classroom Discipline / Excessive Noise or Pupil Chaos',
+    'Unprofessional Language, Temperament or Conduct with Pupils / Staff',
+    'Neglect of Assigned Duty Duties (Gate, Playground, Dining, Assembly)',
+    'Inappropriate Mobile Phone Usage or Distraction During Class Hours',
+    'Non-Compliance with Dress Code, Appearance or Grooming Standards',
+    'Unexcused Absence from Staff Meetings, PTA or Training Seminars',
+    'Neglect of Pupil Attendance Register Marking or Truancy Logs',
+    'Irresponsible Handling, Damage or Loss of School Property / Textbooks',
+    'Unauthorized Campus Absence or Class Abandonment Without Exeat'
+  ];
+
+  const getEthicsScoreDetails = (positives: string[], negatives: string[]) => {
+    const maxPos = ALL_POSITIVE_ETHICS.length || 1;
+    const posPercent = (positives.length / maxPos) * 100;
+    const demeritDeductions = negatives.length * 8;
+    const score = Math.max(0, Math.min(100, Math.round(posPercent - demeritDeductions)));
+    let rating = 'Satisfactory';
+    if (score >= 85) rating = 'Exemplary Conduct';
+    else if (score >= 70) rating = 'Commendable Conduct';
+    else if (score >= 50) rating = 'Satisfactory';
+    else rating = 'Requires Ethics Review';
+    return { score, rating };
+  };
 
   const openAppointmentModal = (u: any) => {
     setAppointmentModalUser(u);
@@ -279,10 +355,57 @@ export const AdminPanel: React.FC = React.memo(() => {
     setAppManagementSignature(u.managementSignatureUrl || '');
     setAppPersonalAddress(u.personalAddress || '');
     setIsRenewalTab(false);
+
+    // Initialize Professional Ethics & Salary Promotion Evaluation
+    const prevSalary = u.stipendSalary || 0;
+    setEthicsPreviousSalary(prevSalary);
+    if (u.ethicsEvaluation) {
+      setEthicsAcademicYear(u.ethicsEvaluation.academicYear || '2025/2026 Academic Year');
+      setSelectedPositiveEthics(u.ethicsEvaluation.positiveEthics || []);
+      setSelectedNegativeEthics(u.ethicsEvaluation.negativeEthics || []);
+      setEthicsQualificationStatus(u.ethicsEvaluation.qualificationStatus || 'Qualified (Full Increment)');
+      setEthicsIncrementPercentage(u.ethicsEvaluation.incrementPercentage ?? 10);
+      setEthicsEvaluationNotes(u.ethicsEvaluation.evaluationNotes || '');
+    } else {
+      setEthicsAcademicYear('2025/2026 Academic Year');
+      setSelectedPositiveEthics([
+        'Punctuality & Morning Assembly Attendance',
+        'Scheme of Learning & Daily Lesson Notes Submission',
+        'Classroom Discipline & Positive Behavior Management',
+        'Student Mentorship, Pastoral Care & Anti-Bullying Vigilance',
+        'Assessment Integrity & Timely Exam Marking / Report Entry',
+        'Active Pupil Attendance Register Marking & Truancy Tracking',
+        'Integration of Teaching Aids, ICT & Interactive Learning Tools',
+        'Clean Disciplinary Record & Strict Code of Conduct Compliance'
+      ]);
+      setSelectedNegativeEthics([]);
+      setEthicsQualificationStatus('Qualified (Full Increment)');
+      setEthicsIncrementPercentage(10);
+      setEthicsEvaluationNotes(`${u.name} has demonstrated commendable professional conduct, regular class attendance, and positive student outcomes in the preceding academic year.`);
+    }
+    setIncludeEthicsAnnexure(true);
   };
 
   const handleSaveAppointment = () => {
     if (!appointmentModalUser) return;
+
+    const { score, rating } = getEthicsScoreDetails(selectedPositiveEthics, selectedNegativeEthics);
+
+    const currentEthicsPayload: TeacherEthicsEvaluation = {
+      academicYear: ethicsAcademicYear,
+      positiveEthics: selectedPositiveEthics,
+      negativeEthics: selectedNegativeEthics,
+      overallScore: score,
+      overallRating: rating,
+      qualificationStatus: ethicsQualificationStatus,
+      incrementPercentage: ethicsIncrementPercentage,
+      previousSalary: ethicsPreviousSalary,
+      proposedSalary: parseFloat(appSalary) || 0,
+      evaluatedBy: appSignatoryName,
+      evaluatedDate: appLetterDate,
+      evaluationNotes: ethicsEvaluationNotes
+    };
+
     const res = updateStaff(
       appointmentModalUser.id,
       appointmentModalUser.name,
@@ -308,7 +431,8 @@ export const AdminPanel: React.FC = React.memo(() => {
       appRenewalPeriod,
       appStaffSignature,
       appManagementSignature,
-      appPersonalAddress
+      appPersonalAddress,
+      currentEthicsPayload
     );
 
     if (res.success) {
@@ -322,9 +446,10 @@ export const AdminPanel: React.FC = React.memo(() => {
         renewalPeriod: appRenewalPeriod,
         signatureUrl: appStaffSignature,
         managementSignatureUrl: appManagementSignature,
-        personalAddress: appPersonalAddress
+        personalAddress: appPersonalAddress,
+        ethicsEvaluation: currentEthicsPayload
       });
-      showToast("Appointment terms successfully updated in system registers.");
+      showToast("Appointment terms & ethics evaluation successfully updated in system registers.");
     } else {
       showToast(res.error || "Failed to save appointment terms.");
     }
@@ -339,6 +464,23 @@ export const AdminPanel: React.FC = React.memo(() => {
     
     const newSalary = (parseFloat(appSalary) || 0) + stipendAdjustment;
     const newRenewalPeriodStr = `${monthsCount >= 12 ? (monthsCount / 12).toFixed(0) + ' Year(s)' : monthsCount + ' Month(s)'}`;
+
+    const { score, rating } = getEthicsScoreDetails(selectedPositiveEthics, selectedNegativeEthics);
+
+    const currentEthicsPayload: TeacherEthicsEvaluation = {
+      academicYear: ethicsAcademicYear,
+      positiveEthics: selectedPositiveEthics,
+      negativeEthics: selectedNegativeEthics,
+      overallScore: score,
+      overallRating: rating,
+      qualificationStatus: ethicsQualificationStatus,
+      incrementPercentage: ethicsIncrementPercentage,
+      previousSalary: ethicsPreviousSalary,
+      proposedSalary: newSalary || 0,
+      evaluatedBy: appSignatoryName,
+      evaluatedDate: appLetterDate,
+      evaluationNotes: ethicsEvaluationNotes
+    };
 
     const res = updateStaff(
       appointmentModalUser.id,
@@ -365,7 +507,8 @@ export const AdminPanel: React.FC = React.memo(() => {
       newRenewalPeriodStr,
       appStaffSignature,
       appManagementSignature,
-      appPersonalAddress
+      appPersonalAddress,
+      currentEthicsPayload
     );
 
     if (res.success) {
@@ -382,7 +525,8 @@ export const AdminPanel: React.FC = React.memo(() => {
         renewalPeriod: newRenewalPeriodStr,
         signatureUrl: appStaffSignature,
         managementSignatureUrl: appManagementSignature,
-        personalAddress: appPersonalAddress
+        personalAddress: appPersonalAddress,
+        ethicsEvaluation: currentEthicsPayload
       });
       
       playFeedbackSound('confirm');
@@ -898,6 +1042,76 @@ export const AdminPanel: React.FC = React.memo(() => {
                 </div>
               </div>
             </div>
+
+            ${includeEthicsAnnexure ? `
+              <div style="margin-top: 35px; page-break-before: auto; border-top: 2px solid #024227; padding-top: 15px;">
+                <div style="font-family: 'Georgia', serif; font-size: 12px; font-weight: bold; color: #024227; text-transform: uppercase; text-align: center; margin-bottom: 3px; letter-spacing: 0.5px;">
+                  ANNEXURE: TEACHER PROFESSIONAL ETHICS & SALARY PROMOTION EVALUATION
+                </div>
+                <div style="font-size: 10px; color: #4b5563; font-style: italic; text-align: center; margin-bottom: 12px; font-family: Arial, sans-serif;">
+                  Behavioral & Professional Audit for Preceding Academic Period (${ethicsAcademicYear})
+                </div>
+
+                <table style="width: 100%; border-collapse: collapse; font-size: 10px; font-family: Arial, sans-serif; margin-bottom: 12px;">
+                  <thead>
+                    <tr style="background-color: #f3f4f6; color: #024227;">
+                      <th style="border: 1px solid #d1d5db; padding: 6px 8px; text-align: left; width: 50%; font-weight: bold;">
+                        Positive Ethics & Commendable Behaviors Observed (${selectedPositiveEthics.length})
+                      </th>
+                      <th style="border: 1px solid #d1d5db; padding: 6px 8px; text-align: left; width: 50%; font-weight: bold;">
+                        Infractions & Areas of Improvement (${selectedNegativeEthics.length})
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td style="border: 1px solid #d1d5db; padding: 8px; vertical-align: top; color: #065f46; line-height: 1.4;">
+                        ${selectedPositiveEthics.length > 0 
+                          ? `<ul style="margin: 0; padding-left: 14px;">${selectedPositiveEthics.map(item => `<li style="margin-bottom: 3px;"><strong>✓</strong> ${item}</li>`).join('')}</ul>`
+                          : '<span style="color: #6b7280; font-style: italic;">No specific positive ethics highlighted.</span>'
+                        }
+                      </td>
+                      <td style="border: 1px solid #d1d5db; padding: 8px; vertical-align: top; color: #991b1b; line-height: 1.4;">
+                        ${selectedNegativeEthics.length > 0 
+                          ? `<ul style="margin: 0; padding-left: 14px;">${selectedNegativeEthics.map(item => `<li style="margin-bottom: 3px;"><strong>⚠</strong> ${item}</li>`).join('')}</ul>`
+                          : '<div style="color: #059669; font-weight: bold;">✓ Clean Ethics Record (Zero demerits or queries recorded)</div>'
+                        }
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+
+                <div style="background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 4px; padding: 10px 12px; font-family: Arial, sans-serif; line-height: 1.5;">
+                  <div style="display: flex; justify-content: space-between; font-size: 10px; margin-bottom: 4px;">
+                    <span><strong>Conduct Score & Rating:</strong></span>
+                    <span style="font-weight: bold; color: #024227;">
+                      ${getEthicsScoreDetails(selectedPositiveEthics, selectedNegativeEthics).score}% 
+                      (${getEthicsScoreDetails(selectedPositiveEthics, selectedNegativeEthics).rating})
+                    </span>
+                  </div>
+
+                  <div style="display: flex; justify-content: space-between; font-size: 10px; margin-bottom: 4px;">
+                    <span><strong>Salary Increment Qualification Status:</strong></span>
+                    <span style="font-weight: bold; color: ${ethicsQualificationStatus.includes('Qualified') ? '#065f46' : '#b91c1c'}; text-transform: uppercase;">
+                      ${ethicsQualificationStatus}
+                    </span>
+                  </div>
+
+                  <div style="display: flex; justify-content: space-between; font-size: 10px; margin-bottom: 4px;">
+                    <span><strong>Administrator Selected Increment Rate:</strong></span>
+                    <span style="font-weight: bold; color: #024227;">
+                      ${ethicsIncrementPercentage >= 0 ? `+${ethicsIncrementPercentage}%` : `${ethicsIncrementPercentage}%`}
+                    </span>
+                  </div>
+
+                  <div style="border-top: 1px dashed #cbd5e1; padding-top: 6px; margin-top: 6px; font-size: 10px;">
+                    <strong>Remuneration Adjustment Breakdown:</strong> Previous Base: <strong>GHC ${ethicsPreviousSalary.toFixed(2)}</strong> &nbsp;➔&nbsp; Approved Increase (${ethicsIncrementPercentage >= 0 ? '+' : ''}${ethicsIncrementPercentage}%): <strong style="color: #059669;">${ethicsIncrementPercentage >= 0 ? '+GHC' : '-GHC'} ${Math.abs(ethicsPreviousSalary * ethicsIncrementPercentage / 100).toFixed(2)}</strong> &nbsp;➔&nbsp; Final Monthly Stipend: <strong style="color: #024227; font-size: 11px;">GHC ${parseFloat(appSalary || '0').toFixed(2)}</strong>
+                  </div>
+
+                  ${ethicsEvaluationNotes ? `<div style="margin-top: 6px; font-size: 9px; color: #475569; font-style: italic;"><strong>Administrator Remarks:</strong> ${ethicsEvaluationNotes}</div>` : ''}
+                </div>
+              </div>
+            ` : ''}
           </body>
         </html>
       `;
@@ -1765,7 +1979,12 @@ export const AdminPanel: React.FC = React.memo(() => {
           matchesStatus = st.paymentType === 'Daily';
         }
 
-        return matchesNameOrRoll || matchesClass || matchesStatus;
+        // Pickup Security Code match
+        const pCode = getStudentPickupCode(st).code;
+        const matchesPickupCode = pCode.toLowerCase().includes(query) ||
+          pCode.replace(/[-_ ]/g, '').toLowerCase().includes(normalizedQuery);
+
+        return matchesNameOrRoll || matchesClass || matchesStatus || matchesPickupCode;
       });
     }
     return list;
@@ -3162,6 +3381,7 @@ export const AdminPanel: React.FC = React.memo(() => {
         <div className="flex flex-wrap gap-2 p-1.5 bg-neutral-950 border-2 border-neutral-850 w-full md:w-auto">
           <button
             onClick={() => setActiveTab('students')}
+            title="Pupil Registry: Enroll new pupils, search records, edit contact details, and upload photos"
             className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all ${
               activeTab === 'students'
                 ? 'bg-amber-400 text-black'
@@ -3172,6 +3392,7 @@ export const AdminPanel: React.FC = React.memo(() => {
           </button>
           <button
             onClick={() => setActiveTab('mfa')}
+            title="Staff Registry & Security: Manage teacher accounts, roles, access permissions, and passcodes"
             className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all ${
               activeTab === 'mfa'
                 ? 'bg-amber-400 text-black'
@@ -3182,6 +3403,7 @@ export const AdminPanel: React.FC = React.memo(() => {
           </button>
           <button
             onClick={() => setActiveTab('gates')}
+            title="Gate Assignments: Assign teachers to oversee specific gate entry checkpoints"
             className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
               activeTab === 'gates'
                 ? 'bg-amber-400 text-black'
@@ -3194,6 +3416,7 @@ export const AdminPanel: React.FC = React.memo(() => {
 
           <button
             onClick={() => setActiveTab('expenditures')}
+            title="Expenditures: Track daily operational expenses, utility disbursements, and salaries"
             className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
               activeTab === 'expenditures'
                 ? 'bg-amber-400 text-black'
@@ -3205,6 +3428,7 @@ export const AdminPanel: React.FC = React.memo(() => {
           </button>
           <button
             onClick={() => setActiveTab('ledger')}
+            title="General Ledger: Audit double-entry bookkeeping journal entries and balance sheets"
             className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
               activeTab === 'ledger'
                 ? 'bg-amber-400 text-black'
@@ -3216,6 +3440,7 @@ export const AdminPanel: React.FC = React.memo(() => {
           </button>
           <button
             onClick={() => setActiveTab('performance')}
+            title="Performance: Evaluate staff key performance indicators, reviews, and ratings"
             className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
               activeTab === 'performance'
                 ? 'bg-amber-400 text-black'
@@ -3228,6 +3453,7 @@ export const AdminPanel: React.FC = React.memo(() => {
 
           <button
             onClick={() => setActiveTab('whatsapp')}
+            title="WhatsApp Logs: Monitor automated WhatsApp payment receipts and parent messaging history"
             className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
               activeTab === 'whatsapp'
                 ? 'bg-amber-400 text-black'
@@ -3240,6 +3466,7 @@ export const AdminPanel: React.FC = React.memo(() => {
           <button
             id="admin-tab-idcards-btn"
             onClick={() => setActiveTab('idcards')}
+            title="Generate ID Cards: Batch generate and print barcode pupil ID cards and gate passes"
             className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
               activeTab === 'idcards'
                 ? 'bg-amber-400 text-black'
@@ -3252,6 +3479,7 @@ export const AdminPanel: React.FC = React.memo(() => {
           <button
             id="admin-tab-aiassistant-btn"
             onClick={() => setActiveTab('ai_assistant')}
+            title="AI Assistant: Query AI helper for school insights, financial analytics, and pupil summaries"
             className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
               activeTab === 'ai_assistant'
                 ? 'bg-amber-400 text-black'
@@ -3265,6 +3493,7 @@ export const AdminPanel: React.FC = React.memo(() => {
           <button
             id="admin-tab-database-btn"
             onClick={() => setActiveTab('database')}
+            title="Database Connect: Manage Firebase cloud database synchronization, seeding, and health"
             className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
               activeTab === 'database'
                 ? 'bg-amber-400 text-black'
@@ -3276,7 +3505,22 @@ export const AdminPanel: React.FC = React.memo(() => {
           </button>
 
           <button
+            id="admin-tab-audit-btn"
+            onClick={() => setActiveTab('audit')}
+            title="Audit Logs: Real-time administrative log tracking database syncs, deletions, and operational events"
+            className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
+              activeTab === 'audit'
+                ? 'bg-amber-400 text-black'
+                : 'text-neutral-500 hover:text-white'
+            }`}
+          >
+            <FileText size={13} />
+            Audit Logs
+          </button>
+
+          <button
             onClick={() => setActiveTab('settings')}
+            title="System Settings: Configure term dates, school name, currency formats, and fee parameters"
             className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
               activeTab === 'settings'
                 ? 'bg-amber-400 text-black'
@@ -4176,9 +4420,10 @@ export const AdminPanel: React.FC = React.memo(() => {
                               updateStudent({
                                 ...studentInHand,
                                 class: mapEntry.nextClass,
-                                category: mapEntry.category
+                                category: mapEntry.category,
+                                active: false
                               });
-                              showToast(`Successfully promoted ${studentInHand.name} to ${mapEntry.nextClass}.`);
+                              showToast(`Successfully promoted ${studentInHand.name} to ${mapEntry.nextClass}. Set to INACTIVE pending return from vacation.`);
                             }
                             setInLinePromoStudentId('');
                           }}
@@ -4336,6 +4581,16 @@ export const AdminPanel: React.FC = React.memo(() => {
                     <QrCode size={11} className="stroke-[3]" />
                     <span>Print QR Badges</span>
                   </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowPickupPassesModal(true)}
+                    className="mt-1 px-3 py-1 text-[9px] font-mono font-black uppercase tracking-widest cursor-pointer transition-all flex items-center gap-1.5 border-2 border-emerald-500 bg-emerald-500/10 hover:bg-emerald-400 hover:text-black hover:border-emerald-400 text-emerald-400 shadow-[2px_2px_0px_0px_rgba(16,185,129,0.15)]"
+                    title="View and print active weekly pickup security passes for pupil dismissal"
+                  >
+                    <KeyRound size={11} className="stroke-[3]" />
+                    <span>Weekly Pickup Passes</span>
+                  </button>
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-4 shrink-0">
@@ -4446,6 +4701,67 @@ export const AdminPanel: React.FC = React.memo(() => {
                 </button>
               )}
             </div>
+
+            {/* Mass Vacation Return Activation Bar (Shows when filter is 'inactive' or when inactive pupils exist) */}
+            {studentFilter === 'inactive' && (
+              <div className="p-4 bg-emerald-950/20 border-b-2 border-emerald-500/40 space-y-3 font-mono">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-start gap-2.5">
+                    <Sparkles size={18} className="text-emerald-400 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="text-xs font-black text-emerald-400 uppercase tracking-wider block">
+                        ⚡ VACATION RETURN &amp; RE-ENROLLMENT ACTIVATION TOOL
+                      </span>
+                      <span className="text-[10px] text-neutral-300 font-semibold block">
+                        Promoted pupils stay inactive after vacation until activated. Click below to activate as pupils report back!
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const inactiveStudents = students.filter(s => !s.active);
+                      if (inactiveStudents.length === 0) {
+                        showToast("No inactive pupils found to activate.");
+                        return;
+                      }
+                      if (confirm(`Are you sure you want to activate ALL ${inactiveStudents.length} inactive pupils school-wide?`)) {
+                        inactiveStudents.forEach(st => updateStudent({ ...st, active: true }));
+                        showToast(`⚡ Successfully activated ALL ${inactiveStudents.length} inactive pupils school-wide!`);
+                      }
+                    }}
+                    className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-black font-black text-xs uppercase tracking-wider transition-all cursor-pointer shadow-sm flex items-center justify-center gap-1.5 shrink-0 border-none"
+                  >
+                    <span>⚡ Activate All Inactive ({students.filter(s => !s.active).length})</span>
+                  </button>
+                </div>
+
+                {/* Class-by-Class Activation Quick Buttons */}
+                <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-neutral-800">
+                  <span className="text-[9px] text-neutral-400 uppercase font-black mr-1">Activate By Class:</span>
+                  {(['Nursery', 'KG1', 'KG2', 'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9'] as StudentClass[]).map(cls => {
+                    const count = students.filter(s => s.class === cls && !s.active).length;
+                    if (count === 0) return null;
+                    return (
+                      <button
+                        key={cls}
+                        type="button"
+                        onClick={() => {
+                          const inClass = students.filter(s => s.class === cls && !s.active);
+                          inClass.forEach(st => updateStudent({ ...st, active: true }));
+                          showToast(`⚡ Activated all ${inClass.length} inactive pupil(s) in ${cls}!`);
+                        }}
+                        className="px-2.5 py-1 bg-neutral-900 hover:bg-emerald-950 border border-emerald-800 text-[9px] text-emerald-400 uppercase font-bold transition-all cursor-pointer flex items-center gap-1"
+                        title={`Activate all ${count} inactive pupils in ${cls}`}
+                      >
+                        <span>{cls} ({count})</span>
+                        <span className="text-emerald-400 font-extrabold">⚡</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             <div className={`overflow-y-auto max-h-[480px] ${studentViewStyle === 'list' ? 'divide-y-2 divide-neutral-850' : 'p-6 bg-neutral-950/20'}`}>
               {filteredStudentsForList.length === 0 ? (
@@ -5232,8 +5548,8 @@ export const AdminPanel: React.FC = React.memo(() => {
                         <span className="text-xs font-black uppercase tracking-widest text-amber-400 font-mono">💵 Financial & Momo Payout Profile</span>
                       </div>
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        <div>
-                          <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                        <div className="space-y-1.5">
+                          <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest font-mono">
                             Monthly Stipend/Salary (GHC)
                           </label>
                           <input
@@ -5242,8 +5558,46 @@ export const AdminPanel: React.FC = React.memo(() => {
                             value={editStaffObj.stipendSalary || ''}
                             onChange={(e) => setEditStaffObj({ ...editStaffObj, stipendSalary: e.target.value })}
                             placeholder="e.g. 1500.00"
-                            className="w-full bg-neutral-900 border-2 border-neutral-800 py-2.5 px-3.5 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600"
+                            className="w-full bg-neutral-900 border-2 border-neutral-800 py-2 px-3 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600"
                           />
+
+                          {/* Percentage Quick Adjust Shortcuts */}
+                          <div className="space-y-1 pt-1">
+                            <span className="text-[9px] font-mono text-amber-400 uppercase font-bold block">
+                              ⚡ Quick % Wage Adjust:
+                            </span>
+                            <div className="flex flex-wrap items-center gap-1">
+                              {[5, 10, 15, 20].map((pct) => (
+                                <button
+                                  key={pct}
+                                  type="button"
+                                  onClick={() => {
+                                    const current = parseFloat(editStaffObj.stipendSalary) || 0;
+                                    const nextVal = (current * (1 + pct / 100)).toFixed(2);
+                                    setEditStaffObj({ ...editStaffObj, stipendSalary: nextVal });
+                                    playFeedbackSound('click');
+                                  }}
+                                  className="px-2 py-0.5 bg-neutral-900 hover:bg-emerald-950 border border-neutral-700 hover:border-emerald-500 text-[9px] font-mono font-bold text-emerald-400 rounded transition-colors cursor-pointer"
+                                  title={`Increase salary by +${pct}%`}
+                                >
+                                  +{pct}%
+                                </button>
+                              ))}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const current = parseFloat(editStaffObj.stipendSalary) || 0;
+                                  const nextVal = (current * 0.95).toFixed(2);
+                                  setEditStaffObj({ ...editStaffObj, stipendSalary: nextVal });
+                                  playFeedbackSound('click');
+                                }}
+                                className="px-2 py-0.5 bg-neutral-900 hover:bg-rose-950 border border-neutral-700 hover:border-rose-500 text-[9px] font-mono font-bold text-rose-400 rounded transition-colors cursor-pointer"
+                                title="Reduce salary by -5%"
+                              >
+                                -5%
+                              </button>
+                            </div>
+                          </div>
                         </div>
                         <div>
                           <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
@@ -5372,10 +5726,23 @@ export const AdminPanel: React.FC = React.memo(() => {
                     </div>
 
                     {!!editStaffObj.passwordEnabled && (
-                      <div className="mt-1 pl-7">
-                        <label className="block text-[9px] font-black text-neutral-400 uppercase tracking-widest mb-1 font-mono">
-                          Set Account Password
-                        </label>
+                      <div className="mt-1 pl-7 space-y-1.5">
+                        <div className="flex justify-between items-center">
+                          <label className="block text-[9px] font-black text-neutral-400 uppercase tracking-widest font-mono">
+                            Set Account Password
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const gen = generateRandomPassword(8);
+                              setEditStaffObj({ ...editStaffObj, password: gen });
+                            }}
+                            className="text-[9px] font-black text-amber-400 hover:text-amber-300 uppercase tracking-wider flex items-center gap-1 bg-amber-950/60 border border-amber-800/80 px-2 py-0.5 cursor-pointer transition-colors"
+                          >
+                            <Sparkles size={10} />
+                            <span>Generate Password</span>
+                          </button>
+                        </div>
                         <input
                           type="text"
                           required={!!editStaffObj.passwordEnabled}
@@ -5677,10 +6044,23 @@ export const AdminPanel: React.FC = React.memo(() => {
                     </div>
 
                     {adminRegPasswordEnabled && (
-                      <div className="mt-1 pl-7">
-                        <label className="block text-[9px] font-black text-neutral-450 uppercase tracking-widest mb-1 font-mono">
-                          Set Account Password
-                        </label>
+                      <div className="mt-1 pl-7 space-y-1.5">
+                        <div className="flex justify-between items-center">
+                          <label className="block text-[9px] font-black text-neutral-400 uppercase tracking-widest font-mono">
+                            Set Account Password
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const gen = generateRandomPassword(8);
+                              setAdminRegPassword(gen);
+                            }}
+                            className="text-[9px] font-black text-amber-400 hover:text-amber-300 uppercase tracking-wider flex items-center gap-1 bg-amber-950/60 border border-amber-800/80 px-2 py-0.5 cursor-pointer transition-colors"
+                          >
+                            <Sparkles size={10} />
+                            <span>Generate Password</span>
+                          </button>
+                        </div>
                         <input
                           type="text"
                           required={adminRegPasswordEnabled}
@@ -5706,13 +6086,29 @@ export const AdminPanel: React.FC = React.memo(() => {
 
           {/* Staff Registry & Security on Right (col-span-2) */}
           <div className="bg-neutral-900 border-4 border-neutral-800 p-8 space-y-6 col-span-1 lg:col-span-2 h-fit">
-            <div className="space-y-2 pb-3 border-b-2 border-neutral-800">
-              <h3 className="text-xl font-black uppercase italic text-white tracking-tight flex items-center gap-3">
-                <ShieldAlert size={20} className="text-amber-400" /> Staff Directory, Accounts & Security
-              </h3>
-              <p className="text-xs text-neutral-400 font-bold leading-relaxed">
-                Configure staff user credentials, activate/deactivate portal access, and enforce multi-factor authentication locks.
-              </p>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b-2 border-neutral-800">
+              <div className="space-y-1">
+                <h3 className="text-xl font-black uppercase italic text-white tracking-tight flex items-center gap-3">
+                  <ShieldAlert size={20} className="text-amber-400" /> Staff Directory, Accounts & Security
+                </h3>
+                <p className="text-xs text-neutral-400 font-bold leading-relaxed">
+                  Configure staff user credentials, adjust wage rates/promotions (%), and enforce security locks.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedStaffIdsForAdjust(users.map(u => u.id));
+                  setSalaryAdjustSuccessMsg(null);
+                  setShowSalaryAdjustModal(true);
+                }}
+                className="px-3.5 py-2 bg-amber-500 hover:bg-amber-400 text-black text-[11px] font-mono font-black uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer rounded-sm shadow transition-colors shrink-0"
+                title="Adjust worker & teacher salaries by percentage for increments, promotions, or inflation adjustments"
+              >
+                <Percent size={15} className="stroke-[2.5]" />
+                <span>Adjust Wages (%) / Promotions</span>
+              </button>
             </div>
 
             <div className="divide-y-2 divide-neutral-850 border-2 border-neutral-80 w-full overflow-hidden bg-neutral-950">
@@ -5750,9 +6146,9 @@ export const AdminPanel: React.FC = React.memo(() => {
                         </div>
                       )}
 
-                      {u.passwordEnabled && u.password && (
+                      {u.passwordEnabled && (
                         <div className="mt-1.5 flex flex-col sm:flex-row sm:items-center gap-2 p-3 bg-neutral-900 border border-neutral-800 text-[10px] text-neutral-300 font-mono tracking-wider w-full sm:w-auto">
-                          <span>SECURE PASSWORD KEY: <strong className="font-extrabold text-amber-400 select-all font-mono">{u.password}</strong></span>
+                          <span>AUTH ENGINE: <strong className="font-extrabold text-amber-400 font-mono">FIREBASE AUTHENTICATION (Email / Password)</strong></span>
                         </div>
                       )}
 
@@ -6030,6 +6426,8 @@ export const AdminPanel: React.FC = React.memo(() => {
         <LedgerTab />
       ) : activeTab === 'ai_assistant' ? (
         <AiAssistantTab />
+      ) : activeTab === 'audit' ? (
+        <AuditTrailTab />
       ) : (
         <ExpendituresTab />
       )}
@@ -8229,7 +8627,7 @@ export const AdminPanel: React.FC = React.memo(() => {
               <>
                 <div className="space-y-4 font-sans text-xs">
                   <p className="text-neutral-300 leading-relaxed font-semibold">
-                    This utility will promote all currently active pupils school-wide to the next academic level in bulk. Pupils in final year <strong className="text-amber-400 font-mono">B9 (JHS 3)</strong> will be marked completed/graduated and set to inactive.
+                    This utility will promote all currently active pupils school-wide to the next academic level in bulk. Promoted pupils are set to <strong className="text-amber-400 font-mono">INACTIVE</strong> (Pending Vacation Return) so you can track real enrollment as pupils report back. Activate them individually or in bulk as they re-enroll!
                   </p>
 
                   <div className="bg-neutral-950 border border-neutral-850 p-4 space-y-3">
@@ -8722,9 +9120,10 @@ export const AdminPanel: React.FC = React.memo(() => {
                                   updateStudent({
                                     ...studentInHand,
                                     class: mapEntry.nextClass,
-                                    category: mapEntry.category
+                                    category: mapEntry.category,
+                                    active: false
                                   });
-                                  showToast(`Successfully promoted ${studentInHand.name} to ${mapEntry.nextClass} (${mapEntry.category}).`);
+                                  showToast(`Successfully promoted ${studentInHand.name} to ${mapEntry.nextClass}. Set to INACTIVE pending return from vacation.`);
                                 }
                                 setSelectedPromoStudentId('');
                               }}
@@ -8813,6 +9212,366 @@ export const AdminPanel: React.FC = React.memo(() => {
                 </div>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Percentage Wage & Promotion Salary Adjuster Modal */}
+      {showSalaryAdjustModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-fade-in animate-duration-200 overflow-y-auto">
+          <div className="bg-neutral-950 border-4 border-amber-500 max-w-5xl w-full p-6 space-y-6 shadow-[10px_10px_0px_0px_rgba(245,158,11,0.25)] relative my-8">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b-2 border-neutral-850 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-amber-500/10 border border-amber-500/30 rounded">
+                  <Percent className="text-amber-400" size={24} />
+                </div>
+                <div>
+                  <h3 className="text-base font-black uppercase tracking-wider text-amber-400 font-mono flex items-center gap-2">
+                    <span>Percentage Wage & Promotion Salary Adjuster</span>
+                    <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/40 px-2 py-0.5 rounded font-mono font-bold">
+                      AUTOMATED % ENGINE
+                    </span>
+                  </h3>
+                  <p className="text-xs text-neutral-400 font-sans mt-0.5">
+                    Adjust staff & teacher salaries by percentage for promotions, annual wage increases, or inflation indexation.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSalaryAdjustModal(false)}
+                className="p-1.5 text-neutral-400 hover:text-white border border-neutral-800 hover:border-neutral-600 transition-colors cursor-pointer rounded"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Success Toast Banner */}
+            {salaryAdjustSuccessMsg && (
+              <div className="p-4 bg-emerald-950/80 border-2 border-emerald-500/50 rounded flex items-center justify-between text-xs font-mono font-bold text-emerald-300 animate-fade-in">
+                <div className="flex items-center gap-2">
+                  <Check size={18} className="text-emerald-400 shrink-0" />
+                  <span>{salaryAdjustSuccessMsg}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSalaryAdjustSuccessMsg(null)}
+                  className="text-emerald-400 hover:text-white text-xs underline"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+
+            {/* Controls Bar */}
+            <div className="bg-neutral-900 border-2 border-neutral-800 p-5 rounded-sm space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+                
+                {/* Mode Selector */}
+                <div className="md:col-span-3 space-y-1.5">
+                  <label className="block text-[10px] font-black text-amber-400 uppercase tracking-widest font-mono">
+                    Adjustment Direction
+                  </label>
+                  <div className="grid grid-cols-2 gap-1.5 bg-neutral-950 p-1 border border-neutral-800 rounded">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAdjustMode('increase');
+                        playFeedbackSound('click');
+                      }}
+                      className={`py-1.5 px-2 text-[10px] font-mono font-black uppercase rounded transition-colors cursor-pointer flex items-center justify-center gap-1 ${
+                        adjustMode === 'increase'
+                          ? 'bg-emerald-500 text-black shadow'
+                          : 'text-neutral-400 hover:text-white'
+                      }`}
+                    >
+                      <TrendingUp size={12} />
+                      <span>Increment (+)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAdjustMode('decrease');
+                        playFeedbackSound('click');
+                      }}
+                      className={`py-1.5 px-2 text-[10px] font-mono font-black uppercase rounded transition-colors cursor-pointer flex items-center justify-center gap-1 ${
+                        adjustMode === 'decrease'
+                          ? 'bg-rose-500 text-white shadow'
+                          : 'text-neutral-400 hover:text-white'
+                      }`}
+                    >
+                      <X size={12} />
+                      <span>Reduction (-)</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Percentage Shortcuts & Input */}
+                <div className="md:col-span-5 space-y-1.5">
+                  <label className="block text-[10px] font-black text-amber-400 uppercase tracking-widest font-mono flex items-center justify-between">
+                    <span>Percentage Rate (%)</span>
+                    <span className="text-neutral-400 font-normal">Presets or Custom Rate</span>
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1">
+                      {[5, 10, 15, 20].map((preset) => (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => {
+                            setAdjustPercentage(preset);
+                            playFeedbackSound('click');
+                          }}
+                          className={`px-2.5 py-2 text-[10px] font-mono font-black rounded border transition-colors cursor-pointer ${
+                            adjustPercentage === preset
+                              ? 'bg-amber-500 text-black border-amber-400'
+                              : 'bg-neutral-950 text-neutral-300 border-neutral-800 hover:border-neutral-600'
+                          }`}
+                        >
+                          {preset}%
+                        </button>
+                      ))}
+                    </div>
+                    <div className="relative flex-1">
+                      <input
+                        type="number"
+                        min="0.1"
+                        step="0.1"
+                        max="200"
+                        value={adjustPercentage}
+                        onChange={(e) => setAdjustPercentage(Math.max(0, parseFloat(e.target.value) || 0))}
+                        className="w-full bg-neutral-950 border border-neutral-800 py-1.5 px-3 pr-7 text-xs font-mono font-bold text-amber-400 focus:outline-none focus:border-amber-400 text-right rounded"
+                      />
+                      <span className="absolute right-2.5 top-2 text-xs font-mono text-neutral-500 font-bold">%</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Role / Group Filter */}
+                <div className="md:col-span-4 space-y-1.5">
+                  <label className="block text-[10px] font-black text-amber-400 uppercase tracking-widest font-mono">
+                    Filter Staff Group / Role
+                  </label>
+                  <select
+                    value={adjustTargetRole}
+                    onChange={(e) => {
+                      const role = e.target.value;
+                      setAdjustTargetRole(role);
+                      if (role === 'All') {
+                        setSelectedStaffIdsForAdjust(users.map(u => u.id));
+                      } else {
+                        setSelectedStaffIdsForAdjust(users.filter(u => u.role === role).map(u => u.id));
+                      }
+                    }}
+                    className="w-full bg-neutral-950 border border-neutral-800 py-2 px-3 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 rounded"
+                  >
+                    <option value="All">All Staff Members ({users.length})</option>
+                    <option value="Teacher">Classroom Teachers ({users.filter(u => u.role === 'Teacher').length})</option>
+                    <option value="Administrator">Administrators ({users.filter(u => u.role === 'Administrator').length})</option>
+                    <option value="Accountant">Accountants ({users.filter(u => u.role === 'Accountant').length})</option>
+                    <option value="Driver">Drivers & Transport ({users.filter(u => u.role === 'Driver').length})</option>
+                    <option value="Kitchen Staff">Kitchen & Catering ({users.filter(u => u.role === 'Kitchen Staff').length})</option>
+                    <option value="Security">Security & Gate Keepers ({users.filter(u => u.role === 'Security').length})</option>
+                  </select>
+                </div>
+
+              </div>
+
+              {/* Reason / Note Input */}
+              <div className="space-y-1">
+                <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest font-mono">
+                  Adjustment Purpose / Promotion Note
+                </label>
+                <input
+                  type="text"
+                  value={adjustReason}
+                  onChange={(e) => setAdjustReason(e.target.value)}
+                  placeholder="e.g. Promotion to Senior Educator, Annual School Wage Increase 2026..."
+                  className="w-full bg-neutral-950 border border-neutral-800 py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-amber-400 rounded"
+                />
+              </div>
+            </div>
+
+            {/* Filter Search & Select All Bar */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-neutral-900/60 p-3 border border-neutral-800 rounded">
+              <div className="relative w-full sm:w-72">
+                <Search size={14} className="absolute left-3 top-2.5 text-neutral-500" />
+                <input
+                  type="text"
+                  placeholder="Search staff by name or email..."
+                  value={salaryAdjustSearch}
+                  onChange={(e) => setSalaryAdjustSearch(e.target.value)}
+                  className="w-full bg-neutral-950 border border-neutral-800 py-1.5 pl-9 pr-3 text-xs font-mono text-white focus:outline-none focus:border-amber-400 rounded"
+                />
+              </div>
+
+              <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
+                <button
+                  type="button"
+                  onClick={() => setSelectedStaffIdsForAdjust(users.map(u => u.id))}
+                  className="text-[10px] font-mono text-amber-400 hover:text-amber-300 uppercase font-bold cursor-pointer"
+                >
+                  Select All ({users.length})
+                </button>
+                <span className="text-neutral-700">|</span>
+                <button
+                  type="button"
+                  onClick={() => setSelectedStaffIdsForAdjust([])}
+                  className="text-[10px] font-mono text-neutral-400 hover:text-white uppercase font-bold cursor-pointer"
+                >
+                  Clear Selection
+                </button>
+              </div>
+            </div>
+
+            {/* Preview Staff List Table */}
+            <div className="border border-neutral-800 rounded overflow-hidden max-h-80 overflow-y-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead className="bg-neutral-900 border-b border-neutral-800 sticky top-0 z-10 font-mono text-[10px] text-neutral-400 uppercase tracking-wider">
+                  <tr>
+                    <th className="p-3 text-center w-12">Apply</th>
+                    <th className="p-3">Staff Member</th>
+                    <th className="p-3">Role</th>
+                    <th className="p-3 text-right">Current Wage</th>
+                    <th className="p-3 text-center">Adjust (%)</th>
+                    <th className="p-3 text-right">Difference</th>
+                    <th className="p-3 text-right">New Proposed Salary</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-neutral-850 bg-neutral-950 font-mono">
+                  {users
+                    .filter(u => 
+                      (adjustTargetRole === 'All' || u.role === adjustTargetRole) &&
+                      (u.name.toLowerCase().includes(salaryAdjustSearch.toLowerCase()) || u.email.toLowerCase().includes(salaryAdjustSearch.toLowerCase()))
+                    )
+                    .map((staff) => {
+                      const isSelected = selectedStaffIdsForAdjust.includes(staff.id);
+                      const currentWage = staff.stipendSalary || 0;
+                      const multiplier = adjustMode === 'increase' ? (1 + adjustPercentage / 100) : (1 - adjustPercentage / 100);
+                      const proposedWage = Math.max(0, Math.round((currentWage * multiplier) * 100) / 100);
+                      const diff = proposedWage - currentWage;
+
+                      return (
+                        <tr 
+                          key={staff.id}
+                          className={`transition-colors ${
+                            isSelected ? 'bg-amber-500/5 hover:bg-amber-500/10' : 'opacity-40 hover:opacity-70'
+                          }`}
+                        >
+                          <td className="p-3 text-center">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedStaffIdsForAdjust(prev => [...prev, staff.id]);
+                                } else {
+                                  setSelectedStaffIdsForAdjust(prev => prev.filter(id => id !== staff.id));
+                                }
+                              }}
+                              className="w-4 h-4 accent-amber-500 cursor-pointer"
+                            />
+                          </td>
+                          <td className="p-3 font-sans">
+                            <div className="font-bold text-white text-xs">{staff.name}</div>
+                            <div className="text-[10px] text-neutral-500 font-mono">{staff.email}</div>
+                          </td>
+                          <td className="p-3 text-neutral-300">
+                            <span className="px-2 py-0.5 bg-neutral-900 border border-neutral-800 text-[10px] font-bold text-amber-400 rounded">
+                              {staff.role}
+                            </span>
+                          </td>
+                          <td className="p-3 text-right font-bold text-neutral-300">
+                            GHC {currentWage.toFixed(2)}
+                          </td>
+                          <td className="p-3 text-center">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-black ${
+                              adjustMode === 'increase' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/40' : 'bg-rose-950 text-rose-400 border border-rose-800/40'
+                            }`}>
+                              {adjustMode === 'increase' ? '+' : '-'}{adjustPercentage}%
+                            </span>
+                          </td>
+                          <td className={`p-3 text-right font-bold ${diff >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            {diff >= 0 ? `+GHC ${diff.toFixed(2)}` : `-GHC ${Math.abs(diff).toFixed(2)}`}
+                          </td>
+                          <td className="p-3 text-right font-black text-amber-400 text-sm">
+                            GHC {proposedWage.toFixed(2)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Impact Summary & Confirm Button */}
+            {(() => {
+              const selectedUsers = users.filter(u => selectedStaffIdsForAdjust.includes(u.id));
+              const currentPayrollTotal = selectedUsers.reduce((sum, u) => sum + (u.stipendSalary || 0), 0);
+              const multiplier = adjustMode === 'increase' ? (1 + adjustPercentage / 100) : (1 - adjustPercentage / 100);
+              const proposedPayrollTotal = selectedUsers.reduce((sum, u) => sum + Math.max(0, Math.round(((u.stipendSalary || 0) * multiplier) * 100) / 100), 0);
+              const netDifference = proposedPayrollTotal - currentPayrollTotal;
+
+              return (
+                <div className="bg-neutral-900 border-2 border-neutral-800 p-4 rounded flex flex-col sm:flex-row items-center justify-between gap-4">
+                  <div className="space-y-1 text-xs font-mono">
+                    <div className="flex items-center gap-3">
+                      <span className="text-neutral-400">Target Staff Count: <strong className="text-white">{selectedUsers.length}</strong></span>
+                      <span className="text-neutral-700">|</span>
+                      <span className="text-neutral-400">Current Payroll: <strong className="text-white">GHC {currentPayrollTotal.toFixed(2)}</strong></span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-neutral-400">New Proposed Payroll: <strong className="text-amber-400 font-black">GHC {proposedPayrollTotal.toFixed(2)}</strong></span>
+                      <span className="text-neutral-700">|</span>
+                      <span className="text-neutral-400">Net Shift: <strong className={netDifference >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                        {netDifference >= 0 ? `+GHC ${netDifference.toFixed(2)}` : `-GHC ${Math.abs(netDifference).toFixed(2)}`}
+                      </strong></span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3 w-full sm:w-auto">
+                    <button
+                      type="button"
+                      onClick={() => setShowSalaryAdjustModal(false)}
+                      className="px-4 py-2.5 bg-neutral-950 hover:bg-neutral-850 text-neutral-300 text-xs font-mono font-bold uppercase border border-neutral-800 rounded transition-colors cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={selectedUsers.length === 0}
+                      onClick={() => {
+                        const adjustments = selectedUsers.map(u => {
+                          const currentWage = u.stipendSalary || 0;
+                          const calculated = Math.max(0, Math.round((currentWage * multiplier) * 100) / 100);
+                          return {
+                            userId: u.id,
+                            percentage: adjustMode === 'increase' ? adjustPercentage : -adjustPercentage,
+                            newSalary: calculated,
+                            reason: adjustReason
+                          };
+                        });
+
+                        const res = adjustStaffSalariesByPercentage(adjustments);
+                        if (res.success) {
+                          playFeedbackSound('success');
+                          setSalaryAdjustSuccessMsg(`Successfully adjusted wages by ${adjustMode === 'increase' ? '+' : '-'}${adjustPercentage}% for ${res.count} staff members!`);
+                          setTimeout(() => {
+                            setShowSalaryAdjustModal(false);
+                          }, 1800);
+                        }
+                      }}
+                      className="px-5 py-2.5 bg-amber-500 hover:bg-amber-400 disabled:opacity-40 text-black text-xs font-mono font-black uppercase tracking-wider flex items-center justify-center gap-2 rounded cursor-pointer transition-colors shadow"
+                    >
+                      <Check size={16} className="stroke-[3]" />
+                      <span>Apply % Adjustments ({selectedUsers.length})</span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
+
           </div>
         </div>
       )}
@@ -9281,6 +10040,220 @@ export const AdminPanel: React.FC = React.memo(() => {
                       />
                     </div>
                   </div>
+
+                  {/* Teacher Professional Ethics & Salary Promotion Evaluation Card */}
+                  <div className="bg-neutral-900/90 border border-amber-500/40 p-4 rounded space-y-4 shadow-xl">
+                    <div className="flex items-center justify-between border-b border-neutral-800 pb-2">
+                      <div className="flex items-center gap-2">
+                        <Award className="text-amber-400" size={16} />
+                        <span className="text-xs font-mono font-black text-amber-400 uppercase tracking-wider">
+                          Teacher Ethics & Salary Promotion Evaluation
+                        </span>
+                      </div>
+                      <span className="text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/40 px-2 py-0.5 rounded font-mono font-bold">
+                        ATTACHED TO RE-APPOINTMENT
+                      </span>
+                    </div>
+
+                    {/* Evaluation Period */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[10px] font-mono font-black text-neutral-400 uppercase block mb-1">Academic Year Evaluated</label>
+                        <input
+                          type="text"
+                          value={ethicsAcademicYear}
+                          onChange={(e) => setEthicsAcademicYear(e.target.value)}
+                          className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-500 text-white font-mono text-xs p-2 rounded focus:outline-none"
+                          placeholder="e.g. 2025/2026 Academic Year"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-mono font-black text-neutral-400 uppercase block mb-1">Qualification Decision</label>
+                        <select
+                          value={ethicsQualificationStatus}
+                          onChange={(e: any) => setEthicsQualificationStatus(e.target.value)}
+                          className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-500 text-amber-400 font-mono text-xs p-2 rounded focus:outline-none font-bold"
+                        >
+                          <option value="Qualified (Full Increment)">Qualified (Full Increment)</option>
+                          <option value="Qualified (Partial Increment)">Qualified (Partial Increment)</option>
+                          <option value="Withheld (Ethics Review)">Withheld (Ethics Review)</option>
+                          <option value="Maintained (No Change)">Maintained (No Change)</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Positive Ethics Checklist */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] font-mono font-black text-emerald-400 uppercase tracking-widest flex items-center gap-1">
+                          <CheckCircle size={12} /> Positive Professional Ethics ({selectedPositiveEthics.length})
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedPositiveEthics(selectedPositiveEthics.length === ALL_POSITIVE_ETHICS.length ? [] : [...ALL_POSITIVE_ETHICS])}
+                          className="text-[9px] font-mono text-emerald-400 hover:underline uppercase cursor-pointer"
+                        >
+                          {selectedPositiveEthics.length === ALL_POSITIVE_ETHICS.length ? 'Clear All' : 'Select All'}
+                        </button>
+                      </div>
+                      <div className="bg-neutral-950 p-2.5 border border-neutral-800 rounded space-y-1.5 max-h-36 overflow-y-auto">
+                        {ALL_POSITIVE_ETHICS.map((item) => {
+                          const isChecked = selectedPositiveEthics.includes(item);
+                          return (
+                            <label key={item} className="flex items-center gap-2 text-xs text-neutral-300 font-sans cursor-pointer hover:text-white select-none">
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setSelectedPositiveEthics(prev => [...prev, item]);
+                                  } else {
+                                    setSelectedPositiveEthics(prev => prev.filter(i => i !== item));
+                                  }
+                                }}
+                                className="accent-emerald-500 rounded cursor-pointer"
+                              />
+                              <span className={isChecked ? 'text-emerald-300 font-medium' : 'text-neutral-500'}>{item}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Negative Ethics / Infractions Checklist */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] font-mono font-black text-rose-400 uppercase tracking-widest flex items-center gap-1">
+                          <AlertTriangle size={12} /> Infractions & Demerits ({selectedNegativeEthics.length})
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedNegativeEthics([])}
+                          className="text-[9px] font-mono text-rose-400 hover:underline uppercase cursor-pointer"
+                        >
+                          Clean Record
+                        </button>
+                      </div>
+                      <div className="bg-neutral-950 p-2.5 border border-neutral-800 rounded space-y-1.5 max-h-32 overflow-y-auto">
+                        {ALL_NEGATIVE_ETHICS.map((item) => {
+                          const isChecked = selectedNegativeEthics.includes(item);
+                          return (
+                            <label key={item} className="flex items-center gap-2 text-xs text-neutral-300 font-sans cursor-pointer hover:text-white select-none">
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setSelectedNegativeEthics(prev => [...prev, item]);
+                                  } else {
+                                    setSelectedNegativeEthics(prev => prev.filter(i => i !== item));
+                                  }
+                                }}
+                                className="accent-rose-500 rounded cursor-pointer"
+                              />
+                              <span className={isChecked ? 'text-rose-300 font-semibold' : 'text-neutral-500'}>{item}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Percentage Selector & Remuneration Adjustment Calculator */}
+                    <div className="bg-neutral-950 p-3 border border-neutral-800 rounded space-y-3">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] font-mono font-black text-amber-400 uppercase tracking-widest flex items-center gap-1">
+                          <Percent size={12} /> Admin Selected Increment Rate (%)
+                        </label>
+                        <span className="text-[10px] font-mono font-bold text-neutral-400">
+                          Base: GHC {ethicsPreviousSalary.toFixed(2)}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        {[0, 5, 10, 15, 20].map((pct) => (
+                          <button
+                            key={pct}
+                            type="button"
+                            onClick={() => {
+                              setEthicsIncrementPercentage(pct);
+                              playFeedbackSound('click');
+                            }}
+                            className={`flex-1 py-1 text-xs font-mono font-black rounded border transition-colors cursor-pointer ${
+                              ethicsIncrementPercentage === pct
+                                ? 'bg-amber-500 text-black border-amber-400'
+                                : 'bg-neutral-900 text-neutral-300 border-neutral-800 hover:border-neutral-700'
+                            }`}
+                          >
+                            {pct > 0 ? `+${pct}%` : `${pct}%`}
+                          </button>
+                        ))}
+                        <div className="w-20">
+                          <input
+                            type="number"
+                            value={ethicsIncrementPercentage}
+                            onChange={(e) => setEthicsIncrementPercentage(parseFloat(e.target.value) || 0)}
+                            className="w-full bg-neutral-900 border border-neutral-800 text-right p-1 text-xs font-mono font-bold text-amber-400 rounded focus:outline-none focus:border-amber-400"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Live Shift Breakdown */}
+                      {(() => {
+                        const incrementVal = ethicsPreviousSalary * (ethicsIncrementPercentage / 100);
+                        const proposedNewVal = Math.max(0, Math.round((ethicsPreviousSalary + incrementVal) * 100) / 100);
+                        return (
+                          <div className="p-2.5 bg-neutral-900/80 border border-neutral-800 rounded flex flex-col sm:flex-row items-center justify-between gap-2">
+                            <div className="text-[10px] font-mono text-neutral-300 space-y-0.5">
+                              <div>
+                                Shift: <span className={ethicsIncrementPercentage >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                                  {ethicsIncrementPercentage >= 0 ? `+GHC ${incrementVal.toFixed(2)}` : `-GHC ${Math.abs(incrementVal).toFixed(2)}`}
+                                </span>
+                              </div>
+                              <div>
+                                New Proposed Base: <strong className="text-amber-400 text-xs font-bold">GHC {proposedNewVal.toFixed(2)}</strong>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setAppSalary(proposedNewVal.toFixed(2));
+                                playFeedbackSound('confirm');
+                                showToast(`Applied ${ethicsIncrementPercentage >= 0 ? '+' : ''}${ethicsIncrementPercentage}% (${proposedNewVal.toFixed(2)} GHC) to contract stipend!`);
+                              }}
+                              className="py-1.5 px-2.5 bg-amber-500 hover:bg-amber-400 text-black text-[10px] font-mono font-black uppercase tracking-wider rounded transition-colors cursor-pointer shrink-0"
+                            >
+                              Apply % to Stipend
+                            </button>
+                          </div>
+                        );
+                      })()}
+                    </div>
+
+                    {/* Evaluator Justification Notes */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-mono font-black text-neutral-400 uppercase block">
+                        Ethics Evaluation & Justification Remarks
+                      </label>
+                      <textarea
+                        rows={2}
+                        value={ethicsEvaluationNotes}
+                        onChange={(e) => setEthicsEvaluationNotes(e.target.value)}
+                        placeholder="Detailed observations regarding teacher punctuality, lesson plans, student care, and ethics justification..."
+                        className="w-full bg-neutral-950 border border-neutral-800 text-xs font-mono text-neutral-200 p-2 rounded focus:outline-none focus:border-amber-400"
+                      />
+                    </div>
+
+                    {/* Include Annexure Toggle */}
+                    <label className="flex items-center gap-2 text-xs font-mono font-bold text-amber-400 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={includeEthicsAnnexure}
+                        onChange={(e) => setIncludeEthicsAnnexure(e.target.checked)}
+                        className="accent-amber-500 w-4 h-4 cursor-pointer"
+                      />
+                      <span>Attach Ethics Annexure to Re-Appointment Notice</span>
+                    </label>
+                  </div>
                 </div>
 
                 {/* Print & Preview Renewal Notice (Right) */}
@@ -9373,6 +10346,94 @@ export const AdminPanel: React.FC = React.memo(() => {
                           <span className="text-neutral-500">Signature & Date</span>
                         </div>
                       </div>
+
+                      {includeEthicsAnnexure && (
+                        <div className="mt-8 pt-6 border-t-2 border-emerald-900/30 font-sans">
+                          <div className="text-center font-serif text-[11px] font-bold text-emerald-950 uppercase tracking-wider mb-1">
+                            ANNEXURE: TEACHER PROFESSIONAL ETHICS & SALARY PROMOTION EVALUATION
+                          </div>
+                          <p className="text-center text-[8px] text-neutral-500 italic mb-3">
+                            Behavioral & Professional Audit for Preceding Academic Period ({ethicsAcademicYear})
+                          </p>
+
+                          <div className="grid grid-cols-2 gap-3 text-[9px] mb-3">
+                            <div className="border border-emerald-200 bg-emerald-50/30 p-2 rounded">
+                              <span className="font-bold text-emerald-900 block border-b border-emerald-200 pb-1 mb-1">
+                                Positive Ethics & Behaviors ({selectedPositiveEthics.length})
+                              </span>
+                              {selectedPositiveEthics.length > 0 ? (
+                                <ul className="space-y-1 text-emerald-950">
+                                  {selectedPositiveEthics.map((item) => (
+                                    <li key={item} className="flex items-start gap-1">
+                                      <span className="text-emerald-600 font-bold">✓</span>
+                                      <span>{item}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <span className="text-neutral-400 italic">No specific positive items recorded.</span>
+                              )}
+                            </div>
+
+                            <div className="border border-rose-200 bg-rose-50/30 p-2 rounded">
+                              <span className="font-bold text-rose-900 block border-b border-rose-200 pb-1 mb-1">
+                                Infractions & Areas of Improvement ({selectedNegativeEthics.length})
+                              </span>
+                              {selectedNegativeEthics.length > 0 ? (
+                                <ul className="space-y-1 text-rose-950">
+                                  {selectedNegativeEthics.map((item) => (
+                                    <li key={item} className="flex items-start gap-1">
+                                      <span className="text-rose-600 font-bold">⚠</span>
+                                      <span>{item}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <div className="text-emerald-700 font-bold flex items-center gap-1 mt-1">
+                                  <span>✓ Clean Conduct Record (Zero Demerits Noted)</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="bg-neutral-100/80 border border-neutral-300/80 p-2.5 rounded text-[9px] space-y-1.5 text-neutral-800 font-sans">
+                            <div className="flex justify-between items-center">
+                              <span><strong>Conduct Rating Score:</strong></span>
+                              <span className="font-bold text-emerald-900">
+                                {getEthicsScoreDetails(selectedPositiveEthics, selectedNegativeEthics).score}% 
+                                ({getEthicsScoreDetails(selectedPositiveEthics, selectedNegativeEthics).rating})
+                              </span>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span><strong>Salary Increment Qualification Status:</strong></span>
+                              <span className={`font-bold uppercase ${ethicsQualificationStatus.includes('Qualified') ? 'text-emerald-800' : 'text-rose-800'}`}>
+                                {ethicsQualificationStatus}
+                              </span>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span><strong>Administrator Approved Increment (%):</strong></span>
+                              <span className="font-bold text-emerald-950">
+                                {ethicsIncrementPercentage >= 0 ? `+${ethicsIncrementPercentage}%` : `${ethicsIncrementPercentage}%`}
+                              </span>
+                            </div>
+                            <div className="border-t border-dashed border-neutral-300 pt-1 flex justify-between items-center font-bold">
+                              <span>Remuneration Adjustment Breakdown:</span>
+                              <span>
+                                Previous: GHC {ethicsPreviousSalary.toFixed(2)} &nbsp;➔&nbsp; 
+                                <span className={ethicsIncrementPercentage >= 0 ? 'text-emerald-700' : 'text-rose-700'}>
+                                  {ethicsIncrementPercentage >= 0 ? '+' : ''}{ethicsIncrementPercentage}%
+                                </span> &nbsp;➔&nbsp; 
+                                <strong className="text-emerald-950 text-[10px]">New Stipend: GHC {parseFloat(appSalary || '0').toFixed(2)}</strong>
+                              </span>
+                            </div>
+                            {ethicsEvaluationNotes && (
+                              <p className="text-[8px] italic text-neutral-600 border-t border-neutral-200/80 pt-1">
+                                <strong>Evaluator Remarks:</strong> {ethicsEvaluationNotes}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -9381,6 +10442,14 @@ export const AdminPanel: React.FC = React.memo(() => {
           </div>
         </div>
       )}
+
+      {/* Pickup Security Passes Modal */}
+      <PickupPassesModal
+        isOpen={showPickupPassesModal}
+        onClose={() => setShowPickupPassesModal(false)}
+        students={students}
+        systemSettings={systemSettings}
+      />
     </div>
   );
 });

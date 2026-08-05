@@ -68,13 +68,13 @@ export const LoginMFA: React.FC = () => {
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setLoading(true);
 
-    setTimeout(() => {
-      const result = login(
+    try {
+      const result = await login(
         email, 
         requiresMfa ? mfaCode : undefined,
         requiresPassword ? password : undefined
@@ -92,7 +92,10 @@ export const LoginMFA: React.FC = () => {
       } else {
         setError(result.error || 'Authentication failed.');
       }
-    }, 600);
+    } catch (err: any) {
+      setLoading(false);
+      setError(err?.message || 'Authentication failed.');
+    }
   };
 
   const selectDemoAccount = (demoEmail: string) => {
@@ -449,6 +452,10 @@ export const LoginMFA: React.FC = () => {
                       {showPasswordMask ? <EyeOff size={16} /> : <Eye size={16} />}
                     </button>
                   </div>
+                </div>
+
+                <div className="p-2.5 bg-neutral-950/80 border border-neutral-800 text-neutral-400 text-[11px] font-mono leading-relaxed">
+                  💡 Contact your System Administrator if you need your portal password generated or updated.
                 </div>
 
                 {error && (

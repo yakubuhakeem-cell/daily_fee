@@ -8,6 +8,7 @@ class IDBEngine {
   private storeName = 'FEETRACK_STATE_STORE';
   private db: IDBDatabase | null = null;
   private initPromise: Promise<IDBDatabase> | null = null;
+  private writeQueue: Promise<any> = Promise.resolve();
 
   public init(): Promise<IDBDatabase> {
     if (this.initPromise) return this.initPromise;
@@ -67,7 +68,17 @@ class IDBEngine {
     }
   }
 
+  /**
+   * Serialized setItem execution to eliminate Lost At Write (LAW) concurrency issues.
+   */
   public async setItem<T>(key: string, value: T): Promise<void> {
+    this.writeQueue = this.writeQueue.then(() => this.internalSetItem(key, value)).catch(err => {
+      console.error(`idbEngine: Write error in queue for key "${key}":`, err);
+    });
+    return this.writeQueue;
+  }
+
+  private async internalSetItem<T>(key: string, value: T): Promise<void> {
     try {
       const db = await this.getDB();
       return new Promise((resolve, reject) => {

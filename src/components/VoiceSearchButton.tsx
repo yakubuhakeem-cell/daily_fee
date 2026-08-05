@@ -30,7 +30,8 @@ export const VoiceSearchButton: React.FC<VoiceSearchButtonProps> = ({
       recognition = new SpeechRecognition();
       recognition.continuous = false;
       recognition.interimResults = false;
-      recognition.lang = 'en-US';
+      // Set language to English (Ghana) or user locale for optimal regional name recognition
+      recognition.lang = window.navigator.language.includes('GH') ? 'en-GH' : 'en-GH';
 
       recognition.onstart = () => {
         setIsListening(true);

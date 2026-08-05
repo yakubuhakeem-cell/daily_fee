@@ -10,6 +10,12 @@ export type StudentClass =
   | 'B1' | 'B2' | 'B3' | 'B4' | 'B5' | 'B6' // Primary
   | 'B7' | 'B8' | 'B9'; // JHS
 
+export const ALL_CLASSES: StudentClass[] = [
+  'Nursery', 'KG1', 'KG2', 
+  'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 
+  'B7', 'B8', 'B9'
+];
+
 export interface Student {
   id: string;
   name: string;
@@ -26,6 +32,7 @@ export interface Student {
   legacyDebt?: number; // Pre-adoption/outstanding legacy debt to be integrated into their system balance (GHC)
   idCardDeactivated?: boolean;
   enrollmentDate?: string; // Pupil's first day / enrollment date (YYYY-MM-DD) to ignore older dates for debt
+  updatedAt?: string; // ISO string timestamp for LWW conflict resolution
 }
 
 export interface PaymentHistoryEntry {
@@ -47,6 +54,7 @@ export interface PaymentRecord {
   amount: number; // always GHC 5.00
   date: string; // YYYY-MM-DD
   timestamp: string; // ISO string
+  updatedAt?: string; // ISO string timestamp for LWW conflict resolution
   collectedBy: string; // Teacher name / ID
   verified: boolean;
   notes?: string;
@@ -62,6 +70,21 @@ export interface PaymentRecord {
 }
 
 export type UserRole = 'Administrator' | 'Teacher' | 'Accountant' | 'Headmaster';
+
+export interface TeacherEthicsEvaluation {
+  academicYear?: string;
+  positiveEthics: string[];
+  negativeEthics: string[];
+  overallScore?: number;
+  overallRating?: string;
+  qualificationStatus: 'Qualified (Full Increment)' | 'Qualified (Partial Increment)' | 'Withheld (Ethics Review)' | 'Maintained (No Change)';
+  incrementPercentage: number;
+  previousSalary: number;
+  proposedSalary: number;
+  evaluatedBy?: string;
+  evaluatedDate?: string;
+  evaluationNotes?: string;
+}
 
 export interface UserAccount {
   id: string;
@@ -91,6 +114,8 @@ export interface UserAccount {
   signatureUrl?: string; // Staff/Employee digital signature
   managementSignatureUrl?: string; // Signatory officer digital signature
   personalAddress?: string; // Teacher/Staff personal address for contracts
+  ethicsEvaluation?: TeacherEthicsEvaluation; // Professional ethics & salary promotion analysis
+  updatedAt?: string; // ISO string timestamp for LWW conflict resolution
 }
 
 export interface Term {
@@ -101,6 +126,7 @@ export interface Term {
   schoolDays: string[]; // Mon-Fri dates generated from startDate
   active: boolean;
   publicHolidays?: string[]; // Array of YYYY-MM-DD dates representing holidays
+  updatedAt?: string; // ISO string timestamp for LWW conflict resolution
 }
 
 export interface PendingEdit {
@@ -336,6 +362,25 @@ export interface JournalEntry {
   amount: number;
   recordedBy: string;
   timestamp: string; // ISO string
+}
+
+export interface AdministrativePurgeOptions {
+  clearDailyPayments?: boolean;
+  resetAttendanceLogs?: boolean;
+  removeExamRecords?: boolean;
+  clearExpenses?: boolean;
+  clearJournalEntries?: boolean;
+  purgeDemoRoster?: boolean;
+}
+
+export interface AdministrativePurgeResult {
+  clearedPaymentsCount: number;
+  clearedAttendanceCount: number;
+  clearedExamCount: number;
+  clearedExpensesCount: number;
+  clearedJournalsCount: number;
+  purgedDemoStudentsCount: number;
+  message: string;
 }
 
 

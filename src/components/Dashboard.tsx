@@ -473,7 +473,7 @@ ${activeClasses.length > 0 ? `\nTop Performing Classrooms:\n` + activeClasses.sl
         recognition = new SpeechRecognition();
         recognition.continuous = false;
         recognition.interimResults = true;
-        recognition.lang = "en-US";
+        recognition.lang = "en-GH";
 
         recognition.onstart = () => {
           setVocalFeedback({

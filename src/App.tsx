@@ -22,6 +22,8 @@ import { StudentClass } from './types';
 import { EnrollmentSummaryWidget } from './components/EnrollmentSummaryWidget';
 import { InstallGuideModal } from './components/InstallGuideModal';
 import { AcademicHistoryDrawer } from './components/AcademicHistoryDrawer';
+import { SystemCapacityWarningModal, SystemCapacityBanner } from './components/SystemCapacityWarningModal';
+import { ChangePasswordModal } from './components/ChangePasswordModal';
 import { 
   Fingerprint, 
   LayoutDashboard, 
@@ -48,7 +50,8 @@ import {
   ChevronDown,
   Target,
   Smartphone,
-  History
+  History,
+  KeyRound
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -141,6 +144,7 @@ function NavigationWrapper() {
   const [copiedUrl, setCopiedUrl] = useState(false);
 
   const [isAddPupilModalOpen, setIsAddPupilModalOpen] = useState(false);
+  const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   const [newPupilName, setNewPupilName] = useState('');
   const [newPupilClass, setNewPupilClass] = useState<StudentClass>('B1');
   const [newPupilPhone, setNewPupilPhone] = useState('');
@@ -162,6 +166,7 @@ function NavigationWrapper() {
   const [showInstallBanner, setShowInstallBanner] = useState<boolean>(false);
   const [isInstallGuideOpen, setIsInstallGuideOpen] = useState<boolean>(false);
   const [isAcademicDrawerOpen, setIsAcademicDrawerOpen] = useState<boolean>(false);
+  const [isCapacityModalOpen, setIsCapacityModalOpen] = useState<boolean>(false);
 
   const [offlineCacheStatus, setOfflineCacheStatus] = useState<'idle' | 'caching' | 'ready'>('idle');
   const [offlineCacheProgress, setOfflineCacheProgress] = useState<number>(0);
@@ -359,7 +364,16 @@ function NavigationWrapper() {
       );
 
       playFeedbackSound('success');
-      triggerAppToast(`Pupil "${newPupilName.trim()}" enrolled successfully into Class ${newPupilClass}!`, 'success');
+      const classPupilCount = (students || []).filter(s => s.active && s.class === newPupilClass).length + 1;
+      const isPreSchoolClass = ['Nursery', 'KG1', 'KG2'].includes(newPupilClass);
+      const targetClassMax = isPreSchoolClass ? 75 : 50;
+      const targetWarningThreshold = isPreSchoolClass ? 65 : 45;
+
+      if (classPupilCount >= targetWarningThreshold) {
+        triggerAppToast(`Pupil enrolled! ⚠️ WARNING: Class ${newPupilClass} section is at ${classPupilCount}/${targetClassMax} capacity!`, 'success');
+      } else {
+        triggerAppToast(`Pupil "${newPupilName.trim()}" enrolled successfully into Class ${newPupilClass}!`, 'success');
+      }
       
       setNewPupilName('');
       setNewPupilClass('B1');
@@ -656,6 +670,16 @@ function NavigationWrapper() {
 
             <div className="flex gap-2">
               <button
+                onClick={() => setIsCapacityModalOpen(true)}
+                className="bg-neutral-800 hover:bg-amber-400 hover:text-black text-amber-400 px-3 py-1.5 border border-neutral-700 hover:border-amber-400 font-mono text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer rounded-none"
+                title="View System Capacity & Operational Limits"
+                id="btn-desktop-capacity-limits"
+              >
+                <ShieldCheck size={13} className="stroke-[3]" />
+                <span className="hidden lg:inline">System Limits</span>
+                <span className="lg:hidden">Limits</span>
+              </button>
+              <button
                 onClick={() => setIsAcademicDrawerOpen(true)}
                 className="bg-neutral-800 hover:bg-amber-400 hover:text-black text-amber-400 px-3 py-1.5 border border-neutral-700 hover:border-amber-400 font-mono text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer rounded-none"
                 title="Open Academic Archives"
@@ -674,6 +698,16 @@ function NavigationWrapper() {
                 <Smartphone size={13} className="stroke-[3]" />
                 <span className="hidden lg:inline">Download App</span>
                 <span className="lg:hidden">Install</span>
+              </button>
+              <button
+                onClick={() => setIsChangePasswordOpen(true)}
+                className="bg-neutral-800 hover:bg-amber-400 hover:text-black text-amber-400 px-3 py-1.5 border border-neutral-700 hover:border-amber-400 font-mono text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer rounded-none"
+                title="Change My Account Password"
+                id="btn-desktop-change-password"
+              >
+                <KeyRound size={13} className="stroke-[2.5]" />
+                <span className="hidden lg:inline">Password</span>
+                <span className="lg:hidden">Pass</span>
               </button>
               <button
                 onClick={() => setTheme(theme === 'daylight' ? 'dark' : 'daylight')}
@@ -708,6 +742,15 @@ function NavigationWrapper() {
               </button>
             )}
             <button
+              onClick={() => setIsCapacityModalOpen(true)}
+              className="bg-neutral-800 text-amber-400 px-2 py-1.5 border border-neutral-700 font-mono text-[10px] font-black uppercase tracking-wider flex items-center gap-1 transition-all cursor-pointer rounded-none"
+              title="View System Capacity & Operational Limits"
+              id="btn-mobile-capacity-limits"
+            >
+              <ShieldCheck size={11} className="stroke-[3.5]" />
+              <span>Limits</span>
+            </button>
+            <button
               onClick={() => setIsAcademicDrawerOpen(true)}
               className="bg-neutral-800 text-amber-400 px-2 py-1.5 border border-neutral-700 font-mono text-[10px] font-black uppercase tracking-wider flex items-center gap-1 transition-all cursor-pointer rounded-none"
               title="Open Academic Archives"
@@ -734,6 +777,9 @@ function NavigationWrapper() {
           </div>
         </div>
       </header>
+
+      {/* Real-time System Capacity & Limits Warning Banner */}
+      <SystemCapacityBanner onOpenDetails={() => setIsCapacityModalOpen(true)} />
 
       {/* Historical Archive View Mode Warning Banner */}
       {viewingTermId && (
@@ -919,11 +965,20 @@ function NavigationWrapper() {
             <nav className="space-y-2">
               {visibleTabs.map(tab => {
                 const active = activeTab === tab.id;
+                const tabTooltip = 
+                  tab.id === 'register' ? 'Daily Check-In: Record daily GHC 5.00 pupil check-ins, attendance, and QR code scans' :
+                  tab.id === 'termPayers' ? 'Term Payers Status: Monitor lump-sum term fee payments, balances, and payment types' :
+                  tab.id === 'dashboard' ? 'Cash Flow Feed: View real-time fee collection stats, revenue trends, and activity feeds' :
+                  tab.id === 'reports' ? 'Audits & Exports: Generate financial reports, term ledgers, fee receipts, and Excel/PDF exports' :
+                  tab.id === 'budgetPlan' ? 'Target Budgets & Plans: Configure school revenue targets, budget projections, and expense plans' :
+                  tab.id === 'exams' ? 'Exams Ledger: Manage assessment fees, printing expenses, exam receipts, and eligibility' :
+                  'Staff & Pupils: Access pupil enrollment, staff security, gate check-ins, and audit logs';
                 
                 return (
                   <button
                     key={tab.id}
                     onClick={() => setActiveTab(tab.id as any)}
+                    title={tabTooltip}
                     className={`w-full text-left font-black text-lg tracking-tight transition-all flex items-center justify-between py-1 select-none border-l-4 pr-1.5 ${
                       active
                         ? 'text-amber-400 border-amber-400 pl-3'
@@ -1862,6 +1917,18 @@ function NavigationWrapper() {
 
       {/* PAYSLIP VERIFICATION MODAL OVERLAY */}
       <PayslipVerificationModal />
+
+      {/* SYSTEM CAPACITY & LIMITS MONITOR MODAL */}
+      <SystemCapacityWarningModal
+        isOpen={isCapacityModalOpen}
+        onClose={() => setIsCapacityModalOpen(false)}
+      />
+
+      {/* CHANGE MY PASSWORD MODAL */}
+      <ChangePasswordModal
+        isOpen={isChangePasswordOpen}
+        onClose={() => setIsChangePasswordOpen(false)}
+      />
     </div>
   );
 }

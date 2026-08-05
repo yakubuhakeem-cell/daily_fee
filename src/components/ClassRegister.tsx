@@ -6,12 +6,18 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useApp, PendingAlert, calculateStudentFinancialState } from '../context/AppContext';
 import { StudentClass, Student, SchoolCategory, PaymentRecord } from '../types';
-import { Check, X, Search, Landmark, BellRing, ChevronRight, ChevronLeft, CheckSquare, Users, MessageSquareCode, CalendarDays, CalendarPlus, CalendarX, Plus, ChevronDown, Trash2, Coins, History, Printer, Camera, Upload, Copy, Pencil, QrCode, AlertCircle, User, Phone, DollarSign, Award, ShieldAlert, CheckCircle2, TrendingUp, Info, Download, MessageSquare, RefreshCw, Layers, Smartphone, Send, Link, Settings, Mic } from 'lucide-react';
+import { Check, X, Search, Landmark, BellRing, ChevronRight, ChevronLeft, CheckSquare, Users, MessageSquareCode, CalendarDays, CalendarPlus, CalendarX, Plus, ChevronDown, ChevronUp, Trash2, Coins, History, Printer, Camera, Upload, Copy, Pencil, QrCode, AlertCircle, User, UserCheck, UserX, Phone, DollarSign, Award, ShieldAlert, CheckCircle2, TrendingUp, Info, Download, MessageSquare, RefreshCw, Layers, Smartphone, Send, Link, Settings, Mic, Receipt, Lock, KeyRound, Sparkles, Zap, FileText } from 'lucide-react';
 import { motion } from 'motion/react';
 import { Html5Qrcode } from 'html5-qrcode';
 import { SchoolLogo } from './SchoolLogo';
 import { VoiceSearchButton } from './VoiceSearchButton';
+import ExpressFeeModal from './ExpressFeeModal';
+import { findBestMatchingStudent } from '../utils/fuzzyNameMatcher';
+import { getStudentPickupCode, getSchoolWeekInfo } from '../utils/pickupCode';
+import { PickupPassesModal } from './PickupPassesModal';
 import QRCode from 'qrcode';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 export const ClassRegister: React.FC = React.memo(() => {
   const { 
@@ -30,6 +36,9 @@ export const ClassRegister: React.FC = React.memo(() => {
     adjustPayment,
     currentUser,
     deletePayment,
+    purgeDuplicatePayments,
+    purgeAdvancePayments,
+    purgeRepeatedAndAdvancePayments,
     clearDailyPaymentsForClass,
     deleteStudentPayments,
     terms,
@@ -74,7 +83,10 @@ export const ClassRegister: React.FC = React.memo(() => {
   const [selectedClass, setSelectedClass] = useState<StudentClass>(initialClass);
   const [searchQuery, setSearchQuery] = useState('');
   const [highlightedStudentId, setHighlightedStudentId] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<'all' | 'unmarked' | 'present' | 'absent' | 'arrears' | 'term_payers'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'unmarked' | 'present' | 'absent' | 'arrears' | 'term_payers' | 'inactive'>('all');
+  const [summaryFilter, setSummaryFilter] = useState<'all' | 'cleared' | 'debt' | 'absent'>('all');
+  const [summarySearch, setSummarySearch] = useState('');
+  const [isSummaryFolded, setIsSummaryFolded] = useState(false);
   const [sortBy, setSortBy] = useState<'name' | 'checkin' | 'rollNumber'>('checkin');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
 
@@ -92,6 +104,10 @@ export const ClassRegister: React.FC = React.memo(() => {
   const [selectedRecordForReceipt, setSelectedRecordForReceipt] = useState<{ student: Student; payment: PaymentRecord } | null>(null);
   const [lastLoggedStudent, setLastLoggedStudent] = useState<Student | null>(null);
   const [showPrintHardcopyModal, setShowPrintHardcopyModal] = useState(false);
+  const [hardcopyMode, setHardcopyMode] = useState<'weekly' | 'daily'>('weekly');
+  const weekInfo = useMemo(() => getSchoolWeekInfo(), []);
+  const [showPickupPassesModal, setShowPickupPassesModal] = useState(false);
+  const [isExpressFeeOpen, setIsExpressFeeOpen] = useState(false);
 
   const [qrStudent, setQrStudent] = useState<Student | null>(null);
   const [generatedQrUrl, setGeneratedQrUrl] = useState<string>('');
@@ -101,6 +117,53 @@ export const ClassRegister: React.FC = React.memo(() => {
   const [selectedBulkDates, setSelectedBulkDates] = useState<string[]>([]);
   const [bulkActionType, setBulkActionType] = useState<'paid' | 'absent' | 'present_zero' | 'clear'>('paid');
   const [bulkCustomAmount, setBulkCustomAmount] = useState<string>('');
+  const [bulkRangeStartDate, setBulkRangeStartDate] = useState<string>('');
+  const [bulkRangeEndDate, setBulkRangeEndDate] = useState<string>('');
+
+  useEffect(() => {
+    if (bulkPupil) {
+      const endStr = currentDate || new Date().toISOString().split('T')[0];
+      setBulkRangeEndDate(endStr);
+      try {
+        const d = new Date(endStr);
+        d.setDate(d.getDate() - 7);
+        const startStr = d.toISOString().split('T')[0];
+        setBulkRangeStartDate(startStr);
+      } catch (e) {
+        setBulkRangeStartDate(endStr);
+      }
+    }
+  }, [bulkPupil, currentDate]);
+
+  const handleSelectDateRangeForBulkPupil = (startStr: string, endStr: string) => {
+    if (!startStr || !endStr) {
+      showToast('Please select both Start Date and End Date.');
+      return;
+    }
+    const start = startStr <= endStr ? startStr : endStr;
+    const end = startStr <= endStr ? endStr : startStr;
+
+    let rangeDays = (activeTerm?.schoolDays ?? []).filter(d => d >= start && d <= end);
+    if (rangeDays.length === 0) {
+      const generated: string[] = [];
+      let curr = new Date(start);
+      const stop = new Date(end);
+      while (curr <= stop) {
+        const dayOfWeek = curr.getDay();
+        if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+          const y = curr.getFullYear();
+          const m = String(curr.getMonth() + 1).padStart(2, '0');
+          const d = String(curr.getDate()).padStart(2, '0');
+          generated.push(`${y}-${m}-${d}`);
+        }
+        curr.setDate(curr.getDate() + 1);
+      }
+      rangeDays = generated;
+    }
+
+    setSelectedBulkDates(rangeDays);
+    showToast(`Selected ${rangeDays.length} date(s) between ${start} and ${end}.`);
+  };
 
   // Pupil-specific daily note state variables
   const [editingNoteStudentId, setEditingNoteStudentId] = useState<string | null>(null);
@@ -249,28 +312,28 @@ export const ClassRegister: React.FC = React.memo(() => {
       return;
     }
 
-    // Search active class first
-    let matchedStudent = classStudents.find(s => s.name.toLowerCase().includes(targetQuery));
+    // Search active class first using enhanced phonetic & alias fuzzy matcher
+    let matchedStudent: Student | null = null;
     let classSwitched = false;
 
-    if (!matchedStudent) {
+    const classMatch = findBestMatchingStudent(targetQuery, classStudents);
+    if (classMatch.bestMatch && classMatch.score >= 0.55 && !classMatch.isAmbiguous) {
+      matchedStudent = classMatch.bestMatch;
+    } else {
       // Search all active students globally
-      const globalMatches = students.filter(s => s.active && s.name.toLowerCase().includes(targetQuery));
-      if (globalMatches.length === 1) {
-        matchedStudent = globalMatches[0];
-        classSwitched = true;
-      } else if (globalMatches.length > 1) {
-        const exactMatch = globalMatches.find(s => s.name.toLowerCase() === targetQuery);
-        if (exactMatch) {
-          matchedStudent = exactMatch;
-          classSwitched = true;
-        } else {
-          const fbMsg = `Multiple pupils found matching "${targetQuery}". Be more specific!`;
+      const globalActive = students.filter(s => s.active);
+      const globalMatch = findBestMatchingStudent(targetQuery, globalActive);
+      if (globalMatch.bestMatch && globalMatch.score >= 0.52) {
+        if (globalMatch.isAmbiguous) {
+          const topNames = globalMatch.allMatches.slice(0, 2).map(m => `"${m.student.name}" (${m.student.class})`).join(' or ');
+          const fbMsg = `Multiple pupils found matching "${targetQuery}" (${topNames}). Please speak the full name!`;
           setVoiceFeedback({ text: fbMsg, type: 'warning' });
           playBeep('warning');
           setVoiceHistory(prev => [{ id: Math.random().toString(), command: rawPhrase, result: fbMsg, success: false }, ...prev].slice(0, 5));
           return;
         }
+        matchedStudent = globalMatch.bestMatch;
+        classSwitched = true;
       }
     }
 
@@ -352,7 +415,7 @@ export const ClassRegister: React.FC = React.memo(() => {
         recognition = new SpeechRecognition();
         recognition.continuous = false;
         recognition.interimResults = true;
-        recognition.lang = 'en-US';
+        recognition.lang = window.navigator.language.includes('GH') ? 'en-GH' : 'en-GH';
 
         recognition.onstart = () => {
           setVoiceFeedback({ text: 'Listening... speak clearly (e.g. "Check in Kwame")', type: 'warning' });
@@ -847,6 +910,30 @@ export const ClassRegister: React.FC = React.memo(() => {
     }
   };
 
+  const handleResetToToday = () => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    setCurrentDate(todayStr);
+    showToast(`Active ledger date reset to Today (${todayStr}).`);
+  };
+
+  const getFormattedDateWithDay = (dateStr: string) => {
+    try {
+      const parts = dateStr.split('-');
+      if (parts.length === 3) {
+        const year = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10) - 1;
+        const day = parseInt(parts[2], 10);
+        const dateObj = new Date(year, month, day);
+        if (!isNaN(dateObj.getTime())) {
+          return dateObj.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+    return dateStr;
+  };
+
   const startCamera = async (modeOverride?: 'user' | 'environment') => {
     setCameraError(null);
     const targetMode = modeOverride || cameraFacingMode;
@@ -981,7 +1068,7 @@ export const ClassRegister: React.FC = React.memo(() => {
   const [holidayInputDate, setHolidayInputDate] = useState('');
   const [newTermName, setNewTermName] = useState('');
   const [newTermStartDate, setNewTermStartDate] = useState('2026-06-01');
-  const [newTermDays, setNewTermDays] = useState(20); // default to 4 school weeks (20 days)
+  const [newTermDays, setNewTermDays] = useState(75); // default to 15 school weeks (75 days)
   const [newTermIsActive, setNewTermIsActive] = useState(true);
   const [isTermDropdownOpen, setIsTermDropdownOpen] = useState(false);
 
@@ -998,7 +1085,9 @@ export const ClassRegister: React.FC = React.memo(() => {
 
   // Transaction History modal states
   const [historyStudent, setHistoryStudent] = useState<Student | null>(null);
-  const [historyModalTab, setHistoryModalTab] = useState<'profile' | 'ledger' | 'print' | 'momo'>('profile');
+  const [historyModalTab, setHistoryModalTab] = useState<'profile' | 'history' | 'ledger' | 'print' | 'momo'>('profile');
+  const [accountHistorySearch, setAccountHistorySearch] = useState('');
+  const [accountHistoryFilter, setAccountHistoryFilter] = useState<'all' | 'payments' | 'attendance' | 'arrears'>('all');
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [editedName, setEditedName] = useState('');
   const [editedPhone, setEditedPhone] = useState('');
@@ -1101,6 +1190,7 @@ export const ClassRegister: React.FC = React.memo(() => {
   const [paymentToDelete, setPaymentToDelete] = useState<{ id: string; label: string; studentName: string } | null>(null);
   const [showDeleteAllPaymentsConfirm, setShowDeleteAllPaymentsConfirm] = useState(false);
   const [showResetDailyConfirm, setShowResetDailyConfirm] = useState(false);
+  const [showPurgeModal, setShowPurgeModal] = useState(false);
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
   const [whatsAppShareModal, setWhatsAppShareModal] = useState<{
     type: 'profile' | 'invoice' | 'receipt' | 'arrears_warning' | 'check_in';
@@ -1180,6 +1270,13 @@ export const ClassRegister: React.FC = React.memo(() => {
       .sort((a, b) => (a.rollNumber || '').localeCompare(b.rollNumber || '', undefined, { numeric: true, sensitivity: 'base' }));
   }, [students, selectedClass]);
 
+  // All inactive students in selected class (e.g. promoted from nursery to KG but pending vacation return)
+  const inactiveClassStudents = useMemo(() => {
+    return students
+      .filter(s => s.class === selectedClass && !s.active)
+      .sort((a, b) => (a.rollNumber || '').localeCompare(b.rollNumber || '', undefined, { numeric: true, sensitivity: 'base' }));
+  }, [students, selectedClass]);
+
   // Today's paid student ids in this class
   const paidStudentMap = useMemo(() => {
     const paidList = payments.filter(p => p.class === selectedClass && p.date === currentDate && !p.id.endsWith('_debt'));
@@ -1252,9 +1349,234 @@ export const ClassRegister: React.FC = React.memo(() => {
     return map;
   }, [payments, classStudents, selectedClass]);
 
+  // Executive Class Roster Ledger Summary calculations
+  const classSummaryData = useMemo(() => {
+    return classStudents.map(student => {
+      const debtInfo = studentDebtMap.get(student.id);
+      const studentPayments = payments.filter(p => p.studentId === student.id);
+      
+      const presentsCount = studentPayments.filter(p => !p.isAbsent && p.date <= currentDate).length;
+      const absentsCount = studentPayments.filter(p => p.isAbsent && p.date <= currentDate).length;
+      
+      const totalPaid = debtInfo?.totalPaid ?? studentPayments.filter(p => !p.isAbsent).reduce((sum, p) => sum + p.amount, 0);
+      const totalDebt = debtInfo?.totalDebt ?? 0;
+      const runningBalance = debtInfo?.runningBalance ?? 0;
+      
+      let statusText = 'CLEARED';
+      let statusType: 'cleared' | 'debt' | 'surplus' | 'scholarship' | 'term' = 'cleared';
+      
+      if (student.paymentType === 'Term') {
+        if (totalDebt > 0) {
+          statusText = `IN DEBT (${currencySymbol} ${totalDebt.toFixed(2)})`;
+          statusType = 'debt';
+        } else {
+          statusText = 'TERM PASS';
+          statusType = 'term';
+        }
+      } else if (student.discount === 5) {
+        statusText = 'SCHOLARSHIP';
+        statusType = 'scholarship';
+      } else if (totalDebt > 0) {
+        statusText = `IN DEBT (${currencySymbol} ${totalDebt.toFixed(2)})`;
+        statusType = 'debt';
+      } else if (runningBalance > 0) {
+        statusText = `SURPLUS (+${currencySymbol} ${runningBalance.toFixed(2)})`;
+        statusType = 'surplus';
+      } else {
+        statusText = 'CLEARED / UP-TO-DATE';
+        statusType = 'cleared';
+      }
+
+      return {
+        student,
+        rollNumber: student.rollNumber || 'N/A',
+        name: student.name,
+        presentsCount,
+        absentsCount,
+        totalPaid,
+        runningBalance,
+        totalDebt,
+        statusText,
+        statusType,
+        isPaidToday: debtInfo?.isPaidToday || false
+      };
+    });
+  }, [classStudents, studentDebtMap, payments, currentDate, currencySymbol]);
+
+  const filteredClassSummary = useMemo(() => {
+    return classSummaryData.filter(item => {
+      if (summaryFilter === 'cleared' && item.statusType !== 'cleared' && item.statusType !== 'term' && item.statusType !== 'surplus' && item.statusType !== 'scholarship') return false;
+      if (summaryFilter === 'debt' && item.statusType !== 'debt') return false;
+      if (summaryFilter === 'absent' && item.absentsCount === 0) return false;
+
+      if (summarySearch.trim()) {
+        const q = summarySearch.toLowerCase().trim();
+        return (
+          item.name.toLowerCase().includes(q) ||
+          item.rollNumber.toLowerCase().includes(q) ||
+          item.student.id.toLowerCase().includes(q) ||
+          item.statusText.toLowerCase().includes(q)
+        );
+      }
+      return true;
+    });
+  }, [classSummaryData, summaryFilter, summarySearch]);
+
+  const classSummaryKPI = useMemo(() => {
+    const totalPupils = classSummaryData.length;
+    const clearedPupils = classSummaryData.filter(d => d.totalDebt === 0).length;
+    const inDebtPupils = classSummaryData.filter(d => d.totalDebt > 0).length;
+    const totalCollected = classSummaryData.reduce((sum, d) => sum + d.totalPaid, 0);
+    const totalArrears = classSummaryData.reduce((sum, d) => sum + d.totalDebt, 0);
+    return { totalPupils, clearedPupils, inDebtPupils, totalCollected, totalArrears };
+  }, [classSummaryData]);
+
+  const handleExportSummaryCSV = () => {
+    const headers = ['Roll Number', 'Student ID', 'Student Name', 'Payment Scheme', 'Presents Count', 'Absents Count', `Total Paid (${currencySymbol})`, `Current Debt (${currencySymbol})`, `Running Balance (${currencySymbol})`, 'Account Status'];
+    const rows = classSummaryData.map(item => [
+      `"${item.rollNumber}"`,
+      `"${item.student.id}"`,
+      `"${item.name.replace(/"/g, '""')}"`,
+      `"${item.student.paymentType}"`,
+      item.presentsCount,
+      item.absentsCount,
+      item.totalPaid.toFixed(2),
+      item.totalDebt.toFixed(2),
+      item.runningBalance.toFixed(2),
+      `"${item.statusText}"`
+    ]);
+
+    const csvContent = "data:text/csv;charset=utf-8," + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `Class_${selectedClass}_Summary_${currentDate}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showToast(`📊 Exported Class ${selectedClass} Ledger Summary CSV!`);
+  };
+
+  const handleExportSummaryPDF = () => {
+    try {
+      const doc = new jsPDF({
+        orientation: 'landscape',
+        unit: 'mm',
+        format: 'a4'
+      });
+
+      const schoolTitle = systemSettings?.schoolName || 'ACADEMIC INSTITUTION';
+      const termTitle = activeTerm ? activeTerm.name : 'Active Term';
+
+      // Header Banner
+      doc.setFillColor(15, 23, 42); // slate-900
+      doc.rect(0, 0, 297, 28, 'F');
+
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(15);
+      doc.text(`${schoolTitle.toUpperCase()} - CLASS LEDGER SUMMARY`, 14, 12);
+
+      doc.setFontSize(9.5);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(203, 213, 225);
+      doc.text(`Class Grade: ${selectedClass} | Term: ${termTitle} | Date: ${currentDate}`, 14, 19);
+
+      // KPI Highlights Box
+      doc.setFillColor(241, 245, 249); // slate-100
+      doc.rect(14, 32, 269, 15, 'F');
+      doc.setDrawColor(203, 213, 225);
+      doc.rect(14, 32, 269, 15, 'S');
+
+      doc.setFontSize(8.5);
+      doc.setTextColor(15, 23, 42);
+      doc.setFont('helvetica', 'bold');
+
+      const kpiText = `Total Pupils: ${classSummaryKPI.totalPupils}  |  Cleared: ${classSummaryKPI.clearedPupils}  |  In Arrears: ${classSummaryKPI.inDebtPupils}  |  Total Paid: ${currencySymbol} ${classSummaryKPI.totalCollected.toFixed(2)}  |  Total Debt: ${currencySymbol} ${classSummaryKPI.totalArrears.toFixed(2)}`;
+      doc.text(kpiText, 18, 41);
+
+      // Table columns and rows
+      const tableColumn = [
+        "Roll #",
+        "Student ID",
+        "Student Name",
+        "Scheme",
+        "Presents",
+        "Absents",
+        `Total Paid (${currencySymbol})`,
+        `Balance / Debt (${currencySymbol})`,
+        "Account Status"
+      ];
+
+      const tableRows = classSummaryData.map(item => {
+        let balanceStr = `${currencySymbol} 0.00`;
+        if (item.totalDebt > 0) {
+          balanceStr = `-${currencySymbol} ${item.totalDebt.toFixed(2)}`;
+        } else if (item.runningBalance > 0) {
+          balanceStr = `+${currencySymbol} ${item.runningBalance.toFixed(2)}`;
+        }
+
+        return [
+          item.rollNumber,
+          item.student.id,
+          item.name,
+          item.student.paymentType,
+          `${item.presentsCount} days`,
+          `${item.absentsCount} days`,
+          `${currencySymbol} ${item.totalPaid.toFixed(2)}`,
+          balanceStr,
+          item.statusText
+        ];
+      });
+
+      autoTable(doc, {
+        head: [tableColumn],
+        body: tableRows,
+        startY: 51,
+        theme: 'striped',
+        headStyles: {
+          fillColor: [30, 41, 59], // slate-800
+          textColor: [255, 255, 255],
+          fontStyle: 'bold',
+          fontSize: 8.5,
+          halign: 'left'
+        },
+        bodyStyles: {
+          fontSize: 8,
+          textColor: [30, 41, 59]
+        },
+        columnStyles: {
+          0: { halign: 'center', cellWidth: 18, fontStyle: 'bold' },
+          1: { cellWidth: 26 },
+          2: { cellWidth: 50, fontStyle: 'bold' },
+          3: { cellWidth: 22, halign: 'center' },
+          4: { cellWidth: 22, halign: 'center' },
+          5: { cellWidth: 22, halign: 'center' },
+          6: { cellWidth: 32, halign: 'right', fontStyle: 'bold' },
+          7: { cellWidth: 34, halign: 'right', fontStyle: 'bold' },
+          8: { cellWidth: 38, halign: 'center', fontStyle: 'bold' }
+        },
+        didDrawPage: (data) => {
+          // Footer page number
+          const str = `Page ${data.pageNumber}`;
+          doc.setFontSize(8);
+          doc.setTextColor(100, 116, 139);
+          doc.text(str, doc.internal.pageSize.width - 25, doc.internal.pageSize.height - 8);
+          doc.text(`Generated on ${new Date().toLocaleString()} | Official Class Ledger Audit Document`, 14, doc.internal.pageSize.height - 8);
+        }
+      });
+
+      doc.save(`Class_${selectedClass}_Student_Summary_${currentDate}.pdf`);
+      showToast(`📄 Exported Class ${selectedClass} Student Summary PDF!`);
+    } catch (err) {
+      console.error('PDF Export Error:', err);
+      showToast('❌ Failed to generate PDF document. Please try again.');
+    }
+  };
+
   // Filter students by search query and status filter
   const filteredStudents = useMemo(() => {
-    let list = classStudents;
+    let list = statusFilter === 'inactive' ? inactiveClassStudents : classStudents;
 
     if (statusFilter === 'unmarked') {
       list = list.filter(s => !paidStudentMap.has(s.id));
@@ -1310,7 +1632,12 @@ export const ClassRegister: React.FC = React.memo(() => {
           matchesStatus = s.paymentType === 'Daily';
         }
 
-        return matchesNameOrRoll || matchesClass || matchesStatus;
+        // Pickup Code match
+        const pCode = getStudentPickupCode(s).code;
+        const matchesPickupCode = pCode.toLowerCase().includes(query) ||
+          pCode.replace(/[-_ ]/g, '').toLowerCase().includes(normalizedQuery);
+
+        return matchesNameOrRoll || matchesClass || matchesStatus || matchesPickupCode;
       });
     }
 
@@ -1344,7 +1671,7 @@ export const ClassRegister: React.FC = React.memo(() => {
     }
 
     return list;
-  }, [classStudents, searchQuery, statusFilter, paidStudentMap, studentDebtMap, sortBy, sortOrder, studentLastCheckInMap]);
+  }, [classStudents, inactiveClassStudents, searchQuery, statusFilter, paidStudentMap, studentDebtMap, sortBy, sortOrder, studentLastCheckInMap]);
 
   // Find the first unmarked student in the current view to automatically guide high-volume workflow
   const nextUnmarkedStudent = useMemo(() => {
@@ -1360,10 +1687,14 @@ export const ClassRegister: React.FC = React.memo(() => {
   const quickSearchMatches = useMemo(() => {
     if (!searchQuery.trim()) return [];
     const query = searchQuery.toLowerCase().trim();
-    return classStudents.filter(s => 
-      s.name.toLowerCase().includes(query) ||
-      s.rollNumber.toLowerCase().includes(query)
-    ).slice(0, 5);
+    const normalizedQuery = query.replace(/[-_ ]/g, '');
+    return classStudents.filter(s => {
+      const pCode = getStudentPickupCode(s).code;
+      return s.name.toLowerCase().includes(query) ||
+        (s.rollNumber || '').toLowerCase().includes(query) ||
+        pCode.toLowerCase().includes(query) ||
+        pCode.replace(/[-_ ]/g, '').toLowerCase().includes(normalizedQuery);
+    }).slice(0, 5);
   }, [classStudents, searchQuery]);
 
   // Handle selecting a student from the quick-search results to automatically scroll-to-view and high-contrast flash/highlight
@@ -1733,6 +2064,141 @@ export const ClassRegister: React.FC = React.memo(() => {
       };
     }).sort((a, b) => b.date.localeCompare(a.date)); // descending
   }, [historyStudent, activeTerm, payments, currentDate, studentDebtMap]);
+
+  // Memoized Account History feed combining all payment transactions and attendance logs for historyStudent
+  const accountHistoryFeed = useMemo(() => {
+    if (!historyStudent) return [];
+
+    const studentId = historyStudent.id;
+    const studentPayments = payments.filter(p => p.studentId === studentId);
+
+    const items: Array<{
+      id: string;
+      date: string;
+      timestamp?: string;
+      type: 'payment' | 'present' | 'absent' | 'arrears' | 'term_pass' | 'holiday';
+      title: string;
+      subtitle: string;
+      amount?: number;
+      method?: string;
+      refCode?: string;
+      collector?: string;
+      notes?: string;
+      paymentRecord?: PaymentRecord;
+      isVerified?: boolean;
+    }> = [];
+
+    // 1. Add all actual payment transactions
+    studentPayments.forEach(p => {
+      if (!p.isAbsent) {
+        items.push({
+          id: `payment-${p.id}`,
+          date: p.date,
+          timestamp: p.timestamp,
+          type: 'payment',
+          title: `Payment Received (${p.paymentMethod || (p.momoTransactionId ? 'Mobile Money' : 'Cash')})`,
+          subtitle: p.notes || (p.clearedDates && p.clearedDates.length > 0 ? `Cleared arrears for ${p.clearedDates.length} past days` : 'Standard check-in fee installment'),
+          amount: p.amount,
+          method: p.paymentMethod || (p.momoTransactionId ? 'Mobile Money' : 'Cash'),
+          refCode: `REF-${p.id.substring(0, 8).toUpperCase()}`,
+          collector: p.collectedBy || 'Staff Registrar',
+          notes: p.notes,
+          paymentRecord: p,
+          isVerified: p.verified
+        });
+      }
+    });
+
+    // 2. Add attendance and fee status records for school days
+    completeHistoryList.forEach(rec => {
+      const dayPayments = studentPayments.filter(p => p.date === rec.date && !p.isAbsent && p.amount > 0);
+
+      if (rec.isHoliday) {
+        items.push({
+          id: `att-holiday-${rec.date}`,
+          date: rec.date,
+          type: 'holiday',
+          title: 'Public Holiday',
+          subtitle: 'School closed • Fee exempted',
+          collector: 'System Registry'
+        });
+      } else if (rec.isAbsent) {
+        items.push({
+          id: `att-absent-${rec.date}`,
+          date: rec.date,
+          type: 'absent',
+          title: 'Marked Absent',
+          subtitle: 'Excused absence • Fee exempted',
+          collector: rec.collector || 'Class Auditor'
+        });
+      } else if (dayPayments.length === 0) {
+        if (historyStudent.paymentType === 'Term') {
+          items.push({
+            id: `att-termpass-${rec.date}`,
+            date: rec.date,
+            type: 'term_pass',
+            title: 'Present (Term Passport Pass)',
+            subtitle: 'Covered under term fee subscription',
+            collector: rec.collector || 'Gate Auditor'
+          });
+        } else if (rec.statusLabel.includes('Arrears')) {
+          items.push({
+            id: `att-arrears-${rec.date}`,
+            date: rec.date,
+            type: 'arrears',
+            title: 'Unpaid Arrears Day',
+            subtitle: `Gate check-in unpaid (${currencySymbol} ${baseDailyFee.toFixed(2)})`,
+            amount: baseDailyFee,
+            collector: 'Gate Audit Desk'
+          });
+        } else {
+          items.push({
+            id: `att-present-${rec.date}`,
+            date: rec.date,
+            type: 'present',
+            title: 'Present Check-In',
+            subtitle: rec.statusLabel || 'Gate check-in recorded',
+            collector: rec.collector || 'Gate Auditor'
+          });
+        }
+      }
+    });
+
+    return items.sort((a, b) => {
+      const dateCmp = b.date.localeCompare(a.date);
+      if (dateCmp !== 0) return dateCmp;
+      if (a.timestamp && b.timestamp) {
+        return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+      }
+      if (a.type === 'payment' && b.type !== 'payment') return -1;
+      if (a.type !== 'payment' && b.type === 'payment') return 1;
+      return 0;
+    });
+  }, [historyStudent, payments, completeHistoryList, baseDailyFee, currencySymbol]);
+
+  const filteredAccountHistory = useMemo(() => {
+    return accountHistoryFeed.filter(item => {
+      if (accountHistoryFilter === 'payments' && item.type !== 'payment') return false;
+      if (accountHistoryFilter === 'attendance' && item.type !== 'present' && item.type !== 'absent' && item.type !== 'term_pass') return false;
+      if (accountHistoryFilter === 'arrears' && item.type !== 'arrears') return false;
+
+      if (accountHistorySearch.trim()) {
+        const q = accountHistorySearch.toLowerCase().trim();
+        const matchDate = item.date.toLowerCase().includes(q);
+        const matchTitle = item.title.toLowerCase().includes(q);
+        const matchSub = item.subtitle.toLowerCase().includes(q);
+        const matchRef = item.refCode?.toLowerCase().includes(q) || false;
+        const matchCollector = item.collector?.toLowerCase().includes(q) || false;
+        const matchNotes = item.notes?.toLowerCase().includes(q) || false;
+        const matchMethod = item.method?.toLowerCase().includes(q) || false;
+        const matchAmount = item.amount ? item.amount.toFixed(2).includes(q) : false;
+
+        return matchDate || matchTitle || matchSub || matchRef || matchCollector || matchNotes || matchMethod || matchAmount;
+      }
+
+      return true;
+    });
+  }, [accountHistoryFeed, accountHistoryFilter, accountHistorySearch]);
 
   const getPaidCountForDate = (dayStr: string) => {
     return payments.filter(p => p.class === selectedClass && p.date === dayStr).length;
@@ -2609,8 +3075,9 @@ export const ClassRegister: React.FC = React.memo(() => {
       {/* Overview stats header */}
       <div className="bg-neutral-900 border-4 border-neutral-800 p-8 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6 no-print">
         <div className="space-y-2">
-          <p className="text-xs font-black text-amber-400 uppercase tracking-[0.2em] font-mono">
-            Date Location Tracker: {currentDate}
+          <p className="text-xs font-black text-amber-400 uppercase tracking-[0.2em] font-mono flex items-center gap-2">
+            <span>Date Location Tracker:</span>
+            <span className="text-white bg-amber-400/20 px-2 py-0.5 border border-amber-400/40 rounded-xs">{getFormattedDateWithDay(currentDate)}</span>
           </p>
           <div className="flex flex-wrap items-center gap-4">
             <h2 className="text-3xl font-black text-white uppercase italic tracking-tight leading-none">
@@ -2620,8 +3087,8 @@ export const ClassRegister: React.FC = React.memo(() => {
               <button
                 type="button"
                 onClick={handlePrevDate}
-                className="bg-neutral-950 hover:bg-neutral-850 text-neutral-305 hover:text-white border-2 border-neutral-800 hover:border-neutral-700 px-3 py-1.5 flex items-center gap-1.5 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded"
-                title="Go to Previous Date"
+                className="bg-neutral-950 hover:bg-neutral-850 text-amber-400 hover:text-white border-2 border-neutral-800 hover:border-amber-400 px-3 py-1.5 flex items-center gap-1.5 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded"
+                title="Go to Previous Date (Step back 1 day)"
               >
                 <ChevronLeft size={14} className="stroke-[3.5] text-amber-400" />
                 <span className="hidden sm:inline">Prev Date</span>
@@ -2652,11 +3119,20 @@ export const ClassRegister: React.FC = React.memo(() => {
               <button
                 type="button"
                 onClick={handleNextDate}
-                className="bg-neutral-950 hover:bg-neutral-850 text-neutral-305 hover:text-white border-2 border-neutral-800 hover:border-neutral-700 px-3 py-1.5 flex items-center gap-1.5 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded"
-                title="Go to Next Date"
+                className="bg-neutral-950 hover:bg-neutral-850 text-amber-400 hover:text-white border-2 border-neutral-800 hover:border-amber-400 px-3 py-1.5 flex items-center gap-1.5 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded"
+                title="Go to Next Date (Step forward 1 day)"
               >
                 <span className="hidden sm:inline">Next Date</span>
                 <ChevronRight size={14} className="stroke-[3.5] text-amber-400" />
+              </button>
+
+              <button
+                type="button"
+                onClick={handleResetToToday}
+                className="bg-amber-400 hover:bg-amber-300 text-black px-2.5 py-1.5 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded shadow-sm"
+                title="Reset date to Today"
+              >
+                Today
               </button>
             </div>
           </div>
@@ -2923,7 +3399,7 @@ export const ClassRegister: React.FC = React.memo(() => {
               </div>
               <span className="text-neutral-700 text-xs font-bold">|</span>
               <span className="text-[10px] text-neutral-400 font-black tracking-widest font-mono uppercase">
-                {activeTerm ? `${activeTerm.daysCount} WEEKS SCHEDULE` : 'NONE'}
+                {activeTerm ? `${activeTerm.daysCount || activeTerm.schoolDays?.length || 0} DAYS (${Math.ceil((activeTerm.daysCount || activeTerm.schoolDays?.length || 0) / 5)} WEEKS SCHEDULE)` : 'NONE'}
               </span>
             </div>
           </div>
@@ -3008,7 +3484,7 @@ export const ClassRegister: React.FC = React.memo(() => {
               </div>
               
               <div className="space-y-1.5">
-                <label className="text-[10px] uppercase font-mono font-black text-neutral-500">Schooling Days length</label>
+                <label className="text-[10px] uppercase font-mono font-black text-neutral-500">Schooling Days Length (e.g. 75 days = 15 school weeks)</label>
                 <input
                   type="number"
                   required
@@ -3320,7 +3796,7 @@ export const ClassRegister: React.FC = React.memo(() => {
       </div>
 
       {/* Main Student Check-In Section */}
-      <div className="bg-neutral-900 border-4 border-neutral-800 overflow-hidden no-print">
+      <div className="bg-neutral-900 border-4 border-neutral-800 no-print relative max-w-full overflow-x-auto">
         {/* LEDGER DATE NAVIGATION BAR FOR QUICK ROUTING */}
         <div className="bg-neutral-950/80 px-6 py-4 border-b-2 border-neutral-800 flex flex-col sm:flex-row justify-between items-center gap-4 select-none">
           <div className="flex items-center gap-2">
@@ -3356,15 +3832,15 @@ export const ClassRegister: React.FC = React.memo(() => {
         </div>
 
         {/* Table Header Filter tools */}
-        <div className="p-6 bg-neutral-950 border-b-2 border-neutral-800 flex flex-col gap-5">
+        <div className="p-4 sm:p-6 bg-neutral-950 border-b-2 border-neutral-800 flex flex-col gap-5 relative z-20 max-w-full">
           {/* Row 1: COHORT & STUDENT IDENTIFICATION */}
-          <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4">
+          <div className="flex flex-col 2xl:flex-row items-stretch 2xl:items-center justify-between gap-4 max-w-full">
             
             {/* Left: Class Dropdown and Student Search */}
-            <div className="flex flex-col md:flex-row items-stretch md:items-center gap-3 flex-grow max-w-full lg:max-w-4xl">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 flex-grow max-w-full min-w-0">
               
               {/* CLASS SELECTOR QUICK-SWITCHER DROPDOWN */}
-              <div className="relative w-full md:w-56 shrink-0">
+              <div className="relative w-full sm:w-52 md:w-56 shrink-0">
                 <span className="absolute left-3.5 top-3.5 text-amber-400 z-10 pointer-events-none">
                   <Users size={14} className="stroke-[2.5]" />
                 </span>
@@ -3406,15 +3882,17 @@ export const ClassRegister: React.FC = React.memo(() => {
               </div>
 
               {/* SEARCH INPUT */}
-              <div className="relative flex-grow">
-                <Search className="absolute left-4 top-3.5 text-neutral-500" size={16} />
+              <div className="relative flex-grow min-w-0 sm:min-w-[200px] md:min-w-[260px]">
+                <Search className="absolute left-4 top-3.5 text-neutral-500 pointer-events-none" size={16} />
                 <input
                   id="class-register-search"
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
+                    if (e.key === 'Escape') {
+                      setSearchQuery('');
+                    } else if (e.key === 'Enter') {
                       e.preventDefault();
                       if (nextUnmarkedStudent) {
                         handleTogglePayment(nextUnmarkedStudent.id);
@@ -3424,17 +3902,27 @@ export const ClassRegister: React.FC = React.memo(() => {
                       }
                     }
                   }}
-                  placeholder="SEARCH NAME, ROLL, CLASS, OR STATUS (PAID, ABSENT, ARREARS)..."
-                  className="w-full bg-neutral-900 border-2 border-neutral-800 py-3 pl-11 pr-24 text-[11px] font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600 tracking-wide"
-                  title="Type to search, or simply press Enter to record check-in for the active next student and shift forward"
+                  placeholder="SEARCH NAME, ROLL NUMBER, CLASS, OR STATUS..."
+                  className="w-full bg-neutral-900 border-2 border-neutral-800 py-3 pl-11 pr-32 sm:pr-48 text-[11px] font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600 tracking-wide rounded-none"
+                  title="Type to search, press Escape to clear, or press Enter to record check-in for the next unmarked student"
                 />
-                <div className="absolute right-3 top-2.5 flex items-center gap-1.5">
+                <div className="absolute right-3 top-2.5 flex items-center gap-1.5 pointer-events-auto">
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery('')}
+                      className="text-[9px] font-mono font-black text-neutral-400 hover:text-white px-1.5 py-0.5 bg-neutral-800 hover:bg-neutral-700 uppercase transition-colors mr-0.5 cursor-pointer"
+                      title="Clear search query (Esc)"
+                    >
+                      Clear ✕
+                    </button>
+                  )}
                   <VoiceSearchButton
                     inputId="class-register-search"
                     onTranscript={(text) => setSearchQuery(text)}
                     className="mr-0.5"
                   />
-                  <kbd className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 border border-neutral-800 bg-neutral-950 font-mono text-[9px] text-neutral-550 rounded-xs leading-none pointer-events-none uppercase font-bold tracking-wider select-none">
+                  <kbd className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 border border-neutral-800 bg-neutral-950 font-mono text-[9px] text-neutral-500 rounded-xs leading-none pointer-events-none uppercase font-bold tracking-wider select-none">
                     Ctrl+K
                   </kbd>
                   <kbd className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 border border-neutral-800 bg-neutral-950 font-mono text-[9px] text-amber-500/80 rounded-xs leading-none pointer-events-none uppercase font-bold tracking-wider select-none" title="Press Enter to toggle payment for the next student up">
@@ -3444,10 +3932,22 @@ export const ClassRegister: React.FC = React.memo(() => {
 
                 {/* FLOATING QUICK-SEARCH SUGGESTIONS GRID */}
                 {quickSearchMatches.length > 0 && (
-                  <div className="absolute left-0 top-full w-full bg-neutral-950 border-2 border-neutral-800 shadow-2xl z-50 mt-1 max-h-72 overflow-y-auto divide-y-2 divide-neutral-900 rounded-none">
-                    <div className="bg-neutral-900/90 backdrop-blur-md px-4 py-2 text-[8px] font-mono text-neutral-550 uppercase font-black tracking-widest flex justify-between items-center select-none border-b border-neutral-850">
-                      <span>Quick Search Suggestions ({quickSearchMatches.length})</span>
-                      <span>Click to Scroll & Highlight</span>
+                  <div className="absolute left-0 top-full w-full sm:w-[580px] md:w-[680px] lg:w-[780px] max-w-[calc(100vw-2.5rem)] bg-neutral-950 border-2 border-amber-400/80 shadow-2xl z-[100] mt-1.5 max-h-[440px] overflow-y-auto divide-y-2 divide-neutral-900 rounded-none">
+                    <div className="bg-neutral-900/95 backdrop-blur-md px-4 py-2.5 text-[9px] font-mono text-neutral-400 uppercase font-black tracking-widest flex justify-between items-center select-none border-b border-neutral-800 sticky top-0 z-10">
+                      <span className="text-amber-400 flex items-center gap-1.5">
+                        <Search size={13} className="stroke-[3]" />
+                        <span>Quick Search Suggestions ({quickSearchMatches.length} Matches)</span>
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="hidden sm:inline text-neutral-500 text-[8px]">Click row to locate or use quick actions</span>
+                        <button
+                          type="button"
+                          onClick={() => setSearchQuery('')}
+                          className="text-neutral-400 hover:text-white px-2 py-0.5 bg-neutral-800 hover:bg-neutral-700 text-[8px] font-black uppercase tracking-wider transition-colors cursor-pointer"
+                        >
+                          Clear ✕
+                        </button>
+                      </div>
                     </div>
                     {quickSearchMatches.map(student => {
                       const debtInfo = studentDebtMap.get(student.id);
@@ -3464,49 +3964,90 @@ export const ClassRegister: React.FC = React.memo(() => {
                       );
 
                       let statusTextLabel = 'UNMARKED';
-                      let statusLabelColor = 'text-neutral-450';
+                      let statusLabelColor = 'text-neutral-450 bg-neutral-900 border-neutral-800';
                       if (isAbsent) {
                         statusTextLabel = 'ABSENT';
-                        statusLabelColor = 'text-red-400';
+                        statusLabelColor = 'text-red-400 bg-red-950/60 border-red-800/80';
                       } else if (isPrepaid) {
                         statusTextLabel = 'PREPAID';
-                        statusLabelColor = 'text-indigo-400';
+                        statusLabelColor = 'text-indigo-300 bg-indigo-950/60 border-indigo-800/80';
                       } else if (isScholarship) {
                         statusTextLabel = 'SCHOLARSHIP';
-                        statusLabelColor = 'text-teal-400';
+                        statusLabelColor = 'text-teal-300 bg-teal-950/60 border-teal-800/80';
                       } else if (isPaid) {
                         statusTextLabel = 'PAID';
-                        statusLabelColor = 'text-emerald-400';
+                        statusLabelColor = 'text-emerald-400 bg-emerald-950/60 border-emerald-800/80';
                       }
 
                       return (
-                        <button
+                        <div
                           key={student.id}
-                          type="button"
                           onClick={() => handleSelectQuickSearchStudent(student)}
-                          className="w-full text-left px-4 py-3 pb-2.5 flex items-center justify-between hover:bg-neutral-900/90 focus:bg-neutral-900 focus:outline-none transition-colors group cursor-pointer"
+                          className="w-full text-left p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-neutral-900/90 focus:bg-neutral-900 focus:outline-none transition-colors group cursor-pointer"
                         >
-                          <div className="flex items-center gap-3 min-w-0">
-                            <div className="w-2 h-2 rounded-full bg-neutral-800 group-hover:bg-amber-400 transition-colors shrink-0" />
-                            <div className="min-w-0">
-                              <span className="block text-[11px] font-mono font-black text-white group-hover:text-amber-400 uppercase tracking-tight truncate">
-                                {student.name}
-                              </span>
-                              <span className="block text-[8px] font-mono text-neutral-500 uppercase tracking-wider font-bold">
-                                Roll: {student.rollNumber} • {student.paymentType === 'Term' ? 'Term Subscription' : 'Daily Scheme'}
+                          <div className="flex items-center gap-3 min-w-0 flex-1">
+                            <div className="w-2.5 h-2.5 rounded-full bg-neutral-800 group-hover:bg-amber-400 transition-colors shrink-0" />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-xs sm:text-sm font-mono font-black text-white group-hover:text-amber-400 uppercase tracking-tight truncate">
+                                  {student.name}
+                                </span>
+                                <span className="text-[9px] font-mono font-bold bg-neutral-900 border border-neutral-800 px-1.5 py-0.2 text-neutral-400 uppercase">
+                                  {student.class}
+                                </span>
+                              </div>
+                              <span className="block text-[9px] font-mono text-neutral-500 uppercase tracking-wider font-bold mt-0.5">
+                                Roll: #{student.rollNumber || 'N/A'} • {student.paymentType === 'Term' ? 'Term Subscription' : 'Daily Scheme'}
                               </span>
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-3 shrink-0">
-                            <span className={`text-[9px] font-mono font-black uppercase tracking-widest ${statusLabelColor}`}>
+                          <div className="flex items-center gap-2 shrink-0 flex-wrap sm:flex-nowrap justify-end" onClick={(e) => e.stopPropagation()}>
+                            <span className={`text-[9px] font-mono font-black uppercase tracking-widest px-2 py-1 border ${statusLabelColor}`}>
                               {statusTextLabel}
                             </span>
-                            <span className="text-[8px] font-mono text-neutral-600 group-hover:text-amber-400 uppercase tracking-tight transition-colors border border-dashed border-neutral-800 group-hover:border-amber-400/30 px-2 py-0.5 font-bold">
+
+                            {!isPaid && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const effectiveRate = Math.max(0, baseDailyFee - (student.discount || 0));
+                                  recordPayment(student.id, true, effectiveRate);
+                                  showToast(`⚡ Collected ${currencySymbol} ${effectiveRate.toFixed(2)} for ${student.name}!`);
+                                  playFeedbackSound?.('click');
+                                }}
+                                className="text-[9.5px] font-mono font-black bg-amber-400 hover:bg-amber-300 text-black px-2.5 py-1 uppercase tracking-wider rounded-xs cursor-pointer shadow-sm transition-all shrink-0"
+                                title={`Record payment instantly`}
+                              >
+                                ⚡ Pay {currencySymbol} {Math.max(0, baseDailyFee - (student.discount || 0)).toFixed(2)}
+                              </button>
+                            )}
+
+                            {!isAbsent && !isPaid && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  recordAbsent(student.id);
+                                  showToast(`Marked ${student.name} as ABSENT.`);
+                                  playFeedbackSound?.('click');
+                                }}
+                                className="text-[9.5px] font-mono font-black bg-red-950 hover:bg-red-900 text-red-300 border border-red-800 px-2.5 py-1 uppercase tracking-wider rounded-xs cursor-pointer transition-all shrink-0"
+                                title="Mark pupil absent"
+                              >
+                                🚫 Absent
+                              </button>
+                            )}
+
+                            <button 
+                              type="button"
+                              onClick={() => handleSelectQuickSearchStudent(student)}
+                              className="text-[9px] font-mono text-neutral-400 group-hover:text-amber-400 uppercase tracking-tight transition-colors border border-neutral-800 group-hover:border-amber-400/40 px-2 py-1 font-bold cursor-pointer shrink-0 bg-neutral-900 hover:bg-neutral-850"
+                              title="Locate pupil row in active register"
+                            >
                               locate ↵
-                            </span>
+                            </button>
                           </div>
-                        </button>
+                        </div>
                       );
                     })}
                   </div>
@@ -3522,8 +4063,30 @@ export const ClassRegister: React.FC = React.memo(() => {
               </div>
             </div>
 
-            {/* Right: Camera Scan & Voice Check-In Triggers */}
-            <div className="flex flex-col sm:flex-row items-stretch gap-2 shrink-0 w-full lg:w-auto">
+            {/* Right: Camera Scan, Voice, Speed Fee Collector & Pickup Pass Triggers */}
+            <div className="flex flex-wrap items-center gap-2 shrink-0 w-full 2xl:w-auto max-w-full">
+              <button
+                id="speed-fee-collector-trigger"
+                type="button"
+                onClick={() => setIsExpressFeeOpen(true)}
+                className="bg-amber-400 hover:bg-amber-300 text-black py-3 px-4 text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 border-2 border-amber-400 transition-colors cursor-pointer shrink-0 flex-1 sm:flex-initial min-w-[140px] shadow-lg font-mono animate-pulse hover:animate-none"
+                title="Open Speed Fee Collector station for fast one-touch payments"
+              >
+                <Coins size={14} className="stroke-[3]" />
+                <span>⚡ Speed Fee Collector</span>
+              </button>
+
+              <button
+                id="pickup-passes-trigger"
+                type="button"
+                onClick={() => setShowPickupPassesModal(true)}
+                className="bg-neutral-900 hover:bg-neutral-800 text-amber-400 border-2 border-neutral-800 hover:border-amber-400 py-3 px-4 text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-colors cursor-pointer shrink-0 flex-1 sm:flex-initial min-w-[130px]"
+                title="View & Print weekly pupil pickup security passes for dismissal"
+              >
+                <KeyRound size={14} className="stroke-[3]" />
+                <span>Pickup Passes</span>
+              </button>
+
               <button
                 id="voice-checkin-trigger"
                 type="button"
@@ -3533,7 +4096,7 @@ export const ClassRegister: React.FC = React.memo(() => {
                   setVoiceTranscript('');
                   setVoiceFeedback(null);
                 }}
-                className="bg-emerald-500 hover:bg-emerald-400 text-black py-3 px-4 text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 border-2 border-emerald-500 transition-colors cursor-pointer shrink-0 w-full lg:w-44"
+                className="bg-emerald-500 hover:bg-emerald-400 text-black py-3 px-4 text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 border-2 border-emerald-500 transition-colors cursor-pointer shrink-0 flex-1 sm:flex-initial min-w-[130px]"
                 title="Open voice register assistant to check in pupils via voice commands"
               >
                 <Mic size={14} className="stroke-[3]" />
@@ -3544,7 +4107,7 @@ export const ClassRegister: React.FC = React.memo(() => {
                 id="qr-scanner-trigger"
                 type="button"
                 onClick={() => setIsQrModalOpen(true)}
-                className="bg-amber-400 hover:bg-amber-300 text-black py-3 px-5 text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 border-2 border-amber-400 transition-colors cursor-pointer shrink-0 w-full lg:w-44 animate-pulse hover:animate-none"
+                className="bg-amber-400 hover:bg-amber-300 text-black py-3 px-5 text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 border-2 border-amber-400 transition-colors cursor-pointer shrink-0 flex-1 sm:flex-initial min-w-[130px] animate-pulse hover:animate-none"
                 title="Open QR scanner camera station"
               >
                 <QrCode size={14} className="stroke-[3]" />
@@ -3615,6 +4178,16 @@ export const ClassRegister: React.FC = React.memo(() => {
 
               <button
                 type="button"
+                onClick={() => setShowPurgeModal(true)}
+                className="flex-grow sm:flex-grow-0 text-[10px] font-mono font-black bg-neutral-900 border border-neutral-800 hover:border-red-500 hover:text-red-400 text-neutral-300 py-2.5 px-3.5 transition-all flex items-center justify-center gap-1.5 uppercase tracking-wider cursor-pointer font-bold"
+                title="Detect and delete duplicate payments, repeated daily fees, and advance payment markers"
+              >
+                <Trash2 size={13} className="stroke-[2.5] text-red-500" />
+                <span>Clean Duplicates & Advances</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={handleDownloadCSV}
                 className="flex-grow sm:flex-grow-0 text-[10px] font-mono font-black bg-neutral-900 border border-neutral-800 hover:border-amber-400 hover:text-amber-400 text-neutral-300 py-2.5 px-3.5 transition-all flex items-center justify-center gap-1.5 uppercase tracking-wider cursor-pointer font-bold"
                 title="Download Today's Sheet"
@@ -3636,10 +4209,73 @@ export const ClassRegister: React.FC = React.memo(() => {
           </div>
         </div>
 
+        {/* Multi-Day Register Quick Date Stepper Bar (Allows stepping prev/next day directly on pupil fee page) */}
+        <div className="bg-neutral-950 border-b-2 border-amber-400/40 px-6 py-3 flex flex-wrap items-center justify-between gap-4 text-white font-mono select-none">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-amber-400 text-black font-black shrink-0 shadow-sm">
+              <CalendarDays size={18} />
+            </div>
+            <div>
+              <span className="text-[9px] text-amber-400 font-black uppercase tracking-widest block font-mono">MULTI-DAY REGISTER ENTRY STEPPER</span>
+              <span className="text-xs font-black text-white uppercase tracking-tight flex items-center gap-2">
+                <span>Active Date:</span>
+                <span className="text-amber-300 bg-amber-400/10 px-2 py-0.5 border border-amber-400/30 rounded-xs">{getFormattedDateWithDay(currentDate)}</span>
+              </span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={handlePrevDate}
+              className="bg-neutral-900 hover:bg-amber-400 hover:text-black text-amber-400 border-2 border-amber-400/60 px-3.5 py-1.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer shadow-sm active:scale-95"
+              title="Move to Previous Day to mark entries without scrolling to calendar"
+            >
+              <ChevronLeft size={16} className="stroke-[3.5]" />
+              <span>◄ Prev Day</span>
+            </button>
+
+            <div className="bg-neutral-900 border-2 border-neutral-800 px-3 py-1.5 flex items-center gap-2">
+              <CalendarDays size={14} className="text-amber-400 shrink-0" />
+              <input
+                type="date"
+                value={currentDate}
+                onChange={(e) => {
+                  if (e.target.value) {
+                    setCurrentDate(e.target.value);
+                    showToast(`Ledger date set to ${e.target.value}.`);
+                  }
+                }}
+                className="bg-transparent text-white focus:outline-none font-mono text-xs uppercase cursor-pointer border-none p-0 tracking-wider [color-scheme:dark]"
+                title="Select Date"
+              />
+            </div>
+
+            <button
+              type="button"
+              onClick={handleNextDate}
+              className="bg-neutral-900 hover:bg-amber-400 hover:text-black text-amber-400 border-2 border-amber-400/60 px-3.5 py-1.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer shadow-sm active:scale-95"
+              title="Move to Next Day to mark entries without scrolling to calendar"
+            >
+              <span>Next Day ►</span>
+              <ChevronRight size={16} className="stroke-[3.5]" />
+            </button>
+
+            <button
+              type="button"
+              onClick={handleResetToToday}
+              className="bg-amber-400 hover:bg-amber-300 text-black px-3 py-1.5 text-xs font-black uppercase tracking-wider transition-all cursor-pointer shadow-sm active:scale-95 flex items-center gap-1"
+              title="Return active register date to Today"
+            >
+              📍 Today
+            </button>
+          </div>
+        </div>
+
         {/* Beautiful secondary interactive filter pills and registration progress HUD */}
-        <div className="px-6 py-4 bg-neutral-900/60 border-b-2 border-neutral-800 flex flex-col lg:flex-row lg:items-center justify-between gap-4 select-none">
+        <div className="px-4 sm:px-6 py-4 bg-neutral-900/60 border-b-2 border-neutral-800 flex flex-col lg:flex-row lg:items-center justify-between gap-4 select-none max-w-full">
           {/* Status Filter Pills */}
-          <div className="flex flex-wrap items-center gap-2 overflow-x-auto scroller-hidden">
+          <div className="flex flex-wrap items-center gap-2 overflow-x-auto pb-1 max-w-full scrollbar-thin scrollbar-thumb-amber-400/30">
             <span className="text-[10px] font-mono font-black text-neutral-400 uppercase tracking-widest mr-1.5 shrink-0">FILTER COHORT:</span>
             
             <button
@@ -3729,6 +4365,22 @@ export const ClassRegister: React.FC = React.memo(() => {
             >
               Term ({classStudents.filter(s => s.paymentType === 'Term').length})
             </button>
+
+            {inactiveClassStudents.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setStatusFilter(statusFilter === 'inactive' ? 'all' : 'inactive')}
+                className={`px-3 py-1.5 text-[10px] font-mono font-black uppercase tracking-wider transition-all flex items-center gap-1.5 border cursor-pointer ${
+                  statusFilter === 'inactive' 
+                    ? 'bg-rose-950 text-rose-400 border-rose-600 font-black shadow-sm' 
+                    : 'bg-neutral-950 text-rose-400 border-rose-900/60 hover:bg-rose-950/30'
+                }`}
+                title={`View ${inactiveClassStudents.length} inactive pupil(s) in ${selectedClass} pending vacation return`}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0"></span>
+                Inactive / Pending Return ({inactiveClassStudents.length})
+              </button>
+            )}
           </div>
 
           {/* Quick HUD Progress & Accessibility Tip */}
@@ -3894,6 +4546,64 @@ export const ClassRegister: React.FC = React.memo(() => {
               </span>
               <span className="text-[9px] bg-amber-400/10 border border-amber-400/25 px-2 py-0.5 text-amber-300 font-mono tracking-widest font-black uppercase shrink-0">INTELLIGENT GATEWAY</span>
             </div>
+
+            {/* Inactive / Promoted Pupils Awaiting Vacation Return Banner */}
+            {inactiveClassStudents.length > 0 && (
+              <div className="p-4 bg-amber-955/20 border-b-2 border-amber-500/40 space-y-3 font-mono">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-start gap-2.5">
+                    <Sparkles size={18} className="text-amber-400 shrink-0 mt-0.5" />
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-black text-amber-400 uppercase tracking-wider">
+                          📌 {inactiveClassStudents.length} INACTIVE / PROMOTED PUPIL(S) IN {selectedClass}
+                        </span>
+                        <span className="text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/40 px-1.5 py-0.2 uppercase font-black">
+                          Pending Return
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-neutral-300 font-semibold block mt-0.5">
+                        These pupils were promoted into {selectedClass} but are set to inactive until they report back from vacation. Activate them as they re-enroll!
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (confirm(`Activate all ${inactiveClassStudents.length} inactive pupil(s) in ${selectedClass}?`)) {
+                        inactiveClassStudents.forEach(st => updateStudent({ ...st, active: true }));
+                        showToast(`⚡ Activated all ${inactiveClassStudents.length} pupils in ${selectedClass}!`);
+                      }
+                    }}
+                    className="px-3.5 py-2 bg-emerald-500 hover:bg-emerald-400 text-black font-black text-xs uppercase tracking-wider transition-all cursor-pointer shadow-sm flex items-center justify-center gap-1.5 shrink-0 border-none rounded-xs"
+                  >
+                    <span>⚡ Activate All {inactiveClassStudents.length} In {selectedClass}</span>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 pt-2 border-t border-neutral-850">
+                  {inactiveClassStudents.map(st => (
+                    <div key={st.id} className="p-2.5 bg-neutral-900 border border-neutral-800 flex items-center justify-between gap-2 rounded-xs">
+                      <div className="min-w-0">
+                        <span className="text-xs font-bold text-white block truncate">{st.name}</span>
+                        <span className="text-[9px] text-neutral-400 block font-mono">#{st.rollNumber} • {st.paymentType}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          updateStudent({ ...st, active: true });
+                          showToast(`⚡ ${st.name} is now ACTIVE in ${selectedClass}!`);
+                        }}
+                        className="px-2.5 py-1 bg-emerald-500 hover:bg-emerald-400 text-black font-black text-[9.5px] uppercase tracking-wider transition-all cursor-pointer shrink-0 border-none rounded-xs"
+                        title={`Activate ${st.name} for ${selectedClass}`}
+                      >
+                        ⚡ ACTIVATE
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {isHoliday && activeTerm && (
               <div className="bg-red-950/20 border-b border-red-500/30 p-6 text-center text-red-400 space-y-3 select-none font-mono">
@@ -4137,6 +4847,11 @@ export const ClassRegister: React.FC = React.memo(() => {
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-bold text-neutral-400">
                       <span>GUARDIAN: <strong className="text-neutral-300 font-mono">{student.guardianPhone}</strong></span>
                       <span className="hidden sm:inline w-1 h-1 bg-neutral-700" />
+                      <span className="flex items-center gap-1 font-mono text-amber-400 bg-amber-400/10 border border-amber-400/30 px-1.5 py-0.5 text-[10px] font-black" title="Weekly Pupil Pickup Security Code. Regenerates every Monday, expires on Friday.">
+                        <Lock size={10} className="text-amber-400" />
+                        <span>PICKUP CODE: {getStudentPickupCode(student).code}</span>
+                      </span>
+                      <span className="hidden sm:inline w-1 h-1 bg-neutral-700" />
                       <span>CATEGORY: <strong className="text-neutral-300 uppercase tracking-wider">{student.category}</strong></span>
                       <span className="hidden sm:inline w-1 h-1 bg-neutral-700" />
                       <span className="flex items-center gap-1">
@@ -4308,20 +5023,6 @@ export const ClassRegister: React.FC = React.memo(() => {
                     >
                       <Printer size={14} className="stroke-[2.5]" />
                       <span>Export Receipt</span>
-                    </button>
-
-                    {/* Advance Custom Pay trigger */}
-                    <button
-                      onClick={() => {
-                        setAdvanceStudent(student);
-                        setAdvanceAmount(25); // default GHC 25 covers 5 days
-                        setAdvanceSuccess(false);
-                      }}
-                      title="Pay Advance / Custom Multi-Days"
-                      className="p-2.5 text-neutral-400 hover:text-emerald-450 border-2 border-neutral-800 hover:border-emerald-450 bg-neutral-950 transition-colors cursor-pointer flex items-center gap-1.5 px-4"
-                    >
-                      <Coins size={14} className="text-emerald-450" />
-                      <span className="text-[10px] font-mono font-black uppercase tracking-widest text-neutral-300">ADVANCE</span>
                     </button>
 
                     {/* Pupil Bulk Dates Check-in Trigger */}
@@ -4550,151 +5251,6 @@ export const ClassRegister: React.FC = React.memo(() => {
                           )}
                         </button>
 
-                        {/* Dynamic Fee Select Dropdown */}
-                        <div className="relative">
-                          <select
-                            value=""
-                            onChange={(e) => {
-                              const action = e.target.value;
-                              if (!action) return;
-
-                              const handleDropdownRecord = (amount?: number, label?: string) => {
-                                const finalAmt = amount !== undefined ? amount : Math.max(0, 5.00 - (student.discount || 0));
-                                if (isPaid) {
-                                  if (window.confirm(`Warning: ${student.name} already has a payment registered today.\nAre you sure you want to log a duplicate payment of GHC ${finalAmt.toFixed(2)}?`)) {
-                                    recordPayment(student.id, true, amount, undefined, true);
-                                    showToast(`Successfully logged duplicate payment of GHC ${finalAmt.toFixed(2)} for ${student.name}!`);
-                                    scrollToNextUnpaid(student.id);
-                                  }
-                                } else {
-                                  recordPayment(student.id, true, amount);
-                                  showToast(label || `Logged GHC ${finalAmt.toFixed(2)} payment for ${student.name}.`);
-                                  scrollToNextUnpaid(student.id);
-                                }
-                              };
-
-                              if (action === 'discounted') {
-                                const discountAmount = student.discount || 0;
-                                const actualAmount = Math.max(0, 5.00 - discountAmount);
-                                handleDropdownRecord(undefined, `Logged GHC ${actualAmount.toFixed(2)} payment for ${student.name}.`);
-                              } else if (action === 'ghc5') {
-                                handleDropdownRecord(5.00, `Logged full GHC 5.00 payment for ${student.name} (discount ignored).`);
-                              } else if (action === 'ghc4') {
-                                handleDropdownRecord(4.00, `Logged custom GHC 4.00 payment for ${student.name}.`);
-                              } else if (action === 'ghc3') {
-                                handleDropdownRecord(3.00, `Logged custom GHC 3.00 payment for ${student.name}.`);
-                              } else if (action === 'ghc2') {
-                                handleDropdownRecord(2.00, `Logged custom GHC 2.00 payment for ${student.name}.`);
-                              } else if (action === 'free') {
-                                handleDropdownRecord(0.00, `Logged GHC 0.00 Scholarship for ${student.name}.`);
-                              } else if (action === 'manual') {
-                                if (isPaid && !window.confirm(`Warning: ${student.name} already has a payment registered today.\nAre you sure you want to save a duplicate custom payment?`)) {
-                                  return;
-                                }
-                                setManualAmountStudentId(student.id);
-                                const currentAmt = isPaid && paidInfo ? (payments.find(p => p.id === paidInfo.paymentId)?.amount ?? 5) : Math.max(0, 5 - (student.discount ?? 0));
-                                const amtStr = currentAmt.toString();
-                                setManualAmountValue(amtStr);
-                                lastSavedValueRef.current = amtStr;
-                                setSaveStatus('idle');
-                              } else if (action === 'absent') {
-                                recordAbsent(student.id);
-                                showToast(`Marked ${student.name} as absent today (excused from fee).`);
-                                scrollToNextUnpaid(student.id);
-                              } else if (action === 'unpaid') {
-                                if (paidInfo) {
-                                  deletePayment(paidInfo.paymentId);
-                                  showToast(`Cleared payment status for ${student.name}.`);
-                                }
-                              } else if (action === 'deactivate') {
-                                setDeleteConf({
-                                  isOpen: true,
-                                  type: 'student_deactivate',
-                                  targetId: student.id,
-                                  targetName: student.name,
-                                  userInput: '',
-                                  onConfirm: () => {
-                                    updateStudent({
-                                      ...student,
-                                      active: false
-                                    });
-                                    showToast(`${student.name} is now deactivated and will not be recorded in school registers.`);
-                                  }
-                                });
-                              } else if (action === 'delete') {
-                                if (currentUser?.role !== 'Administrator') {
-                                  showToast('Access Denied: Only Administrators are permitted to delete student profiles completely from the system.');
-                                } else {
-                                  setDeleteConf({
-                                    isOpen: true,
-                                    type: 'student_delete',
-                                    targetId: student.id,
-                                    targetName: student.name,
-                                    userInput: '',
-                                    onConfirm: () => {
-                                      deleteStudent(student.id);
-                                      showToast(`Student ${student.name} was permanently purged.`);
-                                    }
-                                  });
-                                }
-                              }
-                              e.target.value = "";
-                            }}
-                            className="bg-neutral-950 hover:bg-neutral-850 hover:text-white text-neutral-400 border-2 border-neutral-800 hover:border-neutral-600 px-3.5 py-2.5 text-xs font-mono font-black uppercase tracking-widest cursor-pointer focus:outline-none focus:border-amber-400 h-[42px] flex items-center justify-center text-center justify-items-center"
-                            defaultValue=""
-                          >
-                            <option value="" disabled>FEES ▾</option>
-                            {!isPaid && !isAbsent && (
-                              <>
-                                <option value="discounted" className="bg-neutral-950 text-white font-mono text-xs">Collect GHC {(5.00 - (student.discount || 0)).toFixed(2)} (Standard)</option>
-                                {(student.discount !== undefined && student.discount > 0) && (
-                                  <option value="ghc5" className="bg-neutral-950 text-white font-mono text-xs">Collect Full GHC 5.00</option>
-                                )}
-                                <option value="ghc4" className="bg-neutral-950 text-white font-mono text-xs">Collect GHC 4.00</option>
-                                <option value="ghc3" className="bg-neutral-950 text-white font-mono text-xs">Collect GHC 3.00</option>
-                                <option value="ghc2" className="bg-neutral-950 text-white font-mono text-xs">Collect GHC 2.00</option>
-                                <option value="free" className="bg-neutral-950 text-white font-mono text-xs">100% Scholarship (GHC 0.00)</option>
-                                <option value="manual" className="bg-neutral-950 text-amber-400 font-mono text-xs font-black">⌨ Enter Manual Amount...</option>
-                              </>
-                            )}
-                            {isPaid && (
-                              <>
-                                <option value="unpaid" className="bg-neutral-950 text-white font-mono text-xs">Clear Payment (Unpaid)</option>
-                                <option value="discounted" className="bg-neutral-950 text-white font-mono text-xs">Switch to GHC {(5.00 - (student.discount || 0)).toFixed(2)}</option>
-                                {(student.discount !== undefined && student.discount > 0) && (
-                                  <option value="ghc5" className="bg-neutral-950 text-white font-mono text-xs">Switch to Full GHC 5.00</option>
-                                )}
-                                <option value="ghc4" className="bg-neutral-950 text-white font-mono text-xs">Switch to GHC 4.00</option>
-                                <option value="ghc3" className="bg-neutral-950 text-white font-mono text-xs">Switch to GHC 3.00</option>
-                                <option value="ghc2" className="bg-neutral-950 text-white font-mono text-xs">Switch to GHC 2.00</option>
-                                <option value="free" className="bg-neutral-950 text-white font-mono text-xs">Switch to Free (GHC 0.00)</option>
-                                <option value="manual" className="bg-neutral-950 text-amber-400 font-mono text-xs font-black">⌨ Enter Manual Amount...</option>
-                              </>
-                            )}
-                            {isAbsent && (
-                              <>
-                                <option value="discounted" className="bg-neutral-950 text-white font-mono text-xs">Pay GHC {(5.00 - (student.discount || 0)).toFixed(2)}</option>
-                                <option value="ghc5" className="bg-neutral-950 text-white font-mono text-xs">Pay Full GHC 5.00</option>
-                                <option value="ghc4" className="bg-neutral-950 text-white font-mono text-xs">Pay GHC 4.00</option>
-                                <option value="ghc3" className="bg-neutral-950 text-white font-mono text-xs">Pay GHC 3.00</option>
-                                <option value="ghc2" className="bg-neutral-950 text-white font-mono text-xs">Pay GHC 2.00</option>
-                                <option value="free" className="bg-neutral-950 text-white font-mono text-xs">Pay Free (GHC 0.00)</option>
-                                <option value="unpaid" className="bg-neutral-950 text-white font-mono text-xs">Clear (Unpaid)</option>
-                                <option value="manual" className="bg-neutral-950 text-amber-400 font-mono text-xs font-black">⌨ Enter Manual Amount...</option>
-                              </>
-                            )}
-                            <optgroup label="STUDENT REGISTER" className="bg-neutral-900 text-neutral-450 font-sans text-[10px] tracking-wider uppercase font-black">
-                              <option value="deactivate" className="bg-neutral-950 text-red-400 font-mono text-xs">⚠️ Deactivate / Left School</option>
-                              <option 
-                                value="delete" 
-                                className="bg-neutral-950 text-red-500 font-mono text-[11px] font-bold"
-                              >
-                                🗑️ Delete Student / Purge {currentUser?.role !== 'Administrator' ? '(Admin Only)' : ''}
-                              </option>
-                            </optgroup>
-                          </select>
-                        </div>
-
                         {/* Present or ¢0 trigger */}
                         <button
                           onClick={() => handleTogglePresentZeroPay(student.id)}
@@ -4834,6 +5390,370 @@ export const ClassRegister: React.FC = React.memo(() => {
             </motion.div>
               );
             })}
+
+            {/* CLASS ROSTER EXECUTIVE SUMMARY & LEDGER AUDIT TABLE (FOLDABLE / COLLAPSIBLE) */}
+            <div className="bg-neutral-950 p-6 sm:p-8 border-t-4 border-amber-400 space-y-6">
+              {/* Header & Fold Control */}
+              <div className={`flex flex-col xl:flex-row xl:items-center justify-between gap-6 ${isSummaryFolded ? '' : 'border-b border-neutral-800 pb-6'}`}>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="px-2.5 py-1 bg-amber-400/10 border border-amber-400/30 text-amber-400 font-mono text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5">
+                      <Sparkles size={14} className="stroke-[2.5]" />
+                      CLASS EXECUTIVE SUMMARY
+                    </span>
+                    <span className="text-[10px] font-mono font-bold text-neutral-300 bg-neutral-900 border border-neutral-800 px-2.5 py-1">
+                      GRADE {selectedClass} • {classStudents.length} REGISTERED PUPIL(S)
+                    </span>
+                    {isSummaryFolded && (
+                      <span className="text-[10px] font-mono font-bold text-amber-400 bg-amber-400/10 border border-amber-400/30 px-2.5 py-1 uppercase">
+                        [FOLDED / COLLAPSED]
+                      </span>
+                    )}
+                  </div>
+                  
+                  <div className="flex items-center gap-3 mt-2 cursor-pointer select-none group" onClick={() => setIsSummaryFolded(prev => !prev)}>
+                    <h3 className="text-xl sm:text-2xl font-mono font-black text-white uppercase tracking-tight group-hover:text-amber-400 transition-colors">
+                      Class {selectedClass} Student Performance & Financial Ledger
+                    </h3>
+                  </div>
+
+                  <p className="text-xs font-mono text-neutral-400 mt-1">
+                    Complete student breakdown featuring roll IDs, attendance tallies (presents & absents), total payments, outstanding balance, and account clearance status.
+                  </p>
+
+                  {/* Slim Quick Metrics bar shown when folded */}
+                  {isSummaryFolded && (
+                    <div className="flex items-center gap-2 pt-3 flex-wrap font-mono text-[11px] animate-fade-in">
+                      <span className="px-2.5 py-1 bg-neutral-900 border border-neutral-800 text-neutral-300 font-bold">
+                        Roster: <strong className="text-white">{classSummaryKPI.totalPupils}</strong>
+                      </span>
+                      <span className="px-2.5 py-1 bg-neutral-900 border border-emerald-900/50 text-emerald-400 font-bold">
+                        Cleared: <strong>{classSummaryKPI.clearedPupils}</strong>
+                      </span>
+                      <span className="px-2.5 py-1 bg-neutral-900 border border-red-900/50 text-red-400 font-bold">
+                        In Debt: <strong>{classSummaryKPI.inDebtPupils}</strong>
+                      </span>
+                      <span className="px-2.5 py-1 bg-neutral-900 border border-amber-900/50 text-amber-400 font-bold">
+                        Collected: <strong>{currencySymbol} {classSummaryKPI.totalCollected.toFixed(2)}</strong>
+                      </span>
+                      <span className="px-2.5 py-1 bg-neutral-900 border border-rose-900/50 text-rose-400 font-bold">
+                        Arrears: <strong>{currencySymbol} {classSummaryKPI.totalArrears.toFixed(2)}</strong>
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-3 shrink-0 flex-wrap">
+                  {/* Fold / Unfold Primary Toggle Button */}
+                  <button
+                    type="button"
+                    onClick={() => setIsSummaryFolded(prev => !prev)}
+                    className="px-4 py-2.5 bg-amber-400 hover:bg-amber-300 text-black border-2 border-amber-400 font-mono text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-md"
+                    title={isSummaryFolded ? "Expand Class Executive Summary & Ledger Table" : "Fold / Collapse Class Executive Summary & Ledger Table"}
+                  >
+                    {isSummaryFolded ? (
+                      <>
+                        <ChevronDown size={16} className="stroke-[3]" />
+                        <span>Expand List ({classSummaryData.length})</span>
+                      </>
+                    ) : (
+                      <>
+                        <ChevronUp size={16} className="stroke-[3]" />
+                        <span>Fold / Collapse List</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleExportSummaryPDF}
+                    className="px-3.5 py-2.5 bg-neutral-900 hover:bg-neutral-800 border-2 border-neutral-700 hover:border-amber-400 text-white font-mono text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer"
+                    title="Generate and Download official Class Summary PDF report"
+                  >
+                    <FileText size={15} className="text-amber-400 stroke-[2.5]" />
+                    <span>Download PDF</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleExportSummaryCSV}
+                    className="px-3.5 py-2.5 bg-neutral-900 hover:bg-neutral-800 border-2 border-neutral-700 hover:border-amber-400 text-white font-mono text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer"
+                    title="Export Class Summary to CSV spreadsheet"
+                  >
+                    <Download size={15} className="text-amber-400 stroke-[2.5]" />
+                    <span>Export CSV</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => window.print()}
+                    className="px-3.5 py-2.5 bg-neutral-900 hover:bg-neutral-800 border-2 border-neutral-700 hover:border-amber-400 text-white font-mono text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer"
+                    title="Print Class Summary Report"
+                  >
+                    <Printer size={15} className="text-amber-400 stroke-[2.5]" />
+                    <span>Print Ledger</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Foldable Content Body */}
+              {!isSummaryFolded && (
+                <div className="space-y-6 animate-fade-in">
+                  {/* KPI Summary Cards Bar */}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 font-mono">
+                    <div className="p-3.5 bg-neutral-900 border border-neutral-800 space-y-1">
+                      <span className="text-[9px] text-neutral-500 font-black uppercase tracking-wider block">Total Class Roster</span>
+                      <span className="text-lg font-black text-white">{classSummaryKPI.totalPupils} Pupils</span>
+                    </div>
+                    <div className="p-3.5 bg-neutral-900 border border-neutral-800 space-y-1">
+                      <span className="text-[9px] text-emerald-400 font-black uppercase tracking-wider block">Cleared / Up-to-Date</span>
+                      <span className="text-lg font-black text-emerald-400">{classSummaryKPI.clearedPupils} Pupils</span>
+                    </div>
+                    <div className="p-3.5 bg-neutral-900 border border-neutral-800 space-y-1">
+                      <span className="text-[9px] text-red-400 font-black uppercase tracking-wider block">In Arrears / Debt</span>
+                      <span className="text-lg font-black text-red-400">{classSummaryKPI.inDebtPupils} Pupils</span>
+                    </div>
+                    <div className="p-3.5 bg-neutral-900 border border-neutral-800 space-y-1">
+                      <span className="text-[9px] text-amber-400 font-black uppercase tracking-wider block">Total Amount Paid</span>
+                      <span className="text-lg font-black text-amber-400">{currencySymbol} {classSummaryKPI.totalCollected.toFixed(2)}</span>
+                    </div>
+                    <div className="p-3.5 bg-neutral-900 border border-neutral-800 space-y-1 col-span-2 sm:col-span-1">
+                      <span className="text-[9px] text-rose-400 font-black uppercase tracking-wider block">Total Arrears Balance</span>
+                      <span className="text-lg font-black text-rose-400">{currencySymbol} {classSummaryKPI.totalArrears.toFixed(2)}</span>
+                    </div>
+                  </div>
+
+                  {/* Filter & Search Toolbar */}
+              <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 bg-neutral-900 p-3.5 border border-neutral-800">
+                {/* Search Input */}
+                <div className="relative flex-1 min-w-[240px]">
+                  <Search className="absolute left-3 top-2.5 text-neutral-500" size={15} />
+                  <input
+                    type="text"
+                    value={summarySearch}
+                    onChange={(e) => setSummarySearch(e.target.value)}
+                    placeholder="Search pupil name, ID, roll #, or status in summary..."
+                    className="w-full bg-neutral-950 border border-neutral-800 py-2 pl-9 pr-8 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600"
+                  />
+                  {summarySearch && (
+                    <button
+                      type="button"
+                      onClick={() => setSummarySearch('')}
+                      className="absolute right-2.5 top-2 text-[10px] font-mono text-neutral-400 hover:text-white"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+
+                {/* Filter Chips */}
+                <div className="flex items-center gap-1.5 font-mono flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setSummaryFilter('all')}
+                    className={`px-3 py-1.5 text-[10px] font-black uppercase tracking-wider transition-all border cursor-pointer ${
+                      summaryFilter === 'all'
+                        ? 'bg-amber-400 text-black border-amber-400'
+                        : 'bg-neutral-950 text-neutral-400 border-neutral-800 hover:border-neutral-700 hover:text-white'
+                    }`}
+                  >
+                    All ({classSummaryData.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSummaryFilter('cleared')}
+                    className={`px-3 py-1.5 text-[10px] font-black uppercase tracking-wider transition-all border cursor-pointer ${
+                      summaryFilter === 'cleared'
+                        ? 'bg-emerald-500 text-black border-emerald-500'
+                        : 'bg-neutral-950 text-emerald-400 border-neutral-800 hover:border-emerald-800/60'
+                    }`}
+                  >
+                    Cleared ({classSummaryKPI.clearedPupils})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSummaryFilter('debt')}
+                    className={`px-3 py-1.5 text-[10px] font-black uppercase tracking-wider transition-all border cursor-pointer ${
+                      summaryFilter === 'debt'
+                        ? 'bg-red-500 text-white border-red-500'
+                        : 'bg-neutral-950 text-red-400 border-neutral-800 hover:border-red-800/60'
+                    }`}
+                  >
+                    In Debt ({classSummaryKPI.inDebtPupils})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSummaryFilter('absent')}
+                    className={`px-3 py-1.5 text-[10px] font-black uppercase tracking-wider transition-all border cursor-pointer ${
+                      summaryFilter === 'absent'
+                        ? 'bg-purple-600 text-white border-purple-600'
+                        : 'bg-neutral-950 text-purple-400 border-neutral-800 hover:border-purple-800/60'
+                    }`}
+                  >
+                    Has Absents ({classSummaryData.filter(d => d.absentsCount > 0).length})
+                  </button>
+                </div>
+              </div>
+
+              {/* Student Summary Table */}
+              <div className="overflow-x-auto border-2 border-neutral-800 bg-neutral-900">
+                <table className="w-full text-left border-collapse font-mono text-xs">
+                  <thead>
+                    <tr className="bg-neutral-950 text-neutral-400 border-b-2 border-neutral-800 text-[10px] uppercase font-black tracking-wider">
+                      <th className="p-3.5 border-r border-neutral-800 w-20 text-center">Roll #</th>
+                      <th className="p-3.5 border-r border-neutral-800 min-w-[200px]">Student Name & Details</th>
+                      <th className="p-3.5 border-r border-neutral-800 text-center w-28">Presents</th>
+                      <th className="p-3.5 border-r border-neutral-800 text-center w-28">Absents</th>
+                      <th className="p-3.5 border-r border-neutral-800 text-right w-32">Amount Paid</th>
+                      <th className="p-3.5 border-r border-neutral-800 text-right w-36">Balance / Debt</th>
+                      <th className="p-3.5 border-r border-neutral-800 text-center w-40">Account Status</th>
+                      <th className="p-3.5 text-center w-32">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-800/80">
+                    {filteredClassSummary.length === 0 ? (
+                      <tr>
+                        <td colSpan={8} className="p-8 text-center text-neutral-500 font-mono text-xs uppercase font-bold">
+                          No pupil records found matching summary filters.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredClassSummary.map((item, idx) => {
+                        return (
+                          <tr 
+                            key={item.student.id} 
+                            className={`hover:bg-neutral-850/80 transition-colors ${
+                              idx % 2 === 0 ? 'bg-neutral-900' : 'bg-neutral-950/40'
+                            }`}
+                          >
+                            {/* Roll Number */}
+                            <td className="p-3.5 border-r border-neutral-800/80 text-center font-black text-amber-400">
+                              #{item.rollNumber}
+                            </td>
+
+                            {/* Student Name */}
+                            <td className="p-3.5 border-r border-neutral-800/80">
+                              <div className="flex items-center gap-2.5">
+                                {item.student.photoUrl ? (
+                                  <img 
+                                    src={item.student.photoUrl} 
+                                    alt={item.name} 
+                                    className="w-7 h-7 rounded-full object-cover border border-neutral-700 shrink-0" 
+                                  />
+                                ) : (
+                                  <div className="w-7 h-7 rounded-full bg-neutral-800 border border-neutral-700 flex items-center justify-center font-black text-[10px] text-amber-400 shrink-0">
+                                    {item.name.charAt(0)}
+                                  </div>
+                                )}
+                                <div className="min-w-0">
+                                  <span className="font-bold text-white block truncate text-xs">{item.name}</span>
+                                  <div className="flex items-center gap-1.5 mt-0.5">
+                                    <span className="text-[9px] text-neutral-400 font-mono">ID: {item.student.id}</span>
+                                    <span className="text-[8px] bg-neutral-800 text-neutral-300 px-1 py-0.2 border border-neutral-700 font-black uppercase">
+                                      {item.student.paymentType === 'Term' ? 'Term' : 'Daily'}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                            </td>
+
+                            {/* Presents Tally */}
+                            <td className="p-3.5 border-r border-neutral-800/80 text-center font-bold">
+                              <span className="inline-flex items-center justify-center px-2 py-0.5 bg-emerald-950/60 text-emerald-400 border border-emerald-800/60 rounded-xs font-mono text-xs font-black">
+                                {item.presentsCount} Days
+                              </span>
+                            </td>
+
+                            {/* Absents Tally */}
+                            <td className="p-3.5 border-r border-neutral-800/80 text-center font-bold">
+                              <span className={`inline-flex items-center justify-center px-2 py-0.5 rounded-xs font-mono text-xs font-black ${
+                                item.absentsCount > 0 
+                                  ? 'bg-red-950/80 text-red-400 border border-red-800/80' 
+                                  : 'bg-neutral-950 text-neutral-500 border border-neutral-850'
+                              }`}>
+                                {item.absentsCount} Days
+                              </span>
+                            </td>
+
+                            {/* Amount Paid */}
+                            <td className="p-3.5 border-r border-neutral-800/80 text-right font-black text-amber-400">
+                              {currencySymbol} {item.totalPaid.toFixed(2)}
+                            </td>
+
+                            {/* Balance / Debt */}
+                            <td className="p-3.5 border-r border-neutral-800/80 text-right font-black">
+                              {item.totalDebt > 0 ? (
+                                <span className="text-red-400">
+                                  -{currencySymbol} {item.totalDebt.toFixed(2)}
+                                </span>
+                              ) : item.runningBalance > 0 ? (
+                                <span className="text-sky-400">
+                                  +{currencySymbol} {item.runningBalance.toFixed(2)}
+                                </span>
+                              ) : (
+                                <span className="text-emerald-400">
+                                  {currencySymbol} 0.00
+                                </span>
+                              )}
+                            </td>
+
+                            {/* Account Status Badge */}
+                            <td className="p-3.5 border-r border-neutral-800/80 text-center">
+                              {item.statusType === 'debt' ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-red-950/80 text-red-400 border border-red-800 text-[9.5px] font-black uppercase tracking-wider rounded-xs">
+                                  <AlertCircle size={11} className="shrink-0" />
+                                  {item.statusText}
+                                </span>
+                              ) : item.statusType === 'surplus' ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-sky-950/80 text-sky-300 border border-sky-800 text-[9.5px] font-black uppercase tracking-wider rounded-xs">
+                                  <CheckCircle2 size={11} className="shrink-0" />
+                                  {item.statusText}
+                                </span>
+                              ) : item.statusType === 'term' ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-indigo-950/80 text-indigo-300 border border-indigo-800 text-[9.5px] font-black uppercase tracking-wider rounded-xs">
+                                  ★ {item.statusText}
+                                </span>
+                              ) : item.statusType === 'scholarship' ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-teal-950/80 text-teal-300 border border-teal-800 text-[9.5px] font-black uppercase tracking-wider rounded-xs">
+                                  🎓 {item.statusText}
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-950/80 text-emerald-400 border border-emerald-800 text-[9.5px] font-black uppercase tracking-wider rounded-xs">
+                                  <CheckCircle2 size={11} className="shrink-0" />
+                                  {item.statusText}
+                                </span>
+                              )}
+                            </td>
+
+                            {/* Quick Actions */}
+                            <td className="p-3.5 text-center">
+                              <div className="flex items-center justify-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => handleTogglePayment(item.student.id)}
+                                  className="px-2 py-1 bg-amber-400 hover:bg-amber-300 text-black font-black text-[9px] uppercase tracking-wider rounded-xs cursor-pointer transition-colors"
+                                  title="Record payment / check-in"
+                                >
+                                  ⚡ Pay
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setHistoryStudent(item.student)}
+                                  className="p-1 bg-neutral-950 hover:bg-neutral-800 text-neutral-400 hover:text-white border border-neutral-800 rounded-xs cursor-pointer transition-colors"
+                                  title="View full financial history drawer"
+                                >
+                                  <History size={13} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
 
             {/* ACCOUNTANT RECONCILIATION SUMMARY DECK */}
             <div className="bg-neutral-950 p-6 sm:p-8 border-t-2 border-neutral-800 space-y-6">
@@ -5917,6 +6837,19 @@ export const ClassRegister: React.FC = React.memo(() => {
                   </button>
                   <button
                     type="button"
+                    onClick={() => setHistoryModalTab('history')}
+                    className={`flex-1 py-3 px-1 text-center uppercase tracking-wider font-extrabold border-b-2 flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                      historyModalTab === 'history'
+                        ? 'border-amber-400 text-amber-400 bg-neutral-950/50'
+                        : 'border-transparent text-neutral-500 hover:text-neutral-300'
+                    }`}
+                    id="tab-pupil-account-history"
+                  >
+                    <History size={14} className="shrink-0" />
+                    <span>Account History</span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setHistoryModalTab('ledger')}
                     className={`flex-1 py-3 px-1 text-center uppercase tracking-wider font-extrabold border-b-2 flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                       historyModalTab === 'ledger'
@@ -6368,6 +7301,228 @@ export const ClassRegister: React.FC = React.memo(() => {
                     </div>
                   )}
 
+                  {historyModalTab === 'history' && (
+                    <div className="space-y-5 no-print">
+                      {/* Summary Stat Cards */}
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 font-mono text-xs">
+                        <div className="bg-neutral-950 p-3.5 border border-neutral-850 rounded-xs">
+                          <span className="text-[9px] font-black text-neutral-500 uppercase block">Total Fees Paid</span>
+                          <strong className="text-base text-emerald-400 font-black mt-0.5 block">
+                            {currencySymbol} {payments.filter(p => p.studentId === historyStudent.id && !p.isAbsent).reduce((sum, p) => sum + p.amount, 0).toFixed(2)}
+                          </strong>
+                          <span className="text-[9px] text-neutral-500 font-sans block mt-0.5">
+                            {payments.filter(p => p.studentId === historyStudent.id && !p.isAbsent).length} Payments Logged
+                          </span>
+                        </div>
+
+                        <div className="bg-neutral-950 p-3.5 border border-neutral-850 rounded-xs">
+                          <span className="text-[9px] font-black text-neutral-500 uppercase block">Attendance Rate</span>
+                          <strong className="text-base text-white font-black mt-0.5 block">
+                            {attendancePct}%
+                          </strong>
+                          <span className="text-[9px] text-amber-400 font-sans block mt-0.5">
+                            {presentDaysTerm} Days Present
+                          </span>
+                        </div>
+
+                        <div className="bg-neutral-950 p-3.5 border border-neutral-850 rounded-xs">
+                          <span className="text-[9px] font-black text-neutral-500 uppercase block">Absences Recorded</span>
+                          <strong className="text-base text-amber-500 font-black mt-0.5 block">
+                            {completeHistoryList.filter(r => r.isAbsent).length} Days
+                          </strong>
+                          <span className="text-[9px] text-neutral-500 font-sans block mt-0.5">
+                            Fee Exempted
+                          </span>
+                        </div>
+
+                        <div className="bg-neutral-950 p-3.5 border border-neutral-850 rounded-xs">
+                          <span className="text-[9px] font-black text-neutral-500 uppercase block">Outstanding Debt</span>
+                          <strong className={`text-base font-black mt-0.5 block ${totalArrearsGhc > 0 ? 'text-red-500' : 'text-emerald-400'}`}>
+                            {currencySymbol} {totalArrearsGhc.toFixed(2)}
+                          </strong>
+                          <span className="text-[9px] font-sans block mt-0.5 text-neutral-500">
+                            {unpaidDaysList.length} Arrears Days
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Search & Category Filter Bar */}
+                      <div className="bg-neutral-950 p-3.5 border border-neutral-850 space-y-3 font-mono">
+                        <div className="flex flex-col sm:flex-row gap-3 justify-between items-center">
+                          {/* Search Input */}
+                          <div className="relative w-full sm:w-72">
+                            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-neutral-500" />
+                            <input
+                              type="text"
+                              value={accountHistorySearch}
+                              onChange={(e) => setAccountHistorySearch(e.target.value)}
+                              placeholder="Search date, ref, collector, notes..."
+                              className="w-full bg-neutral-900 border border-neutral-800 text-xs text-white pl-9 pr-8 py-2 focus:outline-none focus:border-amber-400 font-mono rounded-xs"
+                            />
+                            {accountHistorySearch && (
+                              <button
+                                type="button"
+                                onClick={() => setAccountHistorySearch('')}
+                                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-neutral-500 hover:text-white"
+                              >
+                                <X size={12} />
+                              </button>
+                            )}
+                          </div>
+
+                          {/* Filter Chips */}
+                          <div className="flex items-center gap-1.5 flex-wrap w-full sm:w-auto text-[10px]">
+                            <button
+                              type="button"
+                              onClick={() => setAccountHistoryFilter('all')}
+                              className={`px-2.5 py-1.5 border font-extrabold uppercase transition-all cursor-pointer ${
+                                accountHistoryFilter === 'all'
+                                  ? 'bg-amber-400 text-neutral-950 border-amber-400'
+                                  : 'bg-neutral-900 text-neutral-400 border-neutral-800 hover:text-white'
+                              }`}
+                            >
+                              All ({accountHistoryFeed.length})
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setAccountHistoryFilter('payments')}
+                              className={`px-2.5 py-1.5 border font-extrabold uppercase transition-all cursor-pointer ${
+                                accountHistoryFilter === 'payments'
+                                  ? 'bg-emerald-500 text-neutral-950 border-emerald-500'
+                                  : 'bg-neutral-900 text-neutral-400 border-neutral-800 hover:text-emerald-400'
+                              }`}
+                            >
+                              Payments ({accountHistoryFeed.filter(i => i.type === 'payment').length})
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setAccountHistoryFilter('attendance')}
+                              className={`px-2.5 py-1.5 border font-extrabold uppercase transition-all cursor-pointer ${
+                                accountHistoryFilter === 'attendance'
+                                  ? 'bg-sky-500 text-neutral-950 border-sky-500'
+                                  : 'bg-neutral-900 text-neutral-400 border-neutral-800 hover:text-sky-400'
+                              }`}
+                            >
+                              Attendance ({accountHistoryFeed.filter(i => i.type === 'present' || i.type === 'absent' || i.type === 'term_pass').length})
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setAccountHistoryFilter('arrears')}
+                              className={`px-2.5 py-1.5 border font-extrabold uppercase transition-all cursor-pointer ${
+                                accountHistoryFilter === 'arrears'
+                                  ? 'bg-red-500 text-neutral-950 border-red-500'
+                                  : 'bg-neutral-900 text-neutral-400 border-neutral-800 hover:text-red-400'
+                              }`}
+                            >
+                              Arrears ({accountHistoryFeed.filter(i => i.type === 'arrears').length})
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Chronological List Table */}
+                      <div className="bg-neutral-950 border border-neutral-850 overflow-hidden rounded-xs">
+                        {filteredAccountHistory.length === 0 ? (
+                          <div className="p-8 text-center text-neutral-500 space-y-2 font-mono">
+                            <History size={24} className="mx-auto text-neutral-600 mb-1" />
+                            <p className="text-xs font-bold uppercase text-neutral-400">No account history entries found.</p>
+                            <p className="text-[10px] text-neutral-500">
+                              {accountHistorySearch || accountHistoryFilter !== 'all'
+                                ? 'Try adjusting your search query or filter chips.'
+                                : 'No payment or attendance entries recorded for this student yet.'}
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="divide-y divide-neutral-900 max-h-[26rem] overflow-y-auto">
+                            {filteredAccountHistory.map((item) => {
+                              let badgeBg = 'bg-neutral-900 text-neutral-300 border-neutral-800';
+                              let IconComponent = CalendarDays;
+
+                              if (item.type === 'payment') {
+                                badgeBg = 'bg-emerald-950/80 text-emerald-400 border-emerald-800/80';
+                                IconComponent = Coins;
+                              } else if (item.type === 'present') {
+                                badgeBg = 'bg-sky-950/80 text-sky-400 border-sky-800/80';
+                                IconComponent = UserCheck;
+                              } else if (item.type === 'term_pass') {
+                                badgeBg = 'bg-amber-950/80 text-amber-400 border-amber-800/80';
+                                IconComponent = Award;
+                              } else if (item.type === 'absent') {
+                                badgeBg = 'bg-neutral-900 text-amber-500 border-amber-800/50';
+                                IconComponent = CalendarX;
+                              } else if (item.type === 'arrears') {
+                                badgeBg = 'bg-red-950/80 text-red-400 border-red-800/80';
+                                IconComponent = ShieldAlert;
+                              }
+
+                              return (
+                                <div
+                                  key={item.id}
+                                  className="p-3 sm:p-4 hover:bg-neutral-900/50 transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-3 font-mono text-xs"
+                                >
+                                  {/* Left info block */}
+                                  <div className="flex items-start gap-3">
+                                    <div className={`p-2 border shrink-0 rounded-xs mt-0.5 ${badgeBg}`}>
+                                      <IconComponent size={16} />
+                                    </div>
+
+                                    <div className="space-y-1">
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <span className="text-white font-extrabold uppercase">{item.title}</span>
+                                        <span className="text-[9px] text-neutral-400 font-mono bg-neutral-900 px-1.5 py-0.5 border border-neutral-800 rounded-xs">
+                                          {item.date}
+                                        </span>
+                                        {item.refCode && (
+                                          <span className="text-[9px] text-amber-400 font-mono bg-neutral-900 px-1.5 py-0.5 border border-neutral-800 rounded-xs">
+                                            {item.refCode}
+                                          </span>
+                                        )}
+                                      </div>
+
+                                      <p className="text-[10.5px] text-neutral-400 font-sans leading-tight">
+                                        {item.subtitle}
+                                      </p>
+
+                                      <div className="flex items-center gap-3 text-[9.5px] text-neutral-500 pt-0.5">
+                                        <span>Auditor: <strong className="text-neutral-300 font-mono">{item.collector}</strong></span>
+                                        {item.method && (
+                                          <span>Method: <strong className="text-neutral-300 font-mono">{item.method}</strong></span>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {/* Right side amount & action */}
+                                  <div className="flex items-center justify-between sm:justify-end gap-3 pt-2 sm:pt-0 border-t sm:border-t-0 border-neutral-900">
+                                    {item.amount !== undefined && (
+                                      <div className="text-right">
+                                        <span className={`text-sm font-black font-mono block ${item.type === 'payment' ? 'text-emerald-400' : 'text-red-400'}`}>
+                                          {item.type === 'payment' ? '+' : '-'} {currencySymbol} {item.amount.toFixed(2)}
+                                        </span>
+                                      </div>
+                                    )}
+
+                                    {item.paymentRecord && (
+                                      <button
+                                        type="button"
+                                        onClick={() => setSelectedRecordForReceipt({ student: historyStudent, payment: item.paymentRecord! })}
+                                        className="bg-neutral-900 hover:bg-neutral-800 text-amber-400 hover:text-amber-300 border border-neutral-800 px-2.5 py-1.5 text-[9.5px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer rounded-xs flex items-center gap-1 shrink-0"
+                                        title="View / Print Receipt"
+                                      >
+                                        <Receipt size={12} />
+                                        <span>Receipt</span>
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
                   {historyModalTab === 'ledger' && (
                     <div className="space-y-5 no-print">
                       {/* Numeric Stats Grid */}
@@ -6473,15 +7628,28 @@ export const ClassRegister: React.FC = React.memo(() => {
                             Recent Transaction History Logs
                           </h4>
                           {studentPayments.length > 0 && (currentUser?.role === 'Administrator' || currentUser?.role === 'Headmaster' || currentUser?.role === 'Accountant') && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setShowDeleteAllPaymentsConfirm(true);
-                              }}
-                              className="px-2.5 py-1 text-[9px] font-mono font-black uppercase text-red-500 hover:text-red-400 border border-red-500/30 hover:border-red-500/60 bg-red-950/10 hover:bg-red-950/20 transition-all cursor-pointer inline-flex items-center gap-1 shrink-0"
-                            >
-                              <Trash2 size={11} /> Delete All Logs
-                            </button>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const res = purgeAdvancePayments(historyStudent.id);
+                                  showToast(res.message);
+                                }}
+                                className="px-2.5 py-1 text-[9px] font-mono font-black uppercase text-amber-400 hover:text-amber-300 border border-amber-500/30 hover:border-amber-500/60 bg-amber-950/10 hover:bg-amber-950/20 transition-all cursor-pointer inline-flex items-center gap-1 shrink-0"
+                                title="Purge advance payment records for this pupil"
+                              >
+                                <Trash2 size={11} /> Purge Advances
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setShowDeleteAllPaymentsConfirm(true);
+                                }}
+                                className="px-2.5 py-1 text-[9px] font-mono font-black uppercase text-red-500 hover:text-red-400 border border-red-500/30 hover:border-red-500/60 bg-red-950/10 hover:bg-red-950/20 transition-all cursor-pointer inline-flex items-center gap-1 shrink-0"
+                              >
+                                <Trash2 size={11} /> Delete All Logs
+                              </button>
+                            </div>
                           )}
                         </div>
 
@@ -6495,6 +7663,8 @@ export const ClassRegister: React.FC = React.memo(() => {
                               // format date nicely
                               const dateParts = p.date.split('-');
                               const dayLabel = dateParts.length === 3 ? `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}` : p.date;
+                              const isDup = studentPayments.filter(sp => sp.date === p.date).length > 1;
+                              const isAdv = (p.notes || '').toLowerCase().includes('advance') || (p.notes || '').toLowerCase().includes('prepaid') || (p.notes || '').toLowerCase().includes('covered') || (p.notes || '').toLowerCase().includes('top-up added') || (p.amount === 0 && (p.notes || '').toLowerCase().includes('covered'));
                               
                               return (
                                 <div key={p.id} className="flex justify-between items-center p-3 text-xs font-mono">
@@ -6504,6 +7674,16 @@ export const ClassRegister: React.FC = React.memo(() => {
                                       <span className="text-[9px] px-1.5 py-0.5 bg-neutral-900 border border-neutral-800 text-emerald-400 font-black">
                                         GHC {p.amount.toFixed(2)}
                                       </span>
+                                      {isDup && (
+                                        <span className="text-[8px] font-black uppercase px-1.5 py-0.5 bg-red-950 text-red-400 border border-red-800">
+                                          DUPLICATE
+                                        </span>
+                                      )}
+                                      {isAdv && (
+                                        <span className="text-[8px] font-black uppercase px-1.5 py-0.5 bg-amber-950 text-amber-400 border border-amber-800">
+                                          ADVANCE
+                                        </span>
+                                      )}
                                     </div>
                                     <p className="text-[9px] text-neutral-500 font-bold">Ref: {p.id} • Auditor: {p.collectedBy} {p.notes ? `• ${p.notes}` : ''}</p>
                                   </div>
@@ -7523,6 +8703,126 @@ export const ClassRegister: React.FC = React.memo(() => {
         </div>
       )}
 
+      {/* REPEATED & ADVANCE PAYMENT PURGE CLEANUP MODAL OVERLAY */}
+      {showPurgeModal && (() => {
+        const map = new Map<string, number>();
+        payments.forEach(p => {
+          const k = `${p.studentId}_${p.date}`;
+          map.set(k, (map.get(k) || 0) + 1);
+        });
+        let dupCount = 0;
+        map.forEach(c => { if (c > 1) dupCount += (c - 1); });
+
+        const advCount = payments.filter(p => {
+          const n = (p.notes || '').toLowerCase();
+          return n.includes('advance') || n.includes('prepaid') || n.includes('covered') || n.includes('block prepaid') || n.includes('top-up added') || (p.amount === 0 && n.includes('covered'));
+        }).length;
+
+        return (
+          <div className="fixed inset-0 bg-neutral-950/90 backdrop-blur-md flex items-center justify-center p-4 z-55" style={{ zIndex: 100 }}>
+            <div className="bg-neutral-900 border-4 border-amber-400 max-w-lg w-full p-8 shadow-[8px_8px_0px_0px_#f59e0b] space-y-6">
+              <div className="flex items-center justify-between pb-3 border-b-2 border-neutral-800">
+                <div className="flex items-center gap-3 text-amber-400">
+                  <Trash2 size={22} className="stroke-[2.5]" />
+                  <h3 className="text-sm font-black uppercase tracking-widest text-white">Clean Duplicate & Advance Payments</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowPurgeModal(false)}
+                  className="p-1 text-neutral-400 hover:text-white cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <p className="text-xs text-neutral-300 leading-relaxed font-bold">
+                  Now that bulk date entry is available for daily fees, you can safely clean up repeated payment entries, duplicate daily fee submissions, and advance payment markers.
+                </p>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-neutral-950 p-4 border border-neutral-800 space-y-1">
+                    <span className="text-[10px] font-mono uppercase font-black text-neutral-400 block">Duplicate Daily Fees</span>
+                    <span className={`text-xl font-black font-mono ${dupCount > 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                      {dupCount} {dupCount === 1 ? 'Record' : 'Records'}
+                    </span>
+                    <p className="text-[9px] text-neutral-500 font-bold">Multiple fee entries on the same day for a pupil</p>
+                  </div>
+
+                  <div className="bg-neutral-950 p-4 border border-neutral-800 space-y-1">
+                    <span className="text-[10px] font-mono uppercase font-black text-neutral-400 block">Advance & Prepaid Logs</span>
+                    <span className={`text-xl font-black font-mono ${advCount > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                      {advCount} {advCount === 1 ? 'Record' : 'Records'}
+                    </span>
+                    <p className="text-[9px] text-neutral-500 font-bold">Advance block logs & zero-amount prepaid markers</p>
+                  </div>
+                </div>
+
+                <div className="bg-neutral-950 p-3 border border-neutral-800 text-[10px] text-neutral-400 font-mono space-y-1">
+                  <span className="text-amber-400 font-black uppercase block">ℹ️ Safe Cleaning Guarantee:</span>
+                  <p className="leading-normal">
+                    • Purging duplicates will keep 1 valid primary payment per pupil per day and delete repeated submissions.<br/>
+                    • Purging advances will delete advance block records & 0-amount markers so you can log dates cleanly via Bulk Dates or Daily Check-in.
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-2 pt-2">
+                <button
+                  type="button"
+                  disabled={dupCount === 0}
+                  onClick={() => {
+                    const res = purgeDuplicatePayments();
+                    showToast(res.message);
+                    playFeedbackSound?.('success');
+                  }}
+                  className="w-full text-xs bg-red-950/80 hover:bg-red-900 border border-red-700 text-red-200 py-3 font-black uppercase tracking-wider transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <Trash2 size={14} />
+                  Purge Duplicate Payments Only ({dupCount})
+                </button>
+
+                <button
+                  type="button"
+                  disabled={advCount === 0}
+                  onClick={() => {
+                    const res = purgeAdvancePayments();
+                    showToast(res.message);
+                    playFeedbackSound?.('success');
+                  }}
+                  className="w-full text-xs bg-amber-950/80 hover:bg-amber-900 border border-amber-700 text-amber-200 py-3 font-black uppercase tracking-wider transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <Trash2 size={14} />
+                  Purge Advance & Prepaid Logs Only ({advCount})
+                </button>
+
+                <button
+                  type="button"
+                  disabled={dupCount === 0 && advCount === 0}
+                  onClick={() => {
+                    const res = purgeRepeatedAndAdvancePayments({ duplicates: true, advance: true });
+                    showToast(res.message);
+                    playFeedbackSound?.('success');
+                  }}
+                  className="w-full text-xs bg-amber-400 hover:bg-amber-300 text-black py-3.5 font-black uppercase tracking-wider transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2 font-mono shadow-md"
+                >
+                  <CheckCircle2 size={15} />
+                  Clean All Repeated & Advance Records ({dupCount + advCount})
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowPurgeModal(false)}
+                  className="w-full text-xs bg-neutral-950 hover:bg-neutral-900 border border-neutral-800 text-neutral-400 py-2.5 font-black uppercase tracking-wider transition-colors cursor-pointer mt-2"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* TRANSACTION PAYMENT DELETION CONFIRMATION MODAL OVERLAY */}
       {paymentToDelete && (
         <div className="fixed inset-0 bg-neutral-950/90 backdrop-blur-md flex items-center justify-center p-4 z-55" style={{ zIndex: 100 }}>
@@ -8051,40 +9351,116 @@ export const ClassRegister: React.FC = React.memo(() => {
                 </div>
               </div>
 
-              {/* Quick Filters */}
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const unmarked = (activeTerm?.schoolDays ?? [])
-                      .filter(d => d <= currentDate)
-                      .filter(d => !payments.some(p => p.studentId === bulkPupil.id && p.date === d && !p.id.endsWith('_debt')));
-                    setSelectedBulkDates(unmarked);
-                  }}
-                  className="px-3 py-1.5 bg-neutral-950 hover:bg-neutral-850 border border-neutral-800 text-[10px] font-mono hover:text-white text-neutral-400 tracking-wider uppercase cursor-pointer"
-                >
-                  ☑ Select All Unmarked
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    // last 5 school days
-                    const past5 = (activeTerm?.schoolDays ?? [])
-                      .filter(d => d <= currentDate)
-                      .slice(-5);
-                    setSelectedBulkDates(past5);
-                  }}
-                  className="px-3 py-1.5 bg-neutral-950 hover:bg-neutral-850 border border-neutral-800 text-[10px] font-mono hover:text-white text-neutral-400 tracking-wider uppercase cursor-pointer"
-                >
-                  🕒 Past 5 School Days
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSelectedBulkDates([])}
-                  className="px-3 py-1.5 bg-neutral-950 hover:bg-neutral-850 border border-neutral-800 text-[10px] font-mono hover:text-white text-neutral-400 tracking-wider uppercase cursor-pointer"
-                >
-                  ☒ Clear Selection
-                </button>
+              {/* Date Range Selection Controls for Bulk Fee Entry */}
+              <div className="bg-neutral-950 p-4 border-2 border-amber-400/50 space-y-3 font-mono">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-[10px] text-amber-400 font-black uppercase tracking-widest flex items-center gap-1.5">
+                    <CalendarDays size={14} className="stroke-[2.5]" />
+                    <span>BULK FEE ENTRY DATE RANGE (START DATE ➔ END DATE)</span>
+                  </span>
+                  <span className="text-[10px] text-neutral-400 font-bold">
+                    Selected: <strong className="text-amber-300 font-black">{selectedBulkDates.length} Days</strong>
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 items-end">
+                  <div className="space-y-1">
+                    <label className="text-[9px] text-neutral-400 uppercase font-black block">Start Date</label>
+                    <input
+                      type="date"
+                      value={bulkRangeStartDate}
+                      onChange={(e) => setBulkRangeStartDate(e.target.value)}
+                      className="w-full bg-neutral-900 border border-neutral-700 text-white font-mono text-xs p-2 focus:outline-none focus:border-amber-400 [color-scheme:dark]"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[9px] text-neutral-400 uppercase font-black block">End Date</label>
+                    <input
+                      type="date"
+                      value={bulkRangeEndDate}
+                      onChange={(e) => setBulkRangeEndDate(e.target.value)}
+                      className="w-full bg-neutral-900 border border-neutral-700 text-white font-mono text-xs p-2 focus:outline-none focus:border-amber-400 [color-scheme:dark]"
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => handleSelectDateRangeForBulkPupil(bulkRangeStartDate, bulkRangeEndDate)}
+                    className="w-full py-2 bg-amber-400 hover:bg-amber-300 text-black font-black text-xs uppercase tracking-wider transition-all cursor-pointer shadow-sm flex items-center justify-center gap-1.5"
+                  >
+                    <CalendarDays size={14} className="stroke-[3]" />
+                    <span>Apply Date Range</span>
+                  </button>
+                </div>
+
+                {/* Quick Range Presets */}
+                <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-neutral-850">
+                  <span className="text-[9px] text-neutral-500 uppercase font-bold mr-1">Presets:</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const d = new Date(currentDate);
+                      const day = d.getDay();
+                      const diffToMon = d.getDate() - day + (day === 0 ? -6 : 1);
+                      const mon = new Date(d.setDate(diffToMon));
+                      const monStr = mon.toISOString().split('T')[0];
+                      setBulkRangeStartDate(monStr);
+                      setBulkRangeEndDate(currentDate);
+                      handleSelectDateRangeForBulkPupil(monStr, currentDate);
+                    }}
+                    className="px-2.5 py-1 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 text-[9px] text-amber-300 uppercase font-bold transition-all cursor-pointer"
+                  >
+                    📅 This Week
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const past15 = (activeTerm?.schoolDays ?? []).filter(d => d <= currentDate).slice(-15);
+                      if (past15.length > 0) {
+                        setBulkRangeStartDate(past15[0]);
+                        setBulkRangeEndDate(past15[past15.length - 1]);
+                        setSelectedBulkDates(past15);
+                      }
+                    }}
+                    className="px-2.5 py-1 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 text-[9px] text-neutral-300 uppercase font-bold transition-all cursor-pointer"
+                  >
+                    🕒 Last 15 Days
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const past10 = (activeTerm?.schoolDays ?? []).filter(d => d <= currentDate).slice(-10);
+                      if (past10.length > 0) {
+                        setBulkRangeStartDate(past10[0]);
+                        setBulkRangeEndDate(past10[past10.length - 1]);
+                        setSelectedBulkDates(past10);
+                      }
+                    }}
+                    className="px-2.5 py-1 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 text-[9px] text-neutral-300 uppercase font-bold transition-all cursor-pointer"
+                  >
+                    🗓️ Last 10 Days
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const unmarked = (activeTerm?.schoolDays ?? [])
+                        .filter(d => d <= currentDate)
+                        .filter(d => !payments.some(p => p.studentId === bulkPupil.id && p.date === d && !p.id.endsWith('_debt')));
+                      setSelectedBulkDates(unmarked);
+                    }}
+                    className="px-2.5 py-1 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 text-[9px] text-emerald-400 uppercase font-bold transition-all cursor-pointer"
+                  >
+                    ☑ All Unmarked
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedBulkDates([])}
+                    className="px-2.5 py-1 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 text-[9px] text-red-400 uppercase font-bold transition-all cursor-pointer"
+                  >
+                    ☒ Clear
+                  </button>
+                </div>
               </div>
 
               {/* Grid representation of dates */}
@@ -8838,36 +10214,62 @@ export const ClassRegister: React.FC = React.memo(() => {
         </div>
       )}
 
-      {/* Hardcopy Daily Register Print Modal */}
+      {/* Hardcopy Daily & Weekly Register Print Modal */}
       {showPrintHardcopyModal && (
         <div className="fixed inset-0 z-50 bg-neutral-950/95 backdrop-blur-md flex flex-col p-4 md:p-6 overflow-y-auto no-print">
           {/* Inner controller panel */}
-          <div className="w-full max-w-5xl mx-auto bg-neutral-900 border-2 border-neutral-800 p-4 mb-4 flex flex-col sm:flex-row justify-between items-center gap-3">
+          <div className="w-full max-w-5xl mx-auto bg-neutral-900 border-2 border-neutral-800 p-4 mb-4 flex flex-col md:flex-row justify-between items-center gap-3">
             <div className="flex items-center gap-2">
               <Printer className="text-emerald-400 shrink-0" size={20} />
               <div className="text-left font-mono">
                 <span className="text-[9px] text-amber-400 font-bold block uppercase tracking-widest">Administrative Hardcopy Module</span>
-                <h4 className="text-sm font-black text-white uppercase tracking-wider">Gate Check-In Checklist Print Hub</h4>
+                <h4 className="text-sm font-black text-white uppercase tracking-wider">Gate Check-In & Collection Print Hub</h4>
               </div>
             </div>
+
+            {/* Mode Switcher Tabs */}
+            <div className="flex items-center bg-neutral-950 border border-neutral-800 p-1 font-mono text-xs font-bold">
+              <button
+                type="button"
+                onClick={() => setHardcopyMode('weekly')}
+                className={`px-3 py-1.5 uppercase transition-colors cursor-pointer flex items-center gap-1.5 ${
+                  hardcopyMode === 'weekly' ? 'bg-amber-400 text-black font-black' : 'text-neutral-400 hover:text-white'
+                }`}
+                title="5-Day Mon-Fri Teacher Collection Register with Previous Week Debt B/F"
+              >
+                <CalendarDays size={14} />
+                <span>Weekly Collection (5 Days)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setHardcopyMode('daily')}
+                className={`px-3 py-1.5 uppercase transition-colors cursor-pointer flex items-center gap-1.5 ${
+                  hardcopyMode === 'daily' ? 'bg-amber-400 text-black font-black' : 'text-neutral-400 hover:text-white'
+                }`}
+                title="1-Day Single Date Gate Check-in Sheet"
+              >
+                <CheckSquare size={14} />
+                <span>Daily Gate Sheet (1 Day)</span>
+              </button>
+            </div>
             
-            <div className="flex items-center gap-2 w-full sm:w-auto">
+            <div className="flex items-center gap-2 w-full md:w-auto justify-end">
               <button
                 type="button"
                 onClick={() => {
                   window.dispatchEvent(new CustomEvent('show-print-iframe-warning'));
                   window.print();
                 }}
-                className="flex-grow sm:flex-initial px-5 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-black text-[10.5px] font-mono font-black uppercase tracking-widest transition-colors cursor-pointer flex items-center justify-center gap-2 font-bold"
+                className="px-5 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-black text-[10.5px] font-mono font-black uppercase tracking-widest transition-colors cursor-pointer flex items-center justify-center gap-2 font-bold"
               >
                 <Printer size={14} className="stroke-[2.5]" />
-                <span>Print Gate Sheet</span>
+                <span>Print {hardcopyMode === 'weekly' ? 'Weekly Register' : 'Daily Sheet'}</span>
               </button>
               
               <button
                 type="button"
                 onClick={() => setShowPrintHardcopyModal(false)}
-                className="flex-grow sm:flex-initial px-4 py-2.5 bg-neutral-800 hover:bg-neutral-750 text-neutral-400 hover:text-white text-[10.5px] font-mono font-bold uppercase transition-colors cursor-pointer"
+                className="px-4 py-2.5 bg-neutral-800 hover:bg-neutral-750 text-neutral-400 hover:text-white text-[10.5px] font-mono font-bold uppercase transition-colors cursor-pointer"
               >
                 Close Preview
               </button>
@@ -8879,11 +10281,17 @@ export const ClassRegister: React.FC = React.memo(() => {
             {/* The actual printable area */}
             <div 
               id="print-hardcopy-area"
-              className="bg-white text-black p-8 md:p-12 w-[100%] max-w-[210mm] min-h-[297mm] shadow-2xl border border-neutral-300 font-sans flex flex-col justify-between"
+              className={`bg-white text-black p-8 md:p-12 w-[100%] shadow-2xl border border-neutral-300 font-sans flex flex-col justify-between ${
+                hardcopyMode === 'weekly' ? 'max-w-[297mm] min-h-[210mm]' : 'max-w-[210mm] min-h-[297mm]'
+              }`}
             >
-              {/* Dynamic local CSS style block to completely isolate this page during printing */}
+              {/* Dynamic local CSS style block to isolate this page during printing */}
               <style>{`
                 @media print {
+                  @page {
+                    size: ${hardcopyMode === 'weekly' ? 'landscape' : 'portrait'};
+                    margin: 8mm;
+                  }
                   body * {
                     visibility: hidden !important;
                     background: none !important;
@@ -8899,7 +10307,7 @@ export const ClassRegister: React.FC = React.memo(() => {
                     width: 100% !important;
                     max-width: 100% !important;
                     margin: 0 !important;
-                    padding: 10mm !important;
+                    padding: 6mm !important;
                     background: white !important;
                     color: black !important;
                     font-family: inherit !important;
@@ -8910,15 +10318,22 @@ export const ClassRegister: React.FC = React.memo(() => {
                     display: none !important;
                     visibility: hidden !important;
                   }
+                  tr {
+                    page-break-inside: avoid !important;
+                    break-inside: avoid !important;
+                  }
+                  thead {
+                    display: table-header-group !important;
+                  }
                   table {
                     width: 100% !important;
                     border-collapse: collapse !important;
-                    margin-top: 10px !important;
+                    margin-top: 8px !important;
                   }
                   th, td {
                     border: 1px solid #000000 !important;
-                    padding: 5px 6px !important;
-                    font-size: 10px !important;
+                    padding: 4px 5px !important;
+                    font-size: 9.5px !important;
                     color: #000000 !important;
                     line-height: 1.2 !important;
                   }
@@ -8946,7 +10361,7 @@ export const ClassRegister: React.FC = React.memo(() => {
 
                   <div className="text-right space-y-1">
                     <span className="inline-block bg-black px-2.5 py-1 text-[9px] font-mono font-bold uppercase text-white tracking-widest">
-                      GATE REGISTER
+                      {hardcopyMode === 'weekly' ? 'WEEKLY COLLECTION LEDGER' : 'DAILY GATE REGISTER'}
                     </span>
                     <div className="text-[8px] text-neutral-500 font-mono font-bold">
                       GEN: {new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
@@ -8954,180 +10369,352 @@ export const ClassRegister: React.FC = React.memo(() => {
                   </div>
                 </div>
 
-                {/* Subtitle / Description */}
-                <div className="text-center bg-neutral-100 border border-neutral-300 p-2 text-left">
-                  <h3 className="text-center text-xs font-black uppercase text-black font-sans tracking-wider">
-                    DAILY GATE CHECK-IN & REVENUE SHEET (HARDCOPY LEDGER)
-                  </h3>
-                  <p className="text-center text-[9px] text-neutral-500 font-mono uppercase tracking-wider mt-0.5">
-                    Gatekeepers: Record daily presence & collect arrears. Settle checklist sums with accounts desk daily.
-                  </p>
-                </div>
+                {hardcopyMode === 'weekly' ? (
+                  /* WEEKLY 5-DAY TEACHER COLLECTION REGISTER */
+                  <>
+                    {/* Subtitle / Description */}
+                    <div className="text-center bg-neutral-100 border border-neutral-300 p-2 text-left">
+                      <h3 className="text-center text-xs font-black uppercase text-black font-sans tracking-wider">
+                        WEEKLY CLASS ATTENDANCE & FEE COLLECTION REGISTER (5-DAY TEACHER LEDGER)
+                      </h3>
+                      <p className="text-center text-[9px] text-neutral-600 font-mono uppercase tracking-wider mt-0.5">
+                        Class Teachers & Gatekeepers: Track daily presence & collect daily fees / previous arrears for Mon–Fri. Record presence check (P/A) & cash received.
+                      </p>
+                    </div>
 
-                {/* Ledger Metadata Write-in Slots */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-white p-3 border border-black/80 text-left font-mono text-[9px]">
-                  <div className="space-y-1">
-                    <span className="text-neutral-500 font-extrabold uppercase block font-bold">TARGET CLASS:</span>
-                    <span className="text-xs font-black text-black">CLASS {selectedClass === 'B7' ? 'JHS1' : selectedClass === 'B8' ? 'JHS2' : selectedClass === 'B9' ? 'JHS3' : selectedClass}</span>
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-neutral-500 font-extrabold uppercase block font-bold">ACADEMIC TERM:</span>
-                    <span className="text-xs font-extrabold text-black uppercase">{activeTerm?.name || 'ACTIVE SCHED'}</span>
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-neutral-550 font-extrabold uppercase block font-black">SCHEDULED DATE:</span>
-                    <span className="text-xs font-black text-black">{currentDate}</span>
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-neutral-500 font-extrabold block font-bold">ROSTER TOTAL:</span>
-                    <span className="text-xs font-black text-black">{classStudents.length} PUPILS</span>
-                  </div>
-                </div>
+                    {/* Metadata bar */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-white p-2.5 border border-black text-left font-mono text-[9px]">
+                      <div className="space-y-0.5">
+                        <span className="text-neutral-500 font-bold uppercase block">TARGET CLASS:</span>
+                        <span className="text-xs font-black text-black">CLASS {selectedClass === 'B7' ? 'JHS1' : selectedClass === 'B8' ? 'JHS2' : selectedClass === 'B9' ? 'JHS3' : selectedClass}</span>
+                      </div>
+                      <div className="space-y-0.5">
+                        <span className="text-neutral-500 font-bold uppercase block">ACADEMIC TERM:</span>
+                        <span className="text-xs font-extrabold text-black uppercase">{activeTerm?.name || 'ACTIVE SCHED'}</span>
+                      </div>
+                      <div className="space-y-0.5">
+                        <span className="text-neutral-500 font-bold uppercase block">VALID WEEK RANGE:</span>
+                        <span className="text-xs font-black text-black">{weekInfo.formattedRange}</span>
+                      </div>
+                      <div className="space-y-0.5">
+                        <span className="text-neutral-500 font-bold block">CLASS ROSTER:</span>
+                        <span className="text-xs font-black text-black">{classStudents.length} PUPILS</span>
+                      </div>
+                    </div>
 
-                {/* Checklist fields to fill in manually at the gate */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 border-r border-l border-b border-neutral-200 bg-neutral-50/50 p-2 text-left font-mono text-[9px]">
-                  <div className="flex items-center gap-1">
-                    <span className="font-bold text-neutral-500">GATEKEEPER name:</span>
-                    <span className="flex-1 border-b border-black/60 h-4" />
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="font-bold text-neutral-500">SIGN-OFF TIME:</span>
-                    <span className="flex-1 border-b border-black/60 h-4" />
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="font-bold text-neutral-500">HANDOVER SIGN:</span>
-                    <span className="flex-1 border-b border-black/60 h-4" />
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="font-bold text-neutral-500 font-black text-neutral-700">ACCOUNTS AUDITOR:</span>
-                    <span className="flex-1 border-b border-black/60 h-4" />
-                  </div>
-                </div>
+                    {/* Signoff slots */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 border-r border-l border-b border-neutral-300 bg-neutral-50/50 p-2 text-left font-mono text-[8.5px]">
+                      <div className="flex items-center gap-1">
+                        <span className="font-bold text-neutral-500">CLASS TEACHER:</span>
+                        <span className="flex-1 border-b border-black h-3.5" />
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <span className="font-bold text-neutral-500">GATE OFFICER:</span>
+                        <span className="flex-1 border-b border-black h-3.5" />
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <span className="font-bold text-neutral-500">TEACHER SIGN:</span>
+                        <span className="flex-1 border-b border-black h-3.5" />
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <span className="font-bold text-neutral-500">ACCOUNTS AUDITOR:</span>
+                        <span className="flex-1 border-b border-black h-3.5" />
+                      </div>
+                    </div>
 
-                {/* Student Check-In Checklist Table Header */}
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left font-sans text-xs border-collapse">
-                    <thead>
-                      <tr className="bg-neutral-100 text-black border-t-2 border-b-2 border-black">
-                        <th className="py-2.5 px-1.5 text-center text-[10px] uppercase font-black w-[5%] border border-black">No.</th>
-                        <th className="py-2.5 px-3 uppercase font-black w-[35%] border border-black">Student Profile & Phone</th>
-                        <th className="py-2.5 px-2 text-center uppercase font-black w-[13%] border border-black">Billing Scheme</th>
-                        <th className="py-2.5 px-2 text-center uppercase font-black w-[17%] border border-black text-red-650">Arrears Pending</th>
-                        <th className="py-2.5 px-2 text-center uppercase font-black w-[15%] border border-black">Check-In Status</th>
-                        <th className="py-2.5 px-2 text-center uppercase font-black w-[15%] border border-black">Daily Cash Received</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {classStudents.map((student, idx) => {
-                        const debtInfo = studentDebtMap.get(student.id);
-                        const arrearsVal = debtInfo?.totalDebt || 0;
-                        const pastDays = debtInfo?.pastUnpaidDays?.length || 0;
-                        
-                        return (
-                          <tr key={student.id} className="border-b border-neutral-300">
-                            <td className="py-2 px-1 text-center font-mono text-[9px] border border-black font-extrabold">{idx + 1}</td>
-                            <td className="py-2 px-2.5 text-left border border-black">
-                              <div className="font-black text-[10px] text-black uppercase">{student.name}</div>
-                              <div className="text-[8px] text-neutral-500 font-mono tracking-wider flex items-center gap-1 mt-0.5">
-                                <span>Roll ID: {student.rollNumber || 'N/A'}</span> • <span>Ph: {student.guardianPhone || 'No Contact'}</span>
-                              </div>
-                            </td>
-                            <td className="py-2 px-1.5 text-center font-mono text-[9px] uppercase border border-black font-semibold">
-                              {student.paymentType === 'Term' ? (
-                                <span className="text-black font-bold">Term Scheme</span>
-                              ) : student.paymentType === 'Scholar' ? (
-                                <span className="text-slate-500 font-normal">Scholar</span>
-                              ) : (
-                                <span className="text-black font-black">Daily (GHC 5-fee)</span>
-                              )}
-                            </td>
-                            <td className="py-1 px-1.5 text-center font-mono text-[9.5px] border border-black">
-                              {arrearsVal > 0 ? (
-                                <div className="text-red-750 font-black uppercase text-[9px]">
-                                  GHC {arrearsVal.toFixed(2)}
-                                  <span className="block text-[7.5px] text-neutral-550 lowercase font-bold font-sans">({pastDays}d unpaid)</span>
-                                </div>
-                              ) : (
-                                <span className="text-neutral-400 text-[8.5px] uppercase font-bold font-sans">No Debt</span>
-                              )}
-                            </td>
-                            <td className="py-2 px-1 text-center border border-black select-none">
-                              <div className="flex justify-center items-center gap-2 text-[9px] font-mono leading-none">
-                                <label className="flex items-center gap-1 font-bold cursor-pointer">
-                                  <span className="inline-block w-4 h-4 border border-black/80 bg-white" />
-                                  <span>PRES</span>
-                                </label>
-                                <label className="flex items-center gap-1 font-bold cursor-pointer">
-                                  <span className="inline-block w-4 h-4 border border-black/80 bg-white" />
-                                  <span>ABS</span>
-                                </label>
-                              </div>
-                            </td>
-                            <td className="py-1 px-1.5 text-center font-mono text-[8.5px] border border-black">
-                              {student.paymentType === 'Daily' ? (
-                                <div className="flex items-center gap-1 justify-center">
-                                  <span className="font-bold border border-black/80 w-3 h-3 block inline-block" />
-                                  <span className="font-extrabold text-[8.5px]">GHC 5</span>
-                                  <span className="text-neutral-350 mx-0.5">/</span>
-                                  <span className="border-b border-black w-8 block h-2" />
-                                </div>
-                              ) : student.paymentType === 'Scholar' ? (
-                                <span className="text-neutral-400 uppercase text-[7px] tracking-widest font-black">EXEMPT</span>
-                              ) : (
-                                <div className="flex items-center gap-1 w-full justify-center">
-                                  <span className="font-bold text-neutral-500 text-[6.5px] uppercase">GHC</span>
-                                  <span className="border-b border-black w-12 block h-2" />
-                                </div>
-                              )}
-                            </td>
+                    {/* 5-Day Weekly Table */}
+                    <div className="overflow-x-auto mt-2">
+                      <table className="w-full text-left font-sans text-[10px] border-collapse">
+                        <thead>
+                          <tr className="bg-neutral-100 text-black border-t-2 border-b-2 border-black">
+                            <th className="py-2 px-1 text-center text-[9px] uppercase font-black w-[3%] border border-black">#</th>
+                            <th className="py-2 px-2 uppercase font-black w-[22%] border border-black">Pupil Name & Guardian</th>
+                            <th className="py-2 px-1 text-center uppercase font-black w-[8%] border border-black">Scheme</th>
+                            <th className="py-2 px-1.5 text-center uppercase font-black w-[13%] border border-black bg-red-50 text-red-800">
+                              Prev. Debt (B/F)
+                            </th>
+                            <th className="py-2 px-1 text-center uppercase font-black w-[9%] border border-black">MON</th>
+                            <th className="py-2 px-1 text-center uppercase font-black w-[9%] border border-black">TUE</th>
+                            <th className="py-2 px-1 text-center uppercase font-black w-[9%] border border-black">WED</th>
+                            <th className="py-2 px-1 text-center uppercase font-black w-[9%] border border-black">THU</th>
+                            <th className="py-2 px-1 text-center uppercase font-black w-[9%] border border-black">FRI</th>
+                            <th className="py-2 px-1.5 text-center uppercase font-black w-[9%] border border-black bg-emerald-50">Total Paid</th>
                           </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+                        </thead>
+                        <tbody>
+                          {classStudents.map((student, idx) => {
+                            const debtInfo = studentDebtMap.get(student.id);
+                            const arrearsVal = debtInfo?.totalDebt || 0;
+                            const pastDays = debtInfo?.pastUnpaidDays?.length || 0;
+
+                            return (
+                              <tr key={student.id} className="border-b border-neutral-300">
+                                <td className="py-1.5 px-1 text-center font-mono text-[9px] border border-black font-bold">{idx + 1}</td>
+                                <td className="py-1.5 px-2 text-left border border-black">
+                                  <div className="font-black text-[9.5px] text-black uppercase leading-tight">{student.name}</div>
+                                  <div className="text-[7.5px] text-neutral-600 font-mono tracking-wider mt-0.5">
+                                    <span>Roll: {student.rollNumber || 'N/A'}</span> • <span>Ph: {student.guardianPhone || 'No Contact'}</span>
+                                  </div>
+                                </td>
+                                <td className="py-1.5 px-1 text-center font-mono text-[8px] uppercase border border-black font-semibold">
+                                  {student.paymentType === 'Term' ? (
+                                    <span className="font-bold">Term</span>
+                                  ) : student.paymentType === 'Scholar' ? (
+                                    <span className="text-gray-500">Scholar</span>
+                                  ) : (
+                                    <span className="font-black">Daily (GHC5)</span>
+                                  )}
+                                </td>
+
+                                {/* Previous Week Debt Brought Forward */}
+                                <td className="py-1.5 px-1.5 text-center font-mono text-[9px] border border-black bg-red-50/50">
+                                  {arrearsVal > 0 ? (
+                                    <div className="text-red-700 font-black uppercase text-[9px]">
+                                      GHC {arrearsVal.toFixed(2)}
+                                      <span className="block text-[7px] text-neutral-600 lowercase font-normal">({pastDays}d unpaid)</span>
+                                    </div>
+                                  ) : (
+                                    <span className="text-neutral-400 text-[8px] uppercase font-bold">No Debt</span>
+                                  )}
+                                </td>
+
+                                {/* 5 Daily Checkboxes (Mon - Fri) */}
+                                {['MON', 'TUE', 'WED', 'THU', 'FRI'].map((day) => (
+                                  <td key={day} className="py-1 px-1 text-center border border-black select-none font-mono text-[8px]">
+                                    <div className="space-y-1">
+                                      <div className="flex items-center justify-center gap-1 font-bold">
+                                        <span className="inline-block w-3.5 h-3.5 border border-black bg-white" />
+                                        <span className="text-[7.5px]">P</span>
+                                        <span className="inline-block w-3.5 h-3.5 border border-black bg-white" />
+                                        <span className="text-[7.5px]">A</span>
+                                      </div>
+                                      <div className="text-[7.5px] text-neutral-500 flex items-center justify-center gap-0.5 border-t border-neutral-200 pt-0.5">
+                                        <span>GHC</span>
+                                        <span className="border-b border-black w-6 block h-2" />
+                                      </div>
+                                    </div>
+                                  </td>
+                                ))}
+
+                                {/* Weekly Tally Slot */}
+                                <td className="py-1.5 px-1 text-center font-mono text-[8.5px] border border-black bg-emerald-50/30">
+                                  <div className="flex items-center justify-center gap-0.5">
+                                    <span className="text-[7px] text-neutral-500 font-bold">GHC</span>
+                                    <span className="border-b border-black w-10 block h-2.5" />
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Weekly Summary Tally Box */}
+                    <div className="border-t-2 border-black pt-2.5 mt-3 font-mono text-[8px]">
+                      <div className="flex justify-between items-start gap-4">
+                        <div className="space-y-1 text-left w-1/2">
+                          <span className="text-neutral-600 font-black uppercase block leading-none">WEEKLY TALLY SUMMARY:</span>
+                          <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[8px]">
+                            <div>Total Attendance Checks: <span className="font-bold">_____ P / _____ A</span></div>
+                            <div>Total Daily Fees Collected: <span className="font-bold">GHC ________</span></div>
+                            <div>Previous Debt Arrears Cleared: <span className="font-bold">GHC ________</span></div>
+                            <div>Grand Total Cash Handed Over: <span className="font-bold">GHC ________</span></div>
+                          </div>
+                        </div>
+
+                        <div className="space-y-3 text-right w-1/3">
+                          <div className="space-y-0.5 text-right">
+                            <div className="inline-block border-b border-black w-32 h-4" />
+                            <div className="text-[7px] font-black uppercase text-neutral-700">Class Teacher Signature</div>
+                          </div>
+                          <div className="space-y-0.5 text-right">
+                            <div className="inline-block border-b border-black w-32 h-4" />
+                            <div className="text-[7px] font-black uppercase text-neutral-700">Accounts Desk Audit Sign</div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  /* DAILY 1-DAY GATE CHECK-IN SHEET */
+                  <>
+                    {/* Subtitle / Description */}
+                    <div className="text-center bg-neutral-100 border border-neutral-300 p-2 text-left">
+                      <h3 className="text-center text-xs font-black uppercase text-black font-sans tracking-wider">
+                        DAILY GATE CHECK-IN & REVENUE SHEET (HARDCOPY LEDGER)
+                      </h3>
+                      <p className="text-center text-[9px] text-neutral-500 font-mono uppercase tracking-wider mt-0.5">
+                        Gatekeepers: Record daily presence & collect arrears. Settle checklist sums with accounts desk daily.
+                      </p>
+                    </div>
+
+                    {/* Ledger Metadata Write-in Slots */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-white p-3 border border-black/80 text-left font-mono text-[9px]">
+                      <div className="space-y-1">
+                        <span className="text-neutral-500 font-extrabold uppercase block font-bold">TARGET CLASS:</span>
+                        <span className="text-xs font-black text-black">CLASS {selectedClass === 'B7' ? 'JHS1' : selectedClass === 'B8' ? 'JHS2' : selectedClass === 'B9' ? 'JHS3' : selectedClass}</span>
+                      </div>
+                      <div className="space-y-1">
+                        <span className="text-neutral-500 font-extrabold uppercase block font-bold">ACADEMIC TERM:</span>
+                        <span className="text-xs font-extrabold text-black uppercase">{activeTerm?.name || 'ACTIVE SCHED'}</span>
+                      </div>
+                      <div className="space-y-1">
+                        <span className="text-neutral-550 font-extrabold uppercase block font-black">SCHEDULED DATE:</span>
+                        <span className="text-xs font-black text-black">{currentDate}</span>
+                      </div>
+                      <div className="space-y-1">
+                        <span className="text-neutral-500 font-extrabold block font-bold">ROSTER TOTAL:</span>
+                        <span className="text-xs font-black text-black">{classStudents.length} PUPILS</span>
+                      </div>
+                    </div>
+
+                    {/* Checklist fields to fill in manually at the gate */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 border-r border-l border-b border-neutral-200 bg-neutral-50/50 p-2 text-left font-mono text-[9px]">
+                      <div className="flex items-center gap-1">
+                        <span className="font-bold text-neutral-500">GATEKEEPER name:</span>
+                        <span className="flex-1 border-b border-black/60 h-4" />
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <span className="font-bold text-neutral-500">SIGN-OFF TIME:</span>
+                        <span className="flex-1 border-b border-black/60 h-4" />
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <span className="font-bold text-neutral-500">HANDOVER SIGN:</span>
+                        <span className="flex-1 border-b border-black/60 h-4" />
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <span className="font-bold text-neutral-500 font-black text-neutral-700">ACCOUNTS AUDITOR:</span>
+                        <span className="flex-1 border-b border-black/60 h-4" />
+                      </div>
+                    </div>
+
+                    {/* Student Check-In Checklist Table Header */}
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left font-sans text-xs border-collapse">
+                        <thead>
+                          <tr className="bg-neutral-100 text-black border-t-2 border-b-2 border-black">
+                            <th className="py-2.5 px-1.5 text-center text-[10px] uppercase font-black w-[5%] border border-black">No.</th>
+                            <th className="py-2.5 px-3 uppercase font-black w-[35%] border border-black">Student Profile & Phone</th>
+                            <th className="py-2.5 px-2 text-center uppercase font-black w-[13%] border border-black">Billing Scheme</th>
+                            <th className="py-2.5 px-2 text-center uppercase font-black w-[17%] border border-black text-red-650">Arrears Pending</th>
+                            <th className="py-2.5 px-2 text-center uppercase font-black w-[15%] border border-black">Check-In Status</th>
+                            <th className="py-2.5 px-2 text-center uppercase font-black w-[15%] border border-black">Daily Cash Received</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {classStudents.map((student, idx) => {
+                            const debtInfo = studentDebtMap.get(student.id);
+                            const arrearsVal = debtInfo?.totalDebt || 0;
+                            const pastDays = debtInfo?.pastUnpaidDays?.length || 0;
+                            
+                            return (
+                              <tr key={student.id} className="border-b border-neutral-300">
+                                <td className="py-2 px-1 text-center font-mono text-[9px] border border-black font-extrabold">{idx + 1}</td>
+                                <td className="py-2 px-2.5 text-left border border-black">
+                                  <div className="font-black text-[10px] text-black uppercase">{student.name}</div>
+                                  <div className="text-[8px] text-neutral-500 font-mono tracking-wider flex items-center gap-1 mt-0.5">
+                                    <span>Roll ID: {student.rollNumber || 'N/A'}</span> • <span>Ph: {student.guardianPhone || 'No Contact'}</span>
+                                  </div>
+                                </td>
+                                <td className="py-2 px-1.5 text-center font-mono text-[9px] uppercase border border-black font-semibold">
+                                  {student.paymentType === 'Term' ? (
+                                    <span className="text-black font-bold">Term Scheme</span>
+                                  ) : student.paymentType === 'Scholar' ? (
+                                    <span className="text-slate-500 font-normal">Scholar</span>
+                                  ) : (
+                                    <span className="text-black font-black">Daily (GHC 5-fee)</span>
+                                  )}
+                                </td>
+                                <td className="py-1 px-1.5 text-center font-mono text-[9.5px] border border-black">
+                                  {arrearsVal > 0 ? (
+                                    <div className="text-red-750 font-black uppercase text-[9px]">
+                                      GHC {arrearsVal.toFixed(2)}
+                                      <span className="block text-[7.5px] text-neutral-550 lowercase font-bold font-sans">({pastDays}d unpaid)</span>
+                                    </div>
+                                  ) : (
+                                    <span className="text-neutral-400 text-[8.5px] uppercase font-bold font-sans">No Debt</span>
+                                  )}
+                                </td>
+                                <td className="py-2 px-1 text-center border border-black select-none">
+                                  <div className="flex justify-center items-center gap-2 text-[9px] font-mono leading-none">
+                                    <label className="flex items-center gap-1 font-bold cursor-pointer">
+                                      <span className="inline-block w-4 h-4 border border-black/80 bg-white" />
+                                      <span>PRES</span>
+                                    </label>
+                                    <label className="flex items-center gap-1 font-bold cursor-pointer">
+                                      <span className="inline-block w-4 h-4 border border-black/80 bg-white" />
+                                      <span>ABS</span>
+                                    </label>
+                                  </div>
+                                </td>
+                                <td className="py-1 px-1.5 text-center font-mono text-[8.5px] border border-black">
+                                  {student.paymentType === 'Daily' ? (
+                                    <div className="flex items-center gap-1 justify-center">
+                                      <span className="font-bold border border-black/80 w-3 h-3 block inline-block" />
+                                      <span className="font-extrabold text-[8.5px]">GHC 5</span>
+                                      <span className="text-neutral-350 mx-0.5">/</span>
+                                      <span className="border-b border-black w-8 block h-2" />
+                                    </div>
+                                  ) : student.paymentType === 'Scholar' ? (
+                                    <span className="text-neutral-400 uppercase text-[7px] tracking-widest font-black">EXEMPT</span>
+                                  ) : (
+                                    <div className="flex items-center gap-1 w-full justify-center">
+                                      <span className="font-bold text-neutral-500 text-[6.5px] uppercase">GHC</span>
+                                      <span className="border-b border-black w-12 block h-2" />
+                                    </div>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Auditor Signoff on paper footer */}
+                    <div className="border-t-2 border-black pt-3 mt-4 z-10 font-mono text-[8.5px]">
+                      <div className="flex justify-between items-start gap-4">
+                        <div className="space-y-2 text-left w-1/2">
+                          <span className="text-neutral-500 font-extrabold uppercase block leading-none">TOTAL GATE SUMMARY (TO BE TALLIED):</span>
+                          <div className="space-y-1.5 text-[8px] leading-relaxed">
+                            <div>1. CASH COLLECTED FOR TODAY'S REGISTRARS: <span className="font-black text-black text-[9px]">GHC ________________</span></div>
+                            <div>2. CASH COLLECTED FOR PENDING DEBT ARREARS: <span className="font-black text-black text-[9px]">GHC ________________</span></div>
+                            <div className="font-black uppercase text-[8.5px] text-black pt-1 bg-neutral-50 border-t border-neutral-200">
+                              TOTAL REVENUE HANDED BACK: GHC ____________________
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="space-y-4 text-right w-1/3">
+                          <div className="space-y-1 text-right">
+                            <div className="inline-block border-b border-black w-36 h-5" />
+                            <div className="text-[7px] font-black uppercase text-neutral-700 tracking-wider">
+                              Gate Teacher Sign-off
+                            </div>
+                          </div>
+
+                          <div className="space-y-1 text-right">
+                            <div className="inline-block border-b border-black w-36 h-5" />
+                            <div className="text-[7px] font-black uppercase text-neutral-700 tracking-wider">
+                              Accounts Desk Verification
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="text-center text-[7px] text-neutral-400 uppercase tracking-widest pt-3 font-normal font-sans">
+                        Sako Holy Child Academy Cloud Ledger System • Hardcopy Gate Register Form v2.1
+                      </div>
+                    </div>
+                  </>
+                )}
 
                 {classStudents.length === 0 && (
                   <div className="py-12 border-2 border-dashed border-neutral-300 text-center text-neutral-400 uppercase font-mono text-xs">
                     No active students enrolled in Class {selectedClass}
                   </div>
                 )}
-              </div>
-
-              {/* Auditor Signoff on paper footer */}
-              <div className="border-t-2 border-black pt-3 mt-4 z-10 font-mono text-[8.5px]">
-                <div className="flex justify-between items-start gap-4">
-                  <div className="space-y-2 text-left w-1/2">
-                    <span className="text-neutral-500 font-extrabold uppercase block leading-none">TOTAL GATE SUMMARY (TO BE TALLIED):</span>
-                    <div className="space-y-1.5 text-[8px] leading-relaxed">
-                      <div>1. CASH COLLECTED FOR TODAY'S REGISTRARS: <span className="font-black text-black text-[9px]">GHC ________________</span></div>
-                      <div>2. CASH COLLECTED FOR PENDING DEBT ARREARS: <span className="font-black text-black text-[9px]">GHC ________________</span></div>
-                      <div className="font-black uppercase text-[8.5px] text-black pt-1 bg-neutral-50 border-t border-neutral-200">
-                        TOTAL REVENUE HANDED BACK: GHC ____________________
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="space-y-4 text-right w-1/3">
-                    <div className="space-y-1 text-right">
-                      <div className="inline-block border-b border-black w-36 h-5" />
-                      <div className="text-[7px] font-black uppercase text-neutral-700 tracking-wider">
-                        Gate Teacher Sign-off
-                      </div>
-                    </div>
-
-                    <div className="space-y-1 text-right">
-                      <div className="inline-block border-b border-black w-36 h-5" />
-                      <div className="text-[7px] font-black uppercase text-neutral-700 tracking-wider">
-                        Accounts Desk Verification
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="text-center text-[7px] text-neutral-400 uppercase tracking-widest pt-3 font-normal font-sans">
-                  Sako Holy Child Academy Cloud Ledger System • Hardcopy Gate Register Form v2.1
-                </div>
               </div>
 
             </div>
@@ -9670,6 +11257,21 @@ export const ClassRegister: React.FC = React.memo(() => {
           </div>
         </div>
       )}
+
+      {/* Pupil Pickup Passes Modal */}
+      <PickupPassesModal
+        isOpen={showPickupPassesModal}
+        onClose={() => setShowPickupPassesModal(false)}
+        students={students}
+        initialClass={selectedClass}
+        systemSettings={systemSettings}
+      />
+
+      {/* Express Speed Fee Collector Modal */}
+      <ExpressFeeModal
+        isOpen={isExpressFeeOpen}
+        onClose={() => setIsExpressFeeOpen(false)}
+      />
     </div>
   );
 });

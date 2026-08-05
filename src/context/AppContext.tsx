@@ -4,11 +4,14 @@
  */
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { Student, PaymentRecord, UserAccount, UserRole, StudentClass, SchoolCategory, Term, PendingEdit, BackupRecord, Expense, ExpenseCategory, PaymentMethod, WorkerSalary, SystemSettings, BudgetTarget, ExamsPayment, ExamsExpense, ExamsSettings, AuditLog, TeacherEvaluation, JournalEntry } from '../types';
+import { Student, PaymentRecord, UserAccount, UserRole, StudentClass, SchoolCategory, Term, PendingEdit, BackupRecord, Expense, ExpenseCategory, PaymentMethod, WorkerSalary, SystemSettings, BudgetTarget, ExamsPayment, ExamsExpense, ExamsSettings, AuditLog, TeacherEvaluation, JournalEntry, TeacherEthicsEvaluation, AdministrativePurgeOptions, AdministrativePurgeResult } from '../types';
 import { INITIAL_USERS, INITIAL_STUDENTS, ORIGINAL_DEMO_STUDENT_IDS, generateSeedPayments, getClassCategory } from '../initialData';
-import { db as rawDb } from '../lib/firebase';
+import { db as rawDb, firebaseLogin, firebaseSendPasswordReset, firebaseCreateAccount } from '../lib/firebase';
 import { generateSchoolDays } from '../utils/termUtils';
 import { idbEngine } from '../lib/idbEngine';
+import { roundCurrency, addCurrency, subtractCurrency, multiplyCurrency } from '../utils/currency';
+import { calculateStudentFeeStatus } from '../utils/feeCalculator';
+import { mergeCollectionsWithLWW } from '../utils/conflictResolver';
 
 
 // Safe wrapper over browser's localStorage to prevent QuotaExceededError and sandbox blocking from crashing the application.
@@ -99,7 +102,9 @@ interface AppContextType {
   removePublicHoliday: (termId: string, date: string) => void;
   currentDate: string; // YYYY-MM-DD format
   setCurrentDate: (date: string) => void;
-  login: (email: string, mfaCode?: string, password?: string) => { success: boolean; requiresMfa?: boolean; requiresPassword?: boolean; error?: string };
+  login: (email: string, mfaCode?: string, password?: string) => Promise<{ success: boolean; requiresMfa?: boolean; requiresPassword?: boolean; error?: string }>;
+  sendPasswordReset: (email: string) => Promise<{ success: boolean; error?: string }>;
+  changePassword: (userId: string, newPassword: string) => { success: boolean; error?: string };
   logout: () => void;
   toggleMfaForUser: (userId: string) => void;
   addStudent: (name: string, className: StudentClass, guardianPhone?: string, photoUrl?: string, discount?: number, gender?: 'Male' | 'Female', paymentType?: 'Daily' | 'Term', termFee?: number, legacyDebt?: number, enrollmentDate?: string) => void;
@@ -124,6 +129,7 @@ interface AppContextType {
   adjustPayment: (paymentId: string, updatedAmount: number, updatedIsAbsent: boolean, notes: string, reason: string) => void;
   registerStaff: (name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled?: boolean, passwordEnabled?: boolean, password?: string, assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string, photoUrl?: string, employeeId?: string, department?: string, gender?: 'Male' | 'Female', employmentType?: 'Full-Time' | 'Part-Time' | 'Contract' | 'Volunteer', appointmentDate?: string, contractEndDate?: string, renewalOption?: 'Automatic' | 'Manual Review' | 'Fixed Term' | 'Non-Renewable', renewalPeriod?: string, personalAddress?: string) => { success: boolean; error?: string };
   updateStaff: (userId: string, name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled?: boolean, passwordEnabled?: boolean, password?: string, assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string, photoUrl?: string, employeeId?: string, department?: string, gender?: 'Male' | 'Female', employmentType?: 'Full-Time' | 'Part-Time' | 'Contract' | 'Volunteer', idCardDeactivated?: boolean, appointmentDate?: string, contractEndDate?: string, renewalOption?: 'Automatic' | 'Manual Review' | 'Fixed Term' | 'Non-Renewable', renewalPeriod?: string, signatureUrl?: string, managementSignatureUrl?: string, personalAddress?: string) => { success: boolean; error?: string };
+  adjustStaffSalariesByPercentage: (adjustments: { userId: string; percentage: number; newSalary?: number; reason?: string }[]) => { success: boolean; count: number };
   deleteStaff: (userId: string) => { success: boolean; error?: string };
   toggleStaffActive: (userId: string) => { success: boolean; error?: string };
   getDailyStats: (date: string) => DailyStats;
@@ -135,6 +141,12 @@ interface AppContextType {
   clearSampleStudents: () => void;
   purgeOnlyDemoData: () => Promise<{ success: boolean; message: string }>;
   clearAllPayments: () => void;
+  administrativePurge: (options: AdministrativePurgeOptions) => AdministrativePurgeResult;
+  purgeDuplicatePayments: () => { count: number; message: string };
+  purgeAdvancePayments: (studentId?: string) => { count: number; message: string };
+  purgeRepeatedAndAdvancePayments: (options: { duplicates?: boolean; advance?: boolean; studentId?: string }) => { count: number; message: string };
+  purgePublicHolidayPayments: () => { count: number; message: string };
+  deleteAllAutomaticEntries: () => { deletedPaymentsCount: number; deletedJournalsCount: number; message: string };
   firebaseConnected: boolean;
   firebaseError: string | null;
   retryFirebaseConnection: () => Promise<void>;
@@ -1171,22 +1183,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return;
       }
 
-      setUsers(dbUsers);
-      setStudents(dbStudents);
-      setPayments(dbPayments);
-      setExpenses(dbExpenses);
-      setSalaries(dbSalaries);
-      setBudgetTargets(dbBudgetTargets);
-      setTeacherEvaluations(dbEvaluations);
+      // Helper function for additive merging of arrays by id
+      const mergeRecords = <T extends { id: string; updatedAt?: string }>(current: T[], incoming: T[]): T[] => {
+        const map = new Map<string, T>();
+        current.forEach(item => { if (item && item.id) map.set(item.id, item); });
+        incoming.forEach(item => {
+          if (item && item.id) {
+            const existing = map.get(item.id);
+            if (!existing) {
+              map.set(item.id, item);
+            } else {
+              const existingTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
+              const incomingTime = item.updatedAt ? new Date(item.updatedAt).getTime() : 0;
+              if (incomingTime >= existingTime) {
+                map.set(item.id, item);
+              }
+            }
+          }
+        });
+        return Array.from(map.values());
+      };
+
+      const mergedUsers = mergeRecords(users, dbUsers);
+      const mergedStudents = mergeRecords(students, dbStudents);
+      const mergedPayments = mergeRecords(payments, dbPayments);
+      const mergedExpenses = mergeRecords(expenses, dbExpenses);
+      const mergedSalaries = mergeRecords(salaries, dbSalaries);
+      const mergedBudgets = mergeRecords(budgetTargets, dbBudgetTargets);
+      const mergedEvals = mergeRecords(teacherEvaluations, dbEvaluations);
+
+      setUsers(mergedUsers);
+      setStudents(mergedStudents);
+      setPayments(mergedPayments);
+      setExpenses(mergedExpenses);
+      setSalaries(mergedSalaries);
+      setBudgetTargets(mergedBudgets);
+      setTeacherEvaluations(mergedEvals);
 
       // Cache locally to keep quick sync speed
-      idbEngine.setItem('s_users', dbUsers);
-      idbEngine.setItem('s_students', dbStudents);
-      idbEngine.setItem('s_payments', dbPayments);
-      idbEngine.setItem('s_expenses', dbExpenses);
-      idbEngine.setItem('s_salaries', dbSalaries);
-      idbEngine.setItem('s_budget_targets', dbBudgetTargets);
-      idbEngine.setItem('s_teacher_evaluations', dbEvaluations);
+      idbEngine.setItem('s_users', mergedUsers);
+      idbEngine.setItem('s_students', mergedStudents);
+      idbEngine.setItem('s_payments', mergedPayments);
+      idbEngine.setItem('s_expenses', mergedExpenses);
+      idbEngine.setItem('s_salaries', mergedSalaries);
+      idbEngine.setItem('s_budget_targets', mergedBudgets);
+      idbEngine.setItem('s_teacher_evaluations', mergedEvals);
 
       setBgSyncStatus('success');
       setLastBgSyncTime(new Date().toLocaleTimeString());
@@ -1221,17 +1262,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const healTerms = (termsList: Term[]): Term[] => {
     if (!termsList || termsList.length === 0) return [];
     const activeList = termsList.filter(t => t.active);
-    if (activeList.length <= 1) {
-      return termsList;
+    let selectedActive: Term;
+    if (activeList.length === 1) {
+      selectedActive = activeList[0];
+    } else if (activeList.length > 1) {
+      const customActive = activeList.filter(t => t.id !== 'term_default');
+      selectedActive = customActive.length > 0 
+        ? customActive[customActive.length - 1] 
+        : activeList[activeList.length - 1];
+    } else {
+      selectedActive = termsList[0];
     }
-    const customActive = activeList.filter(t => t.id !== 'term_default');
-    const selectedActive = customActive.length > 0 
-      ? customActive[customActive.length - 1] 
-      : activeList[activeList.length - 1];
-    return termsList.map(t => ({
-      ...t,
-      active: t.id === selectedActive.id
-    }));
+
+    return termsList.map(t => {
+      const isActive = t.id === selectedActive.id;
+      let startDate = t.startDate || '2026-04-27';
+      if (t.id === 'term_default' && !t.startDate) {
+        startDate = '2026-04-27';
+      }
+      const daysCount = t.daysCount && t.daysCount > 0 ? t.daysCount : (t.schoolDays?.length || 75);
+      const schoolDays = generateSchoolDays(startDate, daysCount);
+      const name = (t.id === 'term_default' || t.name.includes('May/June'))
+        ? 'Term 1 (April - August 2026)'
+        : t.name;
+
+      return {
+        ...t,
+        name,
+        startDate,
+        daysCount,
+        schoolDays,
+        active: isActive
+      };
+    });
   };
 
   const initializeData = async () => {
@@ -1351,10 +1414,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           let parsedLocalPayments = skipDemo ? [] : generateSeedPayments();
           let parsedLocalTerms = [{
             id: 'term_default',
-            name: 'Term 1 (May/June 2026)',
-            startDate: '2026-05-25',
-            daysCount: 15,
-            schoolDays: generateSchoolDays('2026-05-25', 15),
+            name: 'Term 1 (April - August 2026)',
+            startDate: '2026-04-27',
+            daysCount: 75,
+            schoolDays: generateSchoolDays('2026-04-27', 75),
             active: true
           }];
           
@@ -1407,6 +1470,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         }
 
+        const DEMO_STUDENT_ID_SET = new Set(ORIGINAL_DEMO_STUDENT_IDS);
+
         const mergeAndHeal = <T extends { id: string }>(
           localItems: any,
           cloudItems: T[] | null | undefined,
@@ -1418,7 +1483,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
           const resolvedCloud = cloudItems || [];
           resolvedCloud.forEach(item => {
-            if (item && item.id) {
+            if (item && item.id && !DEMO_STUDENT_ID_SET.has(item.id)) {
               mergedMap.set(item.id, item);
               cloudIds.add(item.id);
             }
@@ -1436,7 +1501,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const unsynced: T[] = [];
           if (Array.isArray(resolvedLocal)) {
             resolvedLocal.forEach(item => {
-              if (item && item.id) {
+              if (item && item.id && !DEMO_STUDENT_ID_SET.has(item.id)) {
+                if ((item as any).studentId && DEMO_STUDENT_ID_SET.has((item as any).studentId)) return;
                 if (!cloudIds.has(item.id)) {
                   mergedMap.set(item.id, item);
                   unsynced.push(item);
@@ -1448,7 +1514,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     const cloudStr = JSON.stringify(cloudItem);
                     if (localStr !== cloudStr) {
                       // They differ! Determine if local is newer or has active changes to push
-                      let useLocal = true;
+                      let useLocal = false;
                       const localTime = (item as any).timestamp || (item as any).updatedAt || (item as any).datePaid || (item as any).date;
                       const cloudTime = (cloudItem as any).timestamp || (cloudItem as any).updatedAt || (cloudItem as any).datePaid || (cloudItem as any).date;
                       
@@ -1460,6 +1526,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                             useLocal = localMs > cloudMs;
                           }
                         } catch (e) {}
+                      } else if (localTime && !cloudTime) {
+                        useLocal = true;
+                      } else {
+                        useLocal = false;
                       }
                       
                       if (useLocal) {
@@ -1499,7 +1569,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         setUsers(healedUsers);
         setStudents(healedStudents);
+        idbEngine.setItem('s_students', healedStudents);
         setPayments(healedPayments);
+        idbEngine.setItem('s_payments', healedPayments);
         setExpenses(healedExpenses);
         setSalaries(healedSalaries);
         setBudgetTargets(healedBudgetTargets);
@@ -1572,10 +1644,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           } else {
             const initialTerms = [{
               id: 'term_default',
-              name: 'Term 1 (May/June 2026)',
-              startDate: '2026-05-25',
-              daysCount: 15,
-              schoolDays: generateSchoolDays('2026-05-25', 15),
+              name: 'Term 1 (April - August 2026)',
+              startDate: '2026-04-27',
+              daysCount: 75,
+              schoolDays: generateSchoolDays('2026-04-27', 75),
               active: true
             }];
             setTerms(initialTerms);
@@ -1638,7 +1710,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try {
         if (localUsers) {
           const parsed: UserAccount[] = typeof localUsers === 'string' ? JSON.parse(localUsers) : localUsers;
-          if (!parsed.some(u => u.email.toLowerCase() === 'yakubuhakeem@gmail.com')) {
+          if (!parsed.some(u => u.role === 'Administrator' || u.email.toLowerCase() === 'yakubuhakeem@gmail.com')) {
             parsed.unshift({
               id: 'admin-hakeem',
               name: 'Hakeem Yakubu',
@@ -1646,8 +1718,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               role: 'Administrator',
               mfaEnabled: true,
               mfaSecret: 'SHA-SAAKOKEY2003',
-              passwordEnabled: true,
-              password: 'admin2026'
+              passwordEnabled: true
             });
             idbEngine.setItem('s_users', parsed);
           }
@@ -1666,29 +1737,62 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // Students database healing
       try {
         if (localStudents) {
-          setStudents(typeof localStudents === 'string' ? JSON.parse(localStudents) : localStudents);
+          const parsed = typeof localStudents === 'string' ? JSON.parse(localStudents) : localStudents;
+          const clean = Array.isArray(parsed) ? parsed.filter((s: any) => s && s.id && !ORIGINAL_DEMO_STUDENT_IDS.includes(s.id)) : [];
+          if (clean.length > 0) {
+            setStudents(clean);
+          } else {
+            fetch('/api/students')
+              .then(res => res.json())
+              .then((list: Student[]) => {
+                if (Array.isArray(list) && list.length > 0) {
+                  const filtered = list.filter((s: any) => s && s.id && !ORIGINAL_DEMO_STUDENT_IDS.includes(s.id));
+                  setStudents(filtered);
+                  idbEngine.setItem('s_students', filtered);
+                }
+              }).catch(() => {});
+          }
         } else {
-          const defaultStuds = skipDemo ? [] : INITIAL_STUDENTS;
-          setStudents(defaultStuds);
-          idbEngine.setItem('s_students', defaultStuds);
+          fetch('/api/students')
+            .then(res => res.json())
+            .then((list: Student[]) => {
+              if (Array.isArray(list) && list.length > 0) {
+                const filtered = list.filter((s: any) => s && s.id && !ORIGINAL_DEMO_STUDENT_IDS.includes(s.id));
+                setStudents(filtered);
+                idbEngine.setItem('s_students', filtered);
+              }
+            }).catch(() => {});
         }
       } catch (e) {
-        const defaultStuds = skipDemo ? [] : INITIAL_STUDENTS;
-        setStudents(defaultStuds);
-        idbEngine.setItem('s_students', defaultStuds);
+        fetch('/api/students')
+          .then(res => res.json())
+          .then((list: Student[]) => {
+            if (Array.isArray(list) && list.length > 0) {
+              const filtered = list.filter((s: any) => s && s.id && !ORIGINAL_DEMO_STUDENT_IDS.includes(s.id));
+              setStudents(filtered);
+              idbEngine.setItem('s_students', filtered);
+            }
+          }).catch(() => {});
       }
 
       // Payments ledger healing
       try {
         if (localPayments) {
-          setPayments(typeof localPayments === 'string' ? JSON.parse(localPayments) : localPayments);
+          const parsed = typeof localPayments === 'string' ? JSON.parse(localPayments) : localPayments;
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setPayments(parsed);
+          } else {
+            const seeds = generateSeedPayments();
+            setPayments(seeds);
+            idbEngine.setItem('s_payments', seeds);
+          }
         } else {
-          const seeds = skipDemo ? [] : generateSeedPayments();
+          const seeds = generateSeedPayments();
           setPayments(seeds);
           idbEngine.setItem('s_payments', seeds);
         }
       } catch (e) {
-        const seeds = skipDemo ? [] : generateSeedPayments();
+        const seeds = generateSeedPayments();
         setPayments(seeds);
         idbEngine.setItem('s_payments', seeds);
       }
@@ -1703,10 +1807,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         } else {
           const initialTerms = [{
             id: 'term_default',
-            name: 'Term 1 (May/June 2026)',
-            startDate: '2026-05-25',
-            daysCount: 15,
-            schoolDays: generateSchoolDays('2026-05-25', 15),
+            name: 'Term 1 (April - August 2026)',
+            startDate: '2026-04-27',
+            daysCount: 75,
+            schoolDays: generateSchoolDays('2026-04-27', 75),
             active: true
           }];
           setTerms(initialTerms);
@@ -1715,10 +1819,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (e) {
         const initialTerms = [{
           id: 'term_default',
-          name: 'Term 1 (May/June 2026)',
-          startDate: '2026-05-25',
-          daysCount: 15,
-          schoolDays: generateSchoolDays('2026-05-25', 15),
+          name: 'Term 1 (April - August 2026)',
+          startDate: '2026-04-27',
+          daysCount: 75,
+          schoolDays: generateSchoolDays('2026-04-27', 75),
           active: true
         }];
         setTerms(initialTerms);
@@ -1865,7 +1969,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }, 500);
   };
 
-  const login = (email: string, mfaCode?: string, password?: string) => {
+  const login = async (email: string, mfaCode?: string, password?: string) => {
     const user = users.find(u => u.email.toLowerCase() === email.toLowerCase().trim());
     if (!user) {
       return { success: false, error: 'Account with this email does not exist.' };
@@ -1875,12 +1979,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: 'Your account has been deactivated/disabled. Please contact an Administrator.' };
     }
 
-    // Secure Password Verification (if enabled)
+    // Secure Password Verification
     if (user.passwordEnabled) {
       if (!password) {
         return { success: true, requiresPassword: true };
       }
-      if (password !== user.password) {
+
+      const inputPass = password.trim();
+      let verifiedLocally = false;
+
+      // 1. Direct local password match check (if user/admin set or changed their password)
+      if (user.password && user.password.trim() === inputPass) {
+        verifiedLocally = true;
+      }
+
+      // 2. If no local match, attempt Firebase Authentication
+      if (!verifiedLocally) {
+        const authRes = await firebaseLogin(email, inputPass);
+        if (authRes.success) {
+          verifiedLocally = true;
+          // Sync verified password into user record
+          user.password = inputPass;
+          const updatedUsers = users.map(u => u.id === user.id ? { ...u, password: inputPass } : u);
+          setUsers(updatedUsers);
+          idbEngine.setItem('s_users', updatedUsers);
+        } else if (authRes.code === 'auth/user-not-found' || authRes.code === 'auth/invalid-credential') {
+          // Attempt to create / enroll Firebase Auth user credentials on first login
+          const createRes = await firebaseCreateAccount(email, inputPass);
+          if (createRes.success) {
+            verifiedLocally = true;
+            user.password = inputPass;
+            const updatedUsers = users.map(u => u.id === user.id ? { ...u, password: inputPass } : u);
+            setUsers(updatedUsers);
+            idbEngine.setItem('s_users', updatedUsers);
+          }
+        }
+      }
+
+      if (!verifiedLocally) {
         return { success: false, error: 'Incorrect login password.' };
       }
     }
@@ -1901,6 +2037,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCurrentUser(user);
     idbEngine.setItem('s_current_user', user);
     return { success: true };
+  };
+
+  const changePassword = (userId: string, newPassword: string) => {
+    const trimmed = newPassword.trim();
+    if (!trimmed || trimmed.length < 3) {
+      return { success: false, error: 'Password must be at least 3 characters long.' };
+    }
+
+    let updatedUser: UserAccount | null = null;
+    const nextUsers = users.map(u => {
+      if (u.id === userId) {
+        updatedUser = {
+          ...u,
+          passwordEnabled: true,
+          password: trimmed
+        };
+        return updatedUser;
+      }
+      return u;
+    });
+
+    setUsers(nextUsers);
+    if (currentUser && currentUser.id === userId && updatedUser) {
+      setCurrentUser(updatedUser);
+      idbEngine.setItem('s_current_user', updatedUser);
+    }
+    saveState(nextUsers, students, payments);
+    if (updatedUser && db.isActive() && storageMode === 'cloud') {
+      db.saveUser(updatedUser);
+    } else if (updatedUser) {
+      recordLocallyPendingEdit('user', 'update', `Updated password for account: "${updatedUser.name}"`);
+    }
+    return { success: true };
+  };
+
+  const sendPasswordReset = async (email: string) => {
+    const trimmed = email.toLowerCase().trim();
+    if (!trimmed) {
+      return { success: false, error: 'Please provide a valid email address.' };
+    }
+    return await firebaseSendPasswordReset(trimmed);
   };
 
   const logout = () => {
@@ -1981,7 +2158,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
-  const updateStaff = (userId: string, name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled = false, passwordEnabled = false, password = '', assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string, photoUrl?: string, employeeId?: string, department?: string, gender?: 'Male' | 'Female', employmentType?: 'Full-Time' | 'Part-Time' | 'Contract' | 'Volunteer', idCardDeactivated?: boolean, appointmentDate?: string, contractEndDate?: string, renewalOption?: 'Automatic' | 'Manual Review' | 'Fixed Term' | 'Non-Renewable', renewalPeriod?: string, signatureUrl?: string, managementSignatureUrl?: string, personalAddress?: string) => {
+  const updateStaff = (userId: string, name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled = false, passwordEnabled = false, password = '', assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string, photoUrl?: string, employeeId?: string, department?: string, gender?: 'Male' | 'Female', employmentType?: 'Full-Time' | 'Part-Time' | 'Contract' | 'Volunteer', idCardDeactivated?: boolean, appointmentDate?: string, contractEndDate?: string, renewalOption?: 'Automatic' | 'Manual Review' | 'Fixed Term' | 'Non-Renewable', renewalPeriod?: string, signatureUrl?: string, managementSignatureUrl?: string, personalAddress?: string, ethicsEvaluation?: TeacherEthicsEvaluation) => {
     const trimmedEmail = email.toLowerCase().trim();
     if (users.some(u => u.email.toLowerCase() === trimmedEmail && u.id !== userId)) {
       return { success: false, error: 'A staff member with this email is already registered.' };
@@ -2002,7 +2179,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           mfaEnabled,
           mfaSecret: mfaEnabled ? u.mfaSecret || 'SHA-' + Math.random().toString(36).substring(2, 10).toUpperCase() : undefined,
           passwordEnabled,
-          password: passwordEnabled ? password : u.password,
+          password: passwordEnabled ? ((password && password.trim()) ? password.trim() : u.password) : u.password,
           stipendSalary,
           momoNumber,
           momoName,
@@ -2018,7 +2195,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           renewalPeriod: renewalPeriod !== undefined ? renewalPeriod : u.renewalPeriod,
           signatureUrl: signatureUrl !== undefined ? signatureUrl : u.signatureUrl,
           managementSignatureUrl: managementSignatureUrl !== undefined ? managementSignatureUrl : u.managementSignatureUrl,
-          personalAddress: personalAddress !== undefined ? personalAddress : u.personalAddress
+          personalAddress: personalAddress !== undefined ? personalAddress : u.personalAddress,
+          ethicsEvaluation: ethicsEvaluation !== undefined ? ethicsEvaluation : u.ethicsEvaluation
         };
         return updatedUser;
       }
@@ -2037,6 +2215,54 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       recordLocallyPendingEdit('user', 'update', `Updated settings for staff: "${updatedUser.name}"`);
     }
     return { success: true };
+  };
+
+  const adjustStaffSalariesByPercentage = (adjustments: { userId: string; percentage: number; newSalary?: number; reason?: string }[]) => {
+    if (!adjustments || adjustments.length === 0) return { success: false, count: 0 };
+
+    const adjMap = new Map(adjustments.map(a => [a.userId, a]));
+    const updatedUsersList: UserAccount[] = [];
+
+    const nextUsers = users.map(u => {
+      const adj = adjMap.get(u.id);
+      if (adj) {
+        const currentSalary = u.stipendSalary || 0;
+        let finalSalary = adj.newSalary;
+        if (finalSalary === undefined) {
+          finalSalary = Math.max(0, Math.round((currentSalary * (1 + adj.percentage / 100)) * 100) / 100);
+        } else {
+          finalSalary = Math.max(0, Math.round(finalSalary * 100) / 100);
+        }
+        const updated = {
+          ...u,
+          stipendSalary: finalSalary
+        };
+        updatedUsersList.push(updated);
+        return updated;
+      }
+      return u;
+    });
+
+    setUsers(nextUsers);
+
+    // If current logged in user was adjusted, update state
+    if (currentUser) {
+      const updatedSelf = updatedUsersList.find(u => u.id === currentUser.id);
+      if (updatedSelf) {
+        setCurrentUser(updatedSelf);
+        idbEngine.setItem('s_current_user', updatedSelf);
+      }
+    }
+
+    saveState(nextUsers, students, payments);
+
+    if (db.isActive() && storageMode === 'cloud') {
+      updatedUsersList.forEach(u => db.saveUser(u));
+    } else {
+      recordLocallyPendingEdit('user', 'update', `Batch adjusted wages/salaries for ${updatedUsersList.length} worker(s).`);
+    }
+
+    return { success: true, count: updatedUsersList.length };
   };
 
   const deleteStaff = (userId: string) => {
@@ -2157,7 +2383,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       paymentType: paymentType,
       termFee: termFee,
       legacyDebt: adjustedLegacyDebt,
-      enrollmentDate: enrollmentDate
+      enrollmentDate: enrollmentDate,
+      updatedAt: new Date().toISOString()
     };
 
     const nextStudents = [...students, newStudent];
@@ -2182,11 +2409,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (!proceed) return;
     }
 
-    const nextStudents = students.map(s => s.id === updatedStudent.id ? updatedStudent : s);
+    const studentWithTimestamp: Student = {
+      ...updatedStudent,
+      updatedAt: new Date().toISOString()
+    };
+
+    const nextStudents = students.map(s => s.id === updatedStudent.id ? studentWithTimestamp : s);
     setStudents(nextStudents);
     saveState(users, nextStudents, payments);
     if (db.isActive() && storageMode === 'cloud') {
-      db.saveStudent(updatedStudent);
+      db.saveStudent(studentWithTimestamp);
     } else {
       recordLocallyPendingEdit('student', 'update', `Updated record for pupil: "${updatedStudent.name}"`);
     }
@@ -2372,6 +2604,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       console.warn("Write operations are disabled while viewing historical archives.");
       return;
     }
+
+    // Strict Public Holiday Guard: Gate check-ins and fee collections are disabled on public holidays
+    const isPublicHoliday = activeTerm?.publicHolidays?.includes(currentDate);
+    if (isPublicHoliday) {
+      playFeedbackSound('error');
+      console.warn(`Gate check-in / fee collection rejected on ${currentDate}: Today is a declared public holiday.`);
+      return;
+    }
+
     const student = students.find(s => s.id === studentId);
     if (!student) return;
 
@@ -2484,12 +2725,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     }
 
-    const totalRequired = billableDays.length * dailyRate;
+    const totalRequired = multiplyCurrency(billableDays.length, dailyRate);
     const totalPaid = studentPayments
       .filter(p => !p.isAbsent)
-      .reduce((sum, p) => sum + p.amount, 0);
+      .reduce((sum, p) => addCurrency(sum, p.amount), 0);
 
-    const totalDebt = Math.max(0, totalRequired - totalPaid);
+    const totalDebt = Math.max(0, subtractCurrency(totalRequired, totalPaid));
 
     if (totalDebt === 0 && finalAmount > dailyRate) {
       recordAdvancePayment(studentId, finalAmount, verified);
@@ -3059,6 +3300,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       console.warn("Write operations are disabled while viewing historical archives.");
       return;
     }
+
+    // Strict Public Holiday Guard: Gate check-ins and fee collections are disabled on public holidays
+    const isPublicHoliday = activeTerm?.publicHolidays?.includes(currentDate);
+    if (isPublicHoliday) {
+      playFeedbackSound('error');
+      console.warn(`Bulk check-in / fee collection rejected on ${currentDate}: Today is a declared public holiday.`);
+      return;
+    }
+
     let nextPayments = [...payments];
     const recordsToSync: PaymentRecord[] = [];
     studentIds.forEach(id => {
@@ -3755,7 +4005,19 @@ School Administration Financial Audit System (MFA Secure)
       return t;
     });
     saveTerms(nextTerms);
-    recordLocallyPendingEdit('term', 'update', `Added public holiday on ${date}`);
+
+    // Automatically purge all payments & attendance records on this holiday date so pupils pay GHC 0.00
+    const holidayPayments = payments.filter(p => p.date === date);
+    if (holidayPayments.length > 0) {
+      holidayPayments.forEach(hp => {
+        if (db.isActive()) db.deletePayment(hp.id);
+      });
+      const cleanedPayments = payments.filter(p => p.date !== date);
+      setPayments(cleanedPayments);
+      idbEngine.setItem('s_payments', cleanedPayments);
+    }
+
+    recordLocallyPendingEdit('term', 'update', `Added public holiday on ${date} (cleared ${holidayPayments.length} holiday payment/attendance entries)`);
   };
 
   const removePublicHoliday = (termId: string, date: string) => {
@@ -3780,14 +4042,19 @@ School Administration Financial Audit System (MFA Secure)
     idbEngine.removeItem('s_terms');
     setUsers(INITIAL_USERS);
     setStudents(INITIAL_STUDENTS);
-    setPayments(generateSeedPayments());
+    const seedPays = generateSeedPayments();
+    setPayments(seedPays);
+
+    idbEngine.setItem('s_users', INITIAL_USERS);
+    idbEngine.setItem('s_students', INITIAL_STUDENTS);
+    idbEngine.setItem('s_payments', seedPays);
     
     const initialTerms = [{
       id: 'term_default',
-      name: 'Term 1 (May/June 2026)',
-      startDate: '2026-05-25',
-      daysCount: 15,
-      schoolDays: generateSchoolDays('2026-05-25', 15),
+      name: 'Term 1 (April - August 2026)',
+      startDate: '2026-04-27',
+      daysCount: 75,
+      schoolDays: generateSchoolDays('2026-04-27', 75),
       active: true
     }];
     setTerms(initialTerms);
@@ -3796,7 +4063,7 @@ School Administration Financial Audit System (MFA Secure)
     updateSystemSettings({ disableDemoData: false });
 
     if (db.isActive() && storageMode === 'cloud') {
-      db.seedTables(INITIAL_USERS, INITIAL_STUDENTS, generateSeedPayments(), initialTerms).catch(err => {
+      db.seedTables(INITIAL_USERS, INITIAL_STUDENTS, seedPays, initialTerms).catch(err => {
         console.error("Failed to seed fallback data on backend server:", err);
       });
     }
@@ -3808,23 +4075,30 @@ School Administration Financial Audit System (MFA Secure)
     idbEngine.setItem('s_students', []);
     idbEngine.setItem('s_payments', []);
     
+    saveState(users, [], []);
     updateSystemSettings({ disableDemoData: true });
     
-    // If backend sync is active, clear database on the server too keeping staff users intact
-    if (db.isActive() && storageMode === 'cloud') {
+    // Always update database tables on backend (db.json & Firestore) keeping staff users intact
+    if (db.isActive()) {
       db.seedTables(users, [], []).catch(err => {
         console.error("Failed to seed empty tables on backend server:", err);
       });
     }
+
+    logActivity('students', 'students', 'Wiped all student records and transaction history to start clean.');
   };
 
   const purgeOnlyDemoData = async (): Promise<{ success: boolean; message: string }> => {
     const demoStudentIds = new Set(ORIGINAL_DEMO_STUDENT_IDS);
     const demoUserIds = new Set(['accountant-1']);
 
-    const nextStudents = students.filter(s => !demoStudentIds.has(s.id));
-    const nextPayments = payments.filter(p => !demoStudentIds.has(p.studentId));
+    // Filter out demo student IDs (s1..s27) and generated simulation IDs starting with 'student_'
+    const nextStudents = students.filter(s => !demoStudentIds.has(s.id) && !s.id.startsWith('student_'));
+    const nextStudentIds = new Set(nextStudents.map(s => s.id));
+    const nextPayments = payments.filter(p => nextStudentIds.has(p.studentId));
     const nextUsers = users.filter(u => !demoUserIds.has(u.id));
+
+    const purgedCount = students.length - nextStudents.length;
 
     setStudents(nextStudents);
     setPayments(nextPayments);
@@ -3833,32 +4107,34 @@ School Administration Financial Audit System (MFA Secure)
     idbEngine.setItem('s_students', nextStudents);
     idbEngine.setItem('s_payments', nextPayments);
     idbEngine.setItem('s_users', nextUsers);
+    saveState(nextUsers, nextStudents, nextPayments);
 
     await updateSystemSettings({ disableDemoData: true });
 
     if (db.isActive()) {
+      db.seedTables(nextUsers, nextStudents, nextPayments).catch(err => {
+        console.error("Failed to sync purged tables on backend server:", err);
+      });
       try {
-        const res = await (db as any).purgeDemoData();
-        if (res && res.success) {
-          return {
-            success: true,
-            message: `Cleaned up your registers successfully: Removed ${res.purgedStudentsCount} demo student records, ${res.purgedPaymentsCount} sample transactions, and ${res.purgedUsersCount} demo staff account.`
-          };
-        }
+        await (db as any).purgeDemoData();
       } catch (err) {
         console.error("Failed to call backend purge-demo API:", err);
       }
     }
 
+    logActivity('students', 'students', `Purged ${purgedCount} demo/compromised student records.`);
+
     return {
       success: true,
-      message: "Successfully filtered out the 27 demo students and their transactions locally."
+      message: `Cleaned up your registers successfully: Removed ${purgedCount} demo/compromised student record(s) and associated transaction logs. Your register is now ready for clean manual entry.`
     };
   };
 
   const clearAllPayments = () => {
+    const clearedCount = payments.length;
     setPayments([]);
     idbEngine.setItem('s_payments', []);
+    saveState(users, students, []);
     
     // If backend sync is active, clear payments collection on backend keeping everything else
     if (db.isActive() && storageMode === 'cloud') {
@@ -3866,6 +4142,329 @@ School Administration Financial Audit System (MFA Secure)
         console.error("Failed to clear payments table on backend server:", err);
       });
     }
+
+    logActivity('payments', 'payments', `Cleared all ${clearedCount} fee and check-in payment entries while retaining all ${students.length} registered pupils.`);
+  };
+
+  const administrativePurge = (options: AdministrativePurgeOptions): AdministrativePurgeResult => {
+    let nextPayments = [...payments];
+    let nextStudents = [...students];
+    let nextExpenses = [...expenses];
+    let nextJournals = [...journalEntries];
+
+    let clearedPaymentsCount = 0;
+    let clearedAttendanceCount = 0;
+    let clearedExamCount = 0;
+    let clearedExpensesCount = 0;
+    let clearedJournalsCount = 0;
+    let purgedDemoStudentsCount = 0;
+
+    // 1. Purge Demo / Simulation Roster Data (if selected)
+    if (options.purgeDemoRoster) {
+      const demoStudentIds = new Set(ORIGINAL_DEMO_STUDENT_IDS);
+      const beforeCount = nextStudents.length;
+      nextStudents = nextStudents.filter(s => !demoStudentIds.has(s.id) && !s.id.startsWith('student_'));
+      purgedDemoStudentsCount = beforeCount - nextStudents.length;
+      const validStudentIds = new Set(nextStudents.map(s => s.id));
+      nextPayments = nextPayments.filter(p => validStudentIds.has(p.studentId));
+    }
+
+    // 2. Remove Exam Records (Payments & Expenses)
+    if (options.removeExamRecords) {
+      const initialPaymentsCount = nextPayments.length;
+      nextPayments = nextPayments.filter(p => {
+        const notes = (p.notes || '').toLowerCase();
+        const isExam = notes.includes('exam') || notes.includes('examination') || notes.includes('assessment') || notes.includes('test');
+        return !isExam;
+      });
+      clearedExamCount += (initialPaymentsCount - nextPayments.length);
+
+      const initialExpCount = nextExpenses.length;
+      nextExpenses = nextExpenses.filter(e => {
+        const desc = (e.description || '').toLowerCase();
+        const cat = (e.category || '').toLowerCase();
+        const isExam = desc.includes('exam') || desc.includes('examination') || desc.includes('assessment') || desc.includes('test') || cat.includes('exam');
+        return !isExam;
+      });
+      clearedExamCount += (initialExpCount - nextExpenses.length);
+    }
+
+    // 3. Reset Attendance Logs (Absent marks & zero-pay check-in entries)
+    if (options.resetAttendanceLogs) {
+      const initialPaymentsCount = nextPayments.length;
+      nextPayments = nextPayments.filter(p => {
+        const notes = (p.notes || '').toLowerCase();
+        const isAttendanceMarker = p.isAbsent || p.amount === 0 || notes.includes('absent') || notes.includes('zero-pay') || notes.includes('check-in');
+        return !isAttendanceMarker;
+      });
+      clearedAttendanceCount = (initialPaymentsCount - nextPayments.length);
+    }
+
+    // 4. Clear All Daily Fee Payments
+    if (options.clearDailyPayments) {
+      if (options.removeExamRecords) {
+        clearedPaymentsCount += nextPayments.length;
+        nextPayments = [];
+      } else {
+        const temp = [...nextPayments];
+        nextPayments = [];
+        temp.forEach(p => {
+          const notes = (p.notes || '').toLowerCase();
+          const isExam = notes.includes('exam') || notes.includes('examination') || notes.includes('assessment') || notes.includes('test');
+          if (isExam) {
+            nextPayments.push(p);
+          } else {
+            clearedPaymentsCount++;
+          }
+        });
+      }
+    }
+
+    // 5. Clear All Operational Expenses
+    if (options.clearExpenses) {
+      clearedExpensesCount = nextExpenses.length;
+      nextExpenses = [];
+    }
+
+    // 6. Clear Journal & Ledger Entries
+    if (options.clearJournalEntries) {
+      clearedJournalsCount = nextJournals.length;
+      nextJournals = [];
+    }
+
+    // Commit State & Persist
+    setPayments(nextPayments);
+    idbEngine.setItem('s_payments', nextPayments);
+
+    setStudents(nextStudents);
+    idbEngine.setItem('s_students', nextStudents);
+
+    setExpenses(nextExpenses);
+    idbEngine.setItem('s_expenses', nextExpenses);
+
+    setJournalEntries(nextJournals);
+    idbEngine.setItem('s_journal_entries', nextJournals);
+
+    saveState(users, nextStudents, nextPayments);
+
+    if (db.isActive()) {
+      db.seedTables(users, nextStudents, nextPayments).catch(err => {
+        console.error("Failed to sync purged tables on backend server:", err);
+      });
+    }
+
+    const summaryParts: string[] = [];
+    if (clearedPaymentsCount > 0) summaryParts.push(`${clearedPaymentsCount} fee payment(s)`);
+    if (clearedAttendanceCount > 0) summaryParts.push(`${clearedAttendanceCount} attendance log(s)`);
+    if (clearedExamCount > 0) summaryParts.push(`${clearedExamCount} exam record(s)`);
+    if (clearedExpensesCount > 0) summaryParts.push(`${clearedExpensesCount} expense entry(ies)`);
+    if (clearedJournalsCount > 0) summaryParts.push(`${clearedJournalsCount} journal log(s)`);
+    if (purgedDemoStudentsCount > 0) summaryParts.push(`${purgedDemoStudentsCount} demo pupil(s)`);
+
+    const summaryMsg = summaryParts.length > 0
+      ? `Administrative Purge Complete: Cleared ${summaryParts.join(', ')}. Master roster of registered pupils remains intact (${nextStudents.length} pupils).`
+      : `Administrative Purge: Selected criteria processed. Master roster of registered pupils remains intact (${nextStudents.length} pupils).`;
+
+    logActivity('settings', 'other', summaryMsg);
+
+    return {
+      clearedPaymentsCount,
+      clearedAttendanceCount,
+      clearedExamCount,
+      clearedExpensesCount,
+      clearedJournalsCount,
+      purgedDemoStudentsCount,
+      message: summaryMsg
+    };
+  };
+
+  const purgeDuplicatePayments = (): { count: number; message: string } => {
+    const map = new Map<string, PaymentRecord[]>();
+    payments.forEach(p => {
+      const key = `${p.studentId}_${p.date}`;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(p);
+    });
+
+    const idsToDelete = new Set<string>();
+
+    map.forEach((records) => {
+      if (records.length > 1) {
+        records.sort((a, b) => {
+          if (a.amount > 0 && b.amount === 0) return -1;
+          if (a.amount === 0 && b.amount > 0) return 1;
+          const timeA = new Date(a.timestamp || 0).getTime();
+          const timeB = new Date(b.timestamp || 0).getTime();
+          return timeB - timeA;
+        });
+
+        for (let i = 1; i < records.length; i++) {
+          idsToDelete.add(records[i].id);
+        }
+      }
+    });
+
+    if (idsToDelete.size === 0) {
+      return { count: 0, message: "No duplicate payment records found." };
+    }
+
+    const nextPayments = payments.filter(p => !idsToDelete.has(p.id));
+    setPayments(nextPayments);
+    saveState(users, students, nextPayments);
+
+    if (db.isActive()) {
+      idsToDelete.forEach(id => db.deletePayment(id));
+    }
+
+    const msg = `Successfully purged ${idsToDelete.size} duplicate/repeated payment record(s).`;
+    return { count: idsToDelete.size, message: msg };
+  };
+
+  const purgeAdvancePayments = (studentIdFilter?: string): { count: number; message: string } => {
+    const isAdvanceRecord = (p: PaymentRecord) => {
+      if (studentIdFilter && p.studentId !== studentIdFilter) return false;
+      const n = (p.notes || '').toLowerCase();
+      const isAdvNote = 
+        n.includes('advance') || 
+        n.includes('prepaid') || 
+        n.includes('covered (prepaid') || 
+        n.includes('block prepaid') || 
+        n.includes('top-up added');
+      
+      const isZeroMarker = p.amount === 0 && (n.includes('covered') || n.includes('prepaid') || n.includes('advance'));
+      return isAdvNote || isZeroMarker;
+    };
+
+    const toDelete = payments.filter(isAdvanceRecord);
+    if (toDelete.length === 0) {
+      return { count: 0, message: "No advance or prepaid payment records found." };
+    }
+
+    const idsToDelete = new Set<string>(toDelete.map(p => p.id));
+    const nextPayments = payments.filter(p => !idsToDelete.has(p.id));
+
+    setPayments(nextPayments);
+    saveState(users, students, nextPayments);
+
+    if (db.isActive()) {
+      idsToDelete.forEach((id: string) => db.deletePayment(id));
+    }
+
+    const msg = `Successfully purged ${toDelete.length} advance/prepaid payment record(s).`;
+    return { count: toDelete.length, message: msg };
+  };
+
+  const purgeRepeatedAndAdvancePayments = (options: { duplicates?: boolean; advance?: boolean; studentId?: string }): { count: number; message: string } => {
+    let totalPurged = 0;
+    const msgs: string[] = [];
+
+    if (options.duplicates !== false) {
+      const resDup = purgeDuplicatePayments();
+      if (resDup.count > 0) {
+        totalPurged += resDup.count;
+        msgs.push(`${resDup.count} duplicate payment(s)`);
+      }
+    }
+
+    if (options.advance !== false) {
+      const resAdv = purgeAdvancePayments(options.studentId);
+      if (resAdv.count > 0) {
+        totalPurged += resAdv.count;
+        msgs.push(`${resAdv.count} advance/prepaid payment(s)`);
+      }
+    }
+
+    if (totalPurged === 0) {
+      return { count: 0, message: "No duplicate or advance payment records found to clean up." };
+    }
+
+    return { 
+      count: totalPurged, 
+      message: `Clean-up Complete: Purged ${msgs.join(' and ')} successfully.` 
+    };
+  };
+
+  const purgePublicHolidayPayments = (): { count: number; message: string } => {
+    const holidaysList = terms.flatMap(t => t.publicHolidays || []);
+    if (!holidaysList.length) return { count: 0, message: "No public holidays registered in any term." };
+
+    const invalidHolidayPayments = payments.filter(p => holidaysList.includes(p.date));
+    if (invalidHolidayPayments.length === 0) {
+      return { count: 0, message: "No attendance or fee entries found on public holiday dates." };
+    }
+
+    const idsToDelete = new Set(invalidHolidayPayments.map(p => p.id));
+    const nextPayments = payments.filter(p => !idsToDelete.has(p.id));
+
+    setPayments(nextPayments);
+    idbEngine.setItem('s_payments', nextPayments);
+    saveState(users, students, nextPayments);
+
+    if (db.isActive()) {
+      idsToDelete.forEach((id: string) => db.deletePayment(id));
+    }
+
+    logActivity('payments', 'payments', `Purged ${idsToDelete.size} payment/attendance records logged on public holidays.`);
+    return {
+      count: idsToDelete.size,
+      message: `Successfully purged ${idsToDelete.size} entry(ies) recorded on public holiday dates.`
+    };
+  };
+
+  const deleteAllAutomaticEntries = (): { deletedPaymentsCount: number; deletedJournalsCount: number; message: string } => {
+    const holidaysList = terms.flatMap(t => t.publicHolidays || []);
+
+    // 1. Identify payment entries logged on public holidays OR auto-generated system/debt payments
+    const autoPayments = payments.filter(p => {
+      if (holidaysList.includes(p.date)) return true;
+      if (p.id.endsWith('_debt')) return true;
+      const lowerNotes = (p.notes || '').toLowerCase();
+      if (
+        lowerNotes.includes('auto-') || 
+        lowerNotes.includes('automatic') || 
+        lowerNotes.includes('system auto-correction') || 
+        lowerNotes.includes('auto-book') ||
+        lowerNotes.includes('auto-checkin')
+      ) return true;
+      return false;
+    });
+
+    const paymentIdsToDelete = new Set(autoPayments.map(p => p.id));
+    const nextPayments = payments.filter(p => !paymentIdsToDelete.has(p.id));
+
+    if (db.isActive()) {
+      paymentIdsToDelete.forEach((id: string) => db.deletePayment(id));
+    }
+    setPayments(nextPayments);
+    idbEngine.setItem('s_payments', nextPayments);
+
+    // 2. Identify auto-generated journal entries
+    const autoJournals = journalEntries.filter(j => {
+      if (j.recordedBy === 'Auto-Ledger Bot') return true;
+      const lowerDesc = (j.description || '').toLowerCase();
+      if (lowerDesc.includes('auto-book') || lowerDesc.includes('auto-sync') || lowerDesc.includes('auto-ledger')) return true;
+      return false;
+    });
+
+    const journalIdsToDelete = new Set(autoJournals.map(j => j.id));
+    const nextJournals = journalEntries.filter(j => !journalIdsToDelete.has(j.id));
+
+    if (db.isActive()) {
+      journalIdsToDelete.forEach((id: string) => db.deleteJournalEntry(id));
+    }
+    setJournalEntries(nextJournals);
+    idbEngine.setItem('s_journal_entries', nextJournals);
+
+    saveState(users, students, nextPayments);
+
+    const msg = `Successfully deleted all automatic entries: Purged ${paymentIdsToDelete.size} auto/holiday payment record(s) and ${journalIdsToDelete.size} auto-booked journal entry(ies).`;
+    logActivity('settings', 'other', msg);
+
+    return {
+      deletedPaymentsCount: paymentIdsToDelete.size,
+      deletedJournalsCount: journalIdsToDelete.size,
+      message: msg
+    };
   };
 
   const promoteAllStudents = (customActions?: Record<string, 'promote' | 'repeat' | 'graduate' | 'withdraw'>) => {
@@ -3942,7 +4541,8 @@ School Administration Financial Audit System (MFA Secure)
         return {
           ...student,
           class: mapEntry.nextClass,
-          category: mapEntry.category
+          category: mapEntry.category,
+          active: false // Promoted pupils start as INACTIVE until activated upon returning from vacation
         };
       }
 
@@ -4613,6 +5213,8 @@ School Administration Financial Audit System (MFA Secure)
       currentDate,
       setCurrentDate,
       login,
+      sendPasswordReset,
+      changePassword,
       logout,
       toggleMfaForUser,
       addStudent,
@@ -4637,6 +5239,7 @@ School Administration Financial Audit System (MFA Secure)
       adjustPayment,
       registerStaff,
       updateStaff,
+      adjustStaffSalariesByPercentage,
       deleteStaff,
       toggleStaffActive,
       getDailyStats,
@@ -4648,6 +5251,12 @@ School Administration Financial Audit System (MFA Secure)
       clearSampleStudents,
       purgeOnlyDemoData,
       clearAllPayments,
+      administrativePurge,
+      purgeDuplicatePayments,
+      purgeAdvancePayments,
+      purgeRepeatedAndAdvancePayments,
+      purgePublicHolidayPayments,
+      deleteAllAutomaticEntries,
       firebaseConnected,
       firebaseError,
       retryFirebaseConnection: initializeData,

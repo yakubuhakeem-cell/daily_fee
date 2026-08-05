@@ -211,6 +211,7 @@ export const SettingsPanel: React.FC = () => {
             setActiveSubTab('appearance');
             playFeedbackSound('success');
           }}
+          title="Appearance & Identity: Configure school name, institution logo, currency symbol, and theme settings"
           className={`pb-3 font-mono text-[11px] font-black uppercase tracking-widest border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
             activeSubTab === 'appearance'
               ? 'border-amber-400 text-amber-400'
@@ -226,6 +227,7 @@ export const SettingsPanel: React.FC = () => {
             setActiveSubTab('financial');
             playFeedbackSound('success');
           }}
+          title="Financial & Rates: Set baseline daily entry fees, term lump-sum rates, and early payment discount policies"
           className={`pb-3 font-mono text-[11px] font-black uppercase tracking-widest border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
             activeSubTab === 'financial'
               ? 'border-amber-400 text-amber-400'

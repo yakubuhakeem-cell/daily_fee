@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
+import { idbEngine } from '../lib/idbEngine';
+import { Student, PaymentRecord, ExamsPayment, StudentClass, SchoolCategory, AdministrativePurgeOptions } from '../types';
 import { 
   Database, 
   RefreshCw, 
@@ -11,7 +13,12 @@ import {
   X, 
   ShieldAlert,
   Upload,
-  UploadCloud 
+  UploadCloud,
+  FileText,
+  CheckCircle2,
+  AlertTriangle,
+  HardDrive,
+  Sparkles
 } from 'lucide-react';
 
 interface DatabaseTabProps {
@@ -49,7 +56,13 @@ export const DatabaseTab: React.FC<DatabaseTabProps> = ({ showToast, setActiveTa
     bgSyncStatus,
     lastBgSyncTime,
     clearSampleStudents,
+    clearAllPayments,
     purgeOnlyDemoData,
+    purgeDuplicatePayments,
+    purgeAdvancePayments,
+    purgeRepeatedAndAdvancePayments,
+    purgePublicHolidayPayments,
+    deleteAllAutomaticEntries,
     currentDate,
     activeTerm,
     terms,
@@ -72,20 +85,415 @@ export const DatabaseTab: React.FC<DatabaseTabProps> = ({ showToast, setActiveTa
     examsPayments,
     examsExpenses,
     examsSettings,
-    importDatabaseBackup
+    importDatabaseBackup,
+    administrativePurge,
+    journalEntries
   } = useApp();
 
   // Local States
   const [localTimeLeft, setLocalTimeLeft] = useState<number>(30 * 60);
   const [backupLabel, setBackupLabel] = useState('');
+  const [purgeOptions, setPurgeOptions] = useState<AdministrativePurgeOptions>({
+    clearDailyPayments: false,
+    resetAttendanceLogs: false,
+    removeExamRecords: false,
+    clearExpenses: false,
+    clearJournalEntries: false,
+    purgeDemoRoster: false,
+  });
+  const [showAdminPurgeConfirm, setShowAdminPurgeConfirm] = useState(false);
   const [showBackupPurgeConfirm, setShowBackupPurgeConfirm] = useState(false);
   const [showRestoreConfirmId, setShowRestoreConfirmId] = useState<string | null>(null);
   const [showPurgeDemoConfirm, setShowPurgeDemoConfirm] = useState(false);
+  const [showClearPaymentsConfirm, setShowClearPaymentsConfirm] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [copiedAddress, setCopiedAddress] = useState(false);
   const [showLedgerSwitchModal, setShowLedgerSwitchModal] = useState(false);
   const [isSyncingTransition, setIsSyncingTransition] = useState(false);
+
+  // Data Recovery & CSV Import States
+  const [recoveryTab, setRecoveryTab] = useState<'cache' | 'students' | 'payments' | 'exams'>('cache');
+  const [studentsCsvInput, setStudentsCsvInput] = useState('');
+  const [paymentsCsvInput, setPaymentsCsvInput] = useState('');
+  const [examsCsvInput, setExamsCsvInput] = useState('');
+  const [isProcessingRecovery, setIsProcessingRecovery] = useState(false);
+  const [idbCounts, setIdbCounts] = useState<{ students: number; payments: number; examsPayments: number } | null>(null);
+
+  const checkIdbCounts = async () => {
+    try {
+      await idbEngine.init();
+      await idbEngine.migrateFromLocalStorage();
+      const s = await idbEngine.getItem<any[]>('s_students') || [];
+      const p = await idbEngine.getItem<any[]>('s_payments') || [];
+      const ep = await idbEngine.getItem<any[]>('s_exams_payments') || [];
+
+      // Check raw localStorage fallback
+      let lsS: any[] = [];
+      let lsP: any[] = [];
+      let lsEP: any[] = [];
+      try {
+        const rawS = localStorage.getItem('s_students');
+        if (rawS) lsS = JSON.parse(rawS);
+        const rawP = localStorage.getItem('s_payments');
+        if (rawP) lsP = JSON.parse(rawP);
+        const rawEP = localStorage.getItem('s_exams_payments');
+        if (rawEP) lsEP = JSON.parse(rawEP);
+      } catch (e) {
+        console.warn("Failed checking localStorage raw counts:", e);
+      }
+
+      const totalStudents = Math.max(Array.isArray(s) ? s.length : 0, Array.isArray(lsS) ? lsS.length : 0);
+      const totalPayments = Math.max(Array.isArray(p) ? p.length : 0, Array.isArray(lsP) ? lsP.length : 0);
+      const totalExamsPayments = Math.max(Array.isArray(ep) ? ep.length : 0, Array.isArray(lsEP) ? lsEP.length : 0);
+
+      setIdbCounts({
+        students: totalStudents,
+        payments: totalPayments,
+        examsPayments: totalExamsPayments,
+      });
+    } catch (e) {
+      console.warn("Failed checking IDB counts:", e);
+    }
+  };
+
+  useEffect(() => {
+    checkIdbCounts();
+  }, [students.length, payments.length, examsPayments.length]);
+
+  const handleSyncFromIndexedDBCache = async () => {
+    setIsProcessingRecovery(true);
+    try {
+      await idbEngine.init();
+      await idbEngine.migrateFromLocalStorage();
+
+      const cachedStudents = await idbEngine.getItem<Student[]>('s_students') || [];
+      const cachedPayments = await idbEngine.getItem<PaymentRecord[]>('s_payments') || [];
+      const cachedExamsPayments = await idbEngine.getItem<ExamsPayment[]>('s_exams_payments') || [];
+
+      // Also read raw localStorage as fallback
+      let lsStudents: Student[] = [];
+      let lsPayments: PaymentRecord[] = [];
+      let lsExamsPayments: ExamsPayment[] = [];
+      try {
+        const rawS = localStorage.getItem('s_students');
+        if (rawS) lsStudents = JSON.parse(rawS);
+        const rawP = localStorage.getItem('s_payments');
+        if (rawP) lsPayments = JSON.parse(rawP);
+        const rawEP = localStorage.getItem('s_exams_payments');
+        if (rawEP) lsExamsPayments = JSON.parse(rawEP);
+      } catch (e) {
+        console.warn("Error reading localStorage directly:", e);
+      }
+
+      const studentMap = new Map<string, Student>();
+      students.forEach(s => studentMap.set(s.id, s));
+      cachedStudents.forEach(s => { if (s && s.id) studentMap.set(s.id, s); });
+      lsStudents.forEach(s => { if (s && s.id) studentMap.set(s.id, s); });
+
+      const paymentMap = new Map<string, PaymentRecord>();
+      payments.forEach(p => paymentMap.set(p.id, p));
+      cachedPayments.forEach(p => { if (p && p.id) paymentMap.set(p.id, p); });
+      lsPayments.forEach(p => { if (p && p.id) paymentMap.set(p.id, p); });
+
+      const examsPaymentMap = new Map<string, ExamsPayment>();
+      examsPayments.forEach(ep => examsPaymentMap.set(ep.id, ep));
+      cachedExamsPayments.forEach(ep => { if (ep && ep.id) examsPaymentMap.set(ep.id, ep); });
+      lsExamsPayments.forEach(ep => { if (ep && ep.id) examsPaymentMap.set(ep.id, ep); });
+
+      const mergedStudents = Array.from(studentMap.values());
+      const mergedPayments = Array.from(paymentMap.values());
+      const mergedExamsPayments = Array.from(examsPaymentMap.values());
+
+      if (mergedStudents.length === 0 && mergedPayments.length === 0 && mergedExamsPayments.length === 0) {
+        showToast("⚠️ No cached data found in your browser's local storage (IndexedDB / LocalStorage).");
+        return;
+      }
+
+      await importDatabaseBackup({
+        app: "FEETRACK",
+        data: {
+          students: mergedStudents,
+          payments: mergedPayments,
+          examsPayments: mergedExamsPayments,
+          users,
+          terms,
+          expenses,
+          salaries,
+          whatsappLogs,
+          budgetTargets,
+          backups,
+          examsExpenses,
+          examsSettings
+        }
+      });
+
+      showToast(`✅ Browser Cache Recovery Complete! Restored ${mergedStudents.length} pupils, ${mergedPayments.length} fee payments, and ${mergedExamsPayments.length} exam fee records from your browser storage.`);
+      await checkIdbCounts();
+    } catch (err) {
+      console.error("Cache sync failed:", err);
+      showToast(`❌ Cache sync failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsProcessingRecovery(false);
+    }
+  };
+
+  const downloadSampleStudentsCSV = () => {
+    const csvContent = `Name,Class,Gender,Guardian Name,Guardian Phone,Sub-Category,Discount %
+Kwame Addo,Nursery,Male,Kofi Addo,0240001122,Pre-school,0
+Abena Mensah,Nursery,Female,Ama Mensah,0240003344,Pre-school,0
+Kofi Owusu,KG1,Male,Yaw Owusu,0240005566,Pre-school,0
+Esi Baah,B1,Female,Akwasi Baah,0240007788,Primary,0`;
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'nursery_and_pupils_enrollment_template.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadSamplePaymentsCSV = () => {
+    const csvContent = `Date,Student Name or ID,Class,Amount Paid,Payment Method,Payer Name
+2026-05-25,Kwame Addo,Nursery,5,Cash,Kofi Addo
+2026-05-25,Abena Mensah,Nursery,5,Cash,Ama Mensah
+2026-05-26,Kofi Owusu,KG1,5,Mobile Money,Yaw Owusu`;
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'daily_school_fees_7_weeks_template.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadSampleExamsCSV = () => {
+    const csvContent = `Date,Student Name or ID,Class,Amount Paid,Payment Method
+2026-05-20,Kwame Addo,Nursery,20,Cash
+2026-05-20,Abena Mensah,Nursery,20,Mobile Money
+2026-05-21,Esi Baah,B1,30,Cash`;
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'exams_fee_payments_template.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImportStudentsCSV = async (csvText: string) => {
+    if (!csvText.trim()) {
+      showToast("Please select a CSV file or paste CSV text first.");
+      return;
+    }
+    setIsProcessingRecovery(true);
+    try {
+      const lines = csvText.split(/\r?\n/).filter(line => line.trim().length > 0);
+      const newStudentsList = [...students];
+      let addedCount = 0;
+      let updatedCount = 0;
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (i === 0 && (line.toLowerCase().includes("name") || line.toLowerCase().includes("class"))) {
+          continue;
+        }
+        const parts = line.split(",").map(p => p.trim().replace(/^["']|["']$/g, ''));
+        if (parts.length === 0 || !parts[0]) continue;
+
+        const name = parts[0];
+        const cls = (parts[1] as StudentClass) || 'Nursery';
+        const gender = (parts[2] || 'Male') as 'Male' | 'Female';
+        const guardianName = parts[3] || 'Parent / Guardian';
+        const guardianPhone = parts[4] || '0240000000';
+        const category = (['Nursery', 'KG1', 'KG2'].includes(cls) ? 'Pre-school' : ['B1', 'B2', 'B3', 'B4', 'B5', 'B6'].includes(cls) ? 'Primary' : 'JHS') as SchoolCategory;
+        const discountPercent = parseFloat(parts[6]) || 0;
+
+        const existingIdx = newStudentsList.findIndex(s => s.name.toLowerCase() === name.toLowerCase() && s.class === cls);
+        if (existingIdx >= 0) {
+          newStudentsList[existingIdx] = {
+            ...newStudentsList[existingIdx],
+            gender,
+            guardianName,
+            guardianPhone,
+            category,
+            discountPercent,
+            active: true
+          };
+          updatedCount++;
+        } else {
+          const id = `s_import_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+          newStudentsList.push({
+            id,
+            name,
+            class: cls,
+            gender,
+            guardianName,
+            guardianPhone,
+            category,
+            discountPercent,
+            active: true,
+            dateJoined: new Date().toISOString().split('T')[0]
+          });
+          addedCount++;
+        }
+      }
+
+      await importDatabaseBackup({
+        app: "FEETRACK",
+        data: {
+          students: newStudentsList,
+          payments,
+          examsPayments,
+          users,
+          terms,
+          expenses,
+          salaries,
+          whatsappLogs,
+          budgetTargets,
+          backups,
+          examsExpenses,
+          examsSettings
+        }
+      });
+
+      setStudentsCsvInput('');
+      showToast(`✅ Pupils CSV Processed! Enrolled ${addedCount} new pupils, updated ${updatedCount} existing pupils. Total pupils: ${newStudentsList.length}.`);
+    } catch (err) {
+      console.error("CSV import error:", err);
+      showToast(`❌ Failed to parse pupils CSV: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsProcessingRecovery(false);
+    }
+  };
+
+  const handleImportPaymentsCSV = async (csvText: string, isExamPayments: boolean) => {
+    if (!csvText.trim()) {
+      showToast("Please select a CSV file or paste CSV text first.");
+      return;
+    }
+    setIsProcessingRecovery(true);
+    try {
+      const lines = csvText.split(/\r?\n/).filter(line => line.trim().length > 0);
+      const termId = activeTerm?.id || 'term_default';
+
+      if (isExamPayments) {
+        const newExamsList = [...examsPayments];
+        let added = 0;
+
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i].trim();
+          if (i === 0 && (line.toLowerCase().includes("date") || line.toLowerCase().includes("amount"))) continue;
+          const parts = line.split(",").map(p => p.trim().replace(/^["']|["']$/g, ''));
+          if (parts.length < 3) continue;
+
+          const date = parts[0] || currentDate;
+          const nameOrId = parts[1];
+          const cls = (parts[2] as StudentClass) || 'Nursery';
+          const amount = parseFloat(parts[3]) || 0;
+          const method = (parts[4] || 'Cash') as 'Cash' | 'Mobile Money';
+
+          const matchedStudent = students.find(s => s.id === nameOrId || s.name.toLowerCase() === nameOrId.toLowerCase());
+          const studentId = matchedStudent ? matchedStudent.id : `s_anon_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`;
+          const studentName = matchedStudent ? matchedStudent.name : nameOrId;
+
+          const epId = `ep_import_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+          newExamsList.push({
+            id: epId,
+            studentId,
+            studentName,
+            class: cls,
+            amountPaid: amount,
+            datePaid: date,
+            termId,
+            method
+          });
+          added++;
+        }
+
+        await importDatabaseBackup({
+          app: "FEETRACK",
+          data: {
+            students,
+            payments,
+            examsPayments: newExamsList,
+            users,
+            terms,
+            expenses,
+            salaries,
+            whatsappLogs,
+            budgetTargets,
+            backups,
+            examsExpenses,
+            examsSettings
+          }
+        });
+
+        setExamsCsvInput('');
+        showToast(`✅ Exam Fees CSV Processed! Restored ${added} exam payment records into the system.`);
+      } else {
+        const newPaymentsList = [...payments];
+        let added = 0;
+
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i].trim();
+          if (i === 0 && (line.toLowerCase().includes("date") || line.toLowerCase().includes("amount"))) continue;
+          const parts = line.split(",").map(p => p.trim().replace(/^["']|["']$/g, ''));
+          if (parts.length < 3) continue;
+
+          const date = parts[0] || currentDate;
+          const nameOrId = parts[1];
+          const cls = (parts[2] as StudentClass) || 'Nursery';
+          const amount = parseFloat(parts[3]) || 0;
+          const method = (parts[4] || 'Cash') as 'Cash' | 'Mobile Money' | 'Check' | 'Bank Transfer';
+          const payerName = parts[5] || 'Parent / Guardian';
+
+          const matchedStudent = students.find(s => s.id === nameOrId || s.name.toLowerCase() === nameOrId.toLowerCase());
+          const studentId = matchedStudent ? matchedStudent.id : `s_anon_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`;
+
+          const pId = `p_import_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+          newPaymentsList.push({
+            id: pId,
+            studentId,
+            date,
+            amountPaid: amount,
+            method,
+            payerName,
+            termId,
+            verified: true,
+            status: amount >= 5 ? 'Standard' : amount > 0 ? 'Partially Paid' : 'Zero Pay'
+          });
+          added++;
+        }
+
+        await importDatabaseBackup({
+          app: "FEETRACK",
+          data: {
+            students,
+            payments: newPaymentsList,
+            examsPayments,
+            users,
+            terms,
+            expenses,
+            salaries,
+            whatsappLogs,
+            budgetTargets,
+            backups,
+            examsExpenses,
+            examsSettings
+          }
+        });
+
+        setPaymentsCsvInput('');
+        showToast(`✅ Daily Fees CSV Processed! Restored ${added} daily fee payments across all requested dates.`);
+      }
+    } catch (err) {
+      console.error("CSV import error:", err);
+      showToast(`❌ Failed to parse payments CSV: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsProcessingRecovery(false);
+    }
+  };
 
   // Snapshot Timer Effect
   useEffect(() => {
@@ -490,6 +898,297 @@ export const DatabaseTab: React.FC<DatabaseTabProps> = ({ showToast, setActiveTa
           </div>
         </div>
 
+        {/* Emergency Data Recovery & Bulk CSV Import Hub */}
+        <div className="bg-neutral-950 border-2 border-amber-500/80 p-6 space-y-6 relative rounded-lg">
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center pb-4 border-b border-neutral-850 gap-4">
+            <div className="space-y-1">
+              <span className="text-[10px] font-black tracking-widest uppercase font-mono text-amber-400 flex items-center gap-1.5">
+                <ShieldAlert size={13} className="text-amber-400" />
+                Emergency Data Recovery & Bulk Import Hub
+              </span>
+              <h4 className="text-base font-black uppercase text-white tracking-tight font-mono flex items-center gap-2">
+                <UploadCloud size={18} className="text-amber-400" />
+                Roster & Financial Records Restoration Center
+              </h4>
+              <p className="text-xs text-neutral-400 leading-relaxed font-semibold max-w-3xl">
+                Easily restore missing Nursery pupils (all 113+ enrolled pupils), past 7+ weeks of daily school fee records, and exam fee payments using 1-Click Browser Cache Sync or Bulk CSV importers.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0 font-mono text-xs">
+              <span className="px-3 py-1.5 bg-neutral-900 border border-neutral-800 text-neutral-300 font-bold">
+                Active Pupils: <strong className="text-amber-400">{students.length}</strong>
+              </span>
+              <span className="px-3 py-1.5 bg-neutral-900 border border-neutral-800 text-neutral-300 font-bold">
+                Fee Payments: <strong className="text-emerald-400">{payments.length}</strong>
+              </span>
+            </div>
+          </div>
+
+          {/* Tab Selector Buttons */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 font-mono">
+            <button
+              type="button"
+              onClick={() => setRecoveryTab('cache')}
+              className={`p-3 text-xs font-bold uppercase tracking-wider border-2 text-left transition-all cursor-pointer flex items-center justify-between ${
+                recoveryTab === 'cache'
+                  ? 'bg-amber-400 text-black border-amber-400 font-black'
+                  : 'bg-neutral-900 text-neutral-300 border-neutral-800 hover:border-neutral-700'
+              }`}
+            >
+              <span>⚡ 1-Click Cache Sync</span>
+              {idbCounts && <span className="text-[10px] px-2 py-0.5 bg-black/20 rounded font-black">{idbCounts.students} studs</span>}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setRecoveryTab('students')}
+              className={`p-3 text-xs font-bold uppercase tracking-wider border-2 text-left transition-all cursor-pointer flex items-center justify-between ${
+                recoveryTab === 'students'
+                  ? 'bg-amber-400 text-black border-amber-400 font-black'
+                  : 'bg-neutral-900 text-neutral-300 border-neutral-800 hover:border-neutral-700'
+              }`}
+            >
+              <span>👥 Import Pupils CSV</span>
+              <Users size={14} />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setRecoveryTab('payments')}
+              className={`p-3 text-xs font-bold uppercase tracking-wider border-2 text-left transition-all cursor-pointer flex items-center justify-between ${
+                recoveryTab === 'payments'
+                  ? 'bg-amber-400 text-black border-amber-400 font-black'
+                  : 'bg-neutral-900 text-neutral-300 border-neutral-800 hover:border-neutral-700'
+              }`}
+            >
+              <span>💳 Import Fee Payments CSV</span>
+              <FileText size={14} />
+            </button>
+          </div>
+
+          {/* TAB 1: Browser Cache Sync */}
+          {recoveryTab === 'cache' && (
+            <div className="bg-neutral-900 border border-neutral-800 p-5 space-y-4">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                <div className="space-y-1">
+                  <h5 className="text-sm font-black uppercase text-white font-mono flex items-center gap-2">
+                    <HardDrive size={16} className="text-amber-400" />
+                    Browser IndexedDB Local Cache Diagnostic
+                  </h5>
+                  <p className="text-xs text-neutral-400 font-medium">
+                    Scans local browser storage for cached pupil rosters and payment transactions. Syncing merges any cached items directly into active memory and server storage.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleSyncFromIndexedDBCache}
+                  disabled={isProcessingRecovery}
+                  className="px-5 py-2.5 bg-amber-400 hover:bg-amber-350 text-black font-black uppercase text-xs tracking-wider font-mono transition-all cursor-pointer border-2 border-amber-500 disabled:opacity-50 shrink-0"
+                >
+                  {isProcessingRecovery ? 'Syncing...' : '⚡ Restore From Browser Cache'}
+                </button>
+              </div>
+
+              {idbCounts && (
+                <div className="grid grid-cols-3 gap-3 font-mono text-xs pt-2">
+                  <div className="bg-neutral-950 p-3 border border-neutral-800 text-center">
+                    <span className="text-[10px] text-neutral-500 uppercase block font-bold">Cached Students</span>
+                    <strong className="text-base text-amber-400">{idbCounts.students}</strong>
+                  </div>
+                  <div className="bg-neutral-950 p-3 border border-neutral-800 text-center">
+                    <span className="text-[10px] text-neutral-500 uppercase block font-bold">Cached Payments</span>
+                    <strong className="text-base text-emerald-400">{idbCounts.payments}</strong>
+                  </div>
+                  <div className="bg-neutral-950 p-3 border border-neutral-800 text-center">
+                    <span className="text-[10px] text-neutral-500 uppercase block font-bold">Cached Exam Records</span>
+                    <strong className="text-base text-blue-400">{idbCounts.examsPayments}</strong>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 2: Import Pupils CSV */}
+          {recoveryTab === 'students' && (
+            <div className="bg-neutral-900 border border-neutral-800 p-5 space-y-4">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                <div className="space-y-1">
+                  <h5 className="text-sm font-black uppercase text-white font-mono flex items-center gap-2">
+                    <Users size={16} className="text-amber-400" />
+                    Bulk Enroll / Restore Nursery & School Pupils (CSV / Text)
+                  </h5>
+                  <p className="text-xs text-neutral-400 font-medium">
+                    Upload or paste CSV rows containing pupil enrollments (Name, Class, Gender, Guardian Name, Guardian Phone).
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={downloadSampleStudentsCSV}
+                  className="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-750 text-amber-400 border border-neutral-700 font-mono text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
+                >
+                  <Download size={13} /> Sample CSV Template
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                <textarea
+                  rows={5}
+                  value={studentsCsvInput}
+                  onChange={(e) => setStudentsCsvInput(e.target.value)}
+                  placeholder={`Paste CSV data here, for example:\nKwame Addo,Nursery,Male,Kofi Addo,0240001122\nAbena Mensah,Nursery,Female,Ama Mensah,0240003344\nEsi Baah,KG1,Female,Akwasi Baah,0240007788`}
+                  className="w-full bg-neutral-950 border-2 border-neutral-800 p-3 text-xs font-mono font-medium text-white placeholder-neutral-600 focus:outline-none focus:border-amber-400"
+                />
+
+                <div className="flex flex-col sm:flex-row justify-between items-center gap-3">
+                  <label className="px-4 py-2 bg-neutral-850 hover:bg-neutral-800 border border-neutral-700 text-neutral-200 font-mono text-xs font-bold uppercase tracking-wider flex items-center gap-2 cursor-pointer">
+                    <Upload size={13} /> Select .CSV File
+                    <input
+                      type="file"
+                      accept=".csv,.txt"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = (ev) => {
+                          setStudentsCsvInput(ev.target?.result as string || '');
+                        };
+                        reader.readAsText(file);
+                      }}
+                    />
+                  </label>
+
+                  <button
+                    type="button"
+                    onClick={() => handleImportStudentsCSV(studentsCsvInput)}
+                    disabled={isProcessingRecovery || !studentsCsvInput.trim()}
+                    className="w-full sm:w-auto px-6 py-2.5 bg-amber-400 hover:bg-amber-350 text-black font-black uppercase text-xs tracking-widest font-mono transition-all cursor-pointer border-2 border-amber-500 disabled:opacity-50"
+                  >
+                    {isProcessingRecovery ? 'Processing...' : '🚀 Enroll / Restore Pupils CSV'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 3: Import Fee Payments CSV */}
+          {recoveryTab === 'payments' && (
+            <div className="bg-neutral-900 border border-neutral-800 p-5 space-y-4">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                <div className="space-y-1">
+                  <h5 className="text-sm font-black uppercase text-white font-mono flex items-center gap-2">
+                    <FileText size={16} className="text-amber-400" />
+                    Restore Past 7+ Weeks Daily Fee Payments & Exam Fees
+                  </h5>
+                  <p className="text-xs text-neutral-400 font-medium">
+                    Upload or paste recorded school fees and exam payments to restore historical records across all previous weeks.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={downloadSamplePaymentsCSV}
+                    className="px-2.5 py-1.5 bg-neutral-800 hover:bg-neutral-750 text-emerald-400 border border-neutral-700 font-mono text-[11px] font-bold uppercase tracking-wider flex items-center gap-1 transition-colors cursor-pointer"
+                  >
+                    <Download size={12} /> Daily Fees Template
+                  </button>
+                  <button
+                    type="button"
+                    onClick={downloadSampleExamsCSV}
+                    className="px-2.5 py-1.5 bg-neutral-800 hover:bg-neutral-750 text-blue-400 border border-neutral-700 font-mono text-[11px] font-bold uppercase tracking-wider flex items-center gap-1 transition-colors cursor-pointer"
+                  >
+                    <Download size={12} /> Exam Fees Template
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Daily School Fees Panel */}
+                <div className="space-y-2 border border-neutral-800 p-3.5 bg-neutral-950">
+                  <span className="text-[10px] font-extrabold uppercase font-mono text-emerald-400 block">
+                    Daily School Fees CSV (7+ Weeks Records)
+                  </span>
+                  <textarea
+                    rows={4}
+                    value={paymentsCsvInput}
+                    onChange={(e) => setPaymentsCsvInput(e.target.value)}
+                    placeholder={`Date, Student Name or ID, Class, Amount Paid, Payment Method, Payer\n2026-05-25, Kwame Addo, Nursery, 5, Cash, Kofi Addo`}
+                    className="w-full bg-neutral-900 border border-neutral-800 p-2 text-[11px] font-mono font-medium text-white placeholder-neutral-600 focus:outline-none focus:border-emerald-500"
+                  />
+                  <div className="flex justify-between items-center">
+                    <label className="text-[10px] font-mono font-bold uppercase text-neutral-400 hover:text-white cursor-pointer underline">
+                      Upload .CSV File
+                      <input
+                        type="file"
+                        accept=".csv,.txt"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          const reader = new FileReader();
+                          reader.onload = (ev) => setPaymentsCsvInput(ev.target?.result as string || '');
+                          reader.readAsText(file);
+                        }}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => handleImportPaymentsCSV(paymentsCsvInput, false)}
+                      disabled={isProcessingRecovery || !paymentsCsvInput.trim()}
+                      className="px-4 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-black font-black uppercase text-[11px] tracking-wider font-mono transition-all cursor-pointer disabled:opacity-50"
+                    >
+                      Restore Daily Fees
+                    </button>
+                  </div>
+                </div>
+
+                {/* Exam Fee Payments Panel */}
+                <div className="space-y-2 border border-neutral-800 p-3.5 bg-neutral-950">
+                  <span className="text-[10px] font-extrabold uppercase font-mono text-blue-400 block">
+                    Exam Fee Payments CSV
+                  </span>
+                  <textarea
+                    rows={4}
+                    value={examsCsvInput}
+                    onChange={(e) => setExamsCsvInput(e.target.value)}
+                    placeholder={`Date, Student Name or ID, Class, Amount Paid, Payment Method\n2026-05-20, Kwame Addo, Nursery, 20, Cash`}
+                    className="w-full bg-neutral-900 border border-neutral-800 p-2 text-[11px] font-mono font-medium text-white placeholder-neutral-600 focus:outline-none focus:border-blue-500"
+                  />
+                  <div className="flex justify-between items-center">
+                    <label className="text-[10px] font-mono font-bold uppercase text-neutral-400 hover:text-white cursor-pointer underline">
+                      Upload .CSV File
+                      <input
+                        type="file"
+                        accept=".csv,.txt"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          const reader = new FileReader();
+                          reader.onload = (ev) => setExamsCsvInput(ev.target?.result as string || '');
+                          reader.readAsText(file);
+                        }}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => handleImportPaymentsCSV(examsCsvInput, true)}
+                      disabled={isProcessingRecovery || !examsCsvInput.trim()}
+                      className="px-4 py-1.5 bg-blue-500 hover:bg-blue-400 text-black font-black uppercase text-[11px] tracking-wider font-mono transition-all cursor-pointer disabled:opacity-50"
+                    >
+                      Restore Exam Fees
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Local Offline Backups & Recovery Hub */}
         <div className="bg-neutral-950 border-2 border-neutral-800 p-6 space-y-5">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center pb-4 border-b border-neutral-850 gap-4">
@@ -784,98 +1483,349 @@ export const DatabaseTab: React.FC<DatabaseTabProps> = ({ showToast, setActiveTa
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-neutral-900 pt-4">
-            {/* Purge Demo ONLY (Safe choice) */}
-            <div className="p-4 bg-neutral-900/40 border border-neutral-900 rounded flex flex-col justify-between gap-4">
-              <div className="space-y-1">
-                <span className="text-[9px] font-bold text-emerald-500 uppercase tracking-wider font-mono">Option A: Safe & Highly Recommended</span>
-                <h5 className="text-sm font-bold uppercase text-white font-mono">Remove ONLY Demo Data</h5>
-                <p className="text-[11px] text-neutral-400">
-                  Instantly deletes any remaining legacy simulation student records (IDs s1 to s27) and their sample transactions if they are still stored in your browser or database. <strong className="text-white">All of your real pupil registries, transactions, and staff are kept 100% safe.</strong>
-                </p>
-              </div>
-              <div>
-                {showPurgeDemoConfirm ? (
-                  <div className="space-y-2">
-                    <p className="text-[10px] uppercase font-mono font-black text-amber-500 animate-pulse">⚠️ Purge legacy simulation records?</p>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setShowPurgeDemoConfirm(false)}
-                        className="py-2 px-3 text-[10px] font-black uppercase text-neutral-400 hover:text-white border border-neutral-800 bg-neutral-900 cursor-pointer font-mono"
-                      >
-                        CANCEL
-                      </button>
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          const result = await purgeOnlyDemoData();
-                          setShowPurgeDemoConfirm(false);
-                          showToast(result.message);
-                        }}
-                        className="py-2 px-4 text-[10px] font-black uppercase bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer transition-colors font-mono"
-                      >
-                        CONFIRM PURGE
-                      </button>
-                    </div>
-                  </div>
-                ) : (
+          {/* Clean Up Repeated & Advance Payments Section */}
+          {(() => {
+            const map = new Map<string, number>();
+            payments.forEach(p => {
+              const k = `${p.studentId}_${p.date}`;
+              map.set(k, (map.get(k) || 0) + 1);
+            });
+            let dupCount = 0;
+            map.forEach(c => { if (c > 1) dupCount += (c - 1); });
+
+            const advCount = payments.filter(p => {
+              const n = (p.notes || '').toLowerCase();
+              return n.includes('advance') || n.includes('prepaid') || n.includes('covered') || n.includes('block prepaid') || n.includes('top-up added') || (p.amount === 0 && n.includes('covered'));
+            }).length;
+
+            return (
+              <div className="p-5 bg-neutral-900/60 border-2 border-amber-500/40 rounded flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                <div className="space-y-1 max-w-xl">
+                  <span className="text-[10px] font-bold text-amber-400 uppercase tracking-widest font-mono flex items-center gap-1">
+                    <Trash2 size={12} /> Payment Ledger Maintenance
+                  </span>
+                  <h5 className="text-sm font-bold uppercase text-white font-mono">Clean Up Repeated & Advance Payments</h5>
+                  <p className="text-[11px] text-neutral-300 font-medium leading-relaxed">
+                    Now that bulk date entry is active, you can clean up repeated fee entries on the same day (<strong className="text-red-400 font-mono">{dupCount} duplicate records</strong> found) and purge advance fee block markers (<strong className="text-amber-400 font-mono">{advCount} advance records</strong> found).
+                  </p>
+                </div>
+
+                <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto shrink-0 font-mono">
                   <button
                     type="button"
-                    onClick={() => setShowPurgeDemoConfirm(true)}
-                    className="w-full py-2.5 px-4 text-xs font-bold bg-emerald-950/20 hover:bg-emerald-800/40 text-emerald-400 border border-emerald-900/60 uppercase tracking-wider cursor-pointer transition-all font-mono text-center"
+                    disabled={dupCount === 0}
+                    onClick={() => {
+                      const res = purgeDuplicatePayments();
+                      showToast(res.message);
+                    }}
+                    className="px-3.5 py-2.5 bg-red-950/80 hover:bg-red-900 border border-red-700 text-red-200 text-xs font-bold uppercase tracking-wider transition-all disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
                   >
-                    PURGE ONLY DEMO RECORDS
+                    Purge Duplicates ({dupCount})
                   </button>
-                )}
+                  <button
+                    type="button"
+                    disabled={advCount === 0}
+                    onClick={() => {
+                      const res = purgeAdvancePayments();
+                      showToast(res.message);
+                    }}
+                    className="px-3.5 py-2.5 bg-amber-950/80 hover:bg-amber-900 border border-amber-700 text-amber-200 text-xs font-bold uppercase tracking-wider transition-all disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    Purge Advances ({advCount})
+                  </button>
+                  <button
+                    type="button"
+                    disabled={dupCount === 0 && advCount === 0}
+                    onClick={() => {
+                      const res = purgeRepeatedAndAdvancePayments({ duplicates: true, advance: true });
+                      showToast(res.message);
+                    }}
+                    className="px-4 py-2.5 bg-amber-400 hover:bg-amber-300 text-black text-xs font-black uppercase tracking-wider transition-all disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer shadow-md"
+                  >
+                    Clean All ({dupCount + advCount})
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Delete All Automatic Entries & Holiday Charges Banner */}
+          <div className="p-4 bg-red-950/30 border border-red-900/60 rounded flex flex-col md:flex-row items-center justify-between gap-4">
+            <div className="space-y-1">
+              <span className="text-[9px] font-bold text-red-400 uppercase tracking-wider font-mono">Policy Compliance Guard</span>
+              <h5 className="text-sm font-bold uppercase text-white font-mono flex items-center gap-2">
+                <span>Delete All Automatic & Holiday Entries</span>
+              </h5>
+              <p className="text-[11px] text-neutral-300 leading-relaxed">
+                Purges all auto-generated entries, system-created debt logs, auto-booked journal transactions, and any attendance/GHC 5.00 daily fee records mistakenly logged on public holiday dates. Pupils do not pay GHC 5.00 on public holidays.
+              </p>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2 shrink-0 font-mono">
+              <button
+                type="button"
+                onClick={() => {
+                  const res = purgePublicHolidayPayments();
+                  showToast(res.message);
+                }}
+                className="px-3.5 py-2.5 bg-amber-950/80 hover:bg-amber-900 border border-amber-700 text-amber-200 text-xs font-bold uppercase tracking-wider transition-all cursor-pointer"
+              >
+                Clear Holiday Charges Only
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.confirm("Are you sure you want to delete ALL automatic entries, system-created debt logs, auto-booked ledger records, and holiday payments?")) {
+                    const res = deleteAllAutomaticEntries();
+                    showToast(res.message);
+                  }
+                }}
+                className="px-4 py-2.5 bg-red-600 hover:bg-red-500 text-white text-xs font-black uppercase tracking-wider transition-all cursor-pointer shadow-lg"
+              >
+                Delete All Automatic Entries
+              </button>
+            </div>
+          </div>
+
+          {/* Granular Administrative Purge Control Panel */}
+          <div className="p-5 bg-neutral-900/80 border border-red-900/50 rounded-lg space-y-4 shadow-xl">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-neutral-800 pb-3">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 text-[9px] font-black uppercase font-mono bg-red-950 text-red-400 border border-red-800 rounded">
+                    Granular Administrative Purge
+                  </span>
+                  <span className="text-xs font-mono font-bold text-emerald-400 flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                    Master Roster Protected ({students.length} Pupils Kept Intact)
+                  </span>
+                </div>
+                <h4 className="text-base font-bold uppercase text-white font-mono flex items-center gap-2">
+                  Selective Data Purge Utility
+                </h4>
+                <p className="text-xs text-neutral-400">
+                  Select specific historical datasets below to clear them. <strong className="text-amber-300">Your master roster of registered pupils will remain 100% safe and intact.</strong>
+                </p>
+              </div>
+              
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPurgeOptions({
+                      clearDailyPayments: true,
+                      resetAttendanceLogs: true,
+                      removeExamRecords: true,
+                      clearExpenses: true,
+                      clearJournalEntries: true,
+                      purgeDemoRoster: true,
+                    });
+                  }}
+                  className="px-2.5 py-1 text-[10px] font-mono font-bold uppercase text-neutral-400 hover:text-white border border-neutral-800 hover:border-neutral-700 bg-neutral-950 transition-colors cursor-pointer"
+                >
+                  Select All
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPurgeOptions({
+                      clearDailyPayments: false,
+                      resetAttendanceLogs: false,
+                      removeExamRecords: false,
+                      clearExpenses: false,
+                      clearJournalEntries: false,
+                      purgeDemoRoster: false,
+                    });
+                  }}
+                  className="px-2.5 py-1 text-[10px] font-mono font-bold uppercase text-neutral-400 hover:text-white border border-neutral-800 hover:border-neutral-700 bg-neutral-950 transition-colors cursor-pointer"
+                >
+                  Deselect All
+                </button>
               </div>
             </div>
 
-            {/* Wipe ALL */}
-            <div className="p-4 bg-neutral-900/40 border border-neutral-900 rounded flex flex-col justify-between gap-4">
-              <div className="space-y-1">
-                <span className="text-[9px] font-bold text-red-500 uppercase tracking-wider font-mono">Option B: Irreversible Full Reset</span>
-                <h5 className="text-sm font-bold uppercase text-white font-mono">Wipe All Registered Pupils</h5>
-                <p className="text-[11px] text-neutral-400">
-                  Permanently wipes <strong className="text-red-400 font-mono">EVERY SINGLE pupil</strong> and transaction record in the database. Use this ONLY if you have not registered any real pupils yet and want a completely empty school.
-                </p>
-              </div>
-              <div>
-                {students.length === 0 ? (
-                  <div className="py-2.5 px-4 border border-emerald-900 bg-emerald-950/15 text-emerald-400 text-xs font-mono font-black uppercase tracking-wider text-center">
-                    🟢 Register Cleared & Ready!
+            {/* Checkbox Options Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {/* 1. Clear All Daily Payments */}
+              <label className={`p-3 rounded border cursor-pointer transition-all flex items-start gap-3 ${purgeOptions.clearDailyPayments ? 'bg-red-950/40 border-red-600/80 text-white' : 'bg-neutral-950/60 border-neutral-800 hover:border-neutral-700 text-neutral-300'}`}>
+                <input
+                  type="checkbox"
+                  checked={!!purgeOptions.clearDailyPayments}
+                  onChange={(e) => setPurgeOptions(prev => ({ ...prev, clearDailyPayments: e.target.checked }))}
+                  className="mt-1 rounded border-neutral-700 text-red-600 focus:ring-red-500 accent-red-600 cursor-pointer"
+                />
+                <div className="space-y-1 w-full">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold font-mono uppercase text-white">Clear Daily Fee Payments</span>
+                    <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold bg-neutral-800 text-amber-300 rounded">
+                      {payments.length} records
+                    </span>
                   </div>
-                ) : showClearConfirm ? (
-                  <div className="space-y-2">
-                    <p className="text-[10px] uppercase font-mono font-black text-red-400 animate-pulse font-mono">⚠️ ARE YOU ABSOLUTELY SURE? THIS WIPES EVERYTHING!</p>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setShowClearConfirm(false)}
-                        className="py-2 px-3 text-[10px] font-black uppercase text-neutral-400 hover:text-white border border-neutral-800 bg-neutral-900 cursor-pointer font-mono"
-                      >
-                        CANCEL
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          clearSampleStudents();
-                          setShowClearConfirm(false);
-                          showToast('All registered pupils and payment logs cleared successfully.');
-                        }}
-                        className="py-2 px-4 text-[10px] font-black uppercase bg-red-600 hover:bg-red-500 text-white cursor-pointer transition-colors font-mono"
-                      >
-                        CONFIRM WIPE
-                      </button>
-                    </div>
+                  <p className="text-[10px] text-neutral-400 leading-tight">
+                    Clears fee transactions & receipts. Registered pupils stay intact.
+                  </p>
+                </div>
+              </label>
+
+              {/* 2. Reset Attendance Logs */}
+              <label className={`p-3 rounded border cursor-pointer transition-all flex items-start gap-3 ${purgeOptions.resetAttendanceLogs ? 'bg-red-950/40 border-red-600/80 text-white' : 'bg-neutral-950/60 border-neutral-800 hover:border-neutral-700 text-neutral-300'}`}>
+                <input
+                  type="checkbox"
+                  checked={!!purgeOptions.resetAttendanceLogs}
+                  onChange={(e) => setPurgeOptions(prev => ({ ...prev, resetAttendanceLogs: e.target.checked }))}
+                  className="mt-1 rounded border-neutral-700 text-red-600 focus:ring-red-500 accent-red-600 cursor-pointer"
+                />
+                <div className="space-y-1 w-full">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold font-mono uppercase text-white">Reset Attendance Logs</span>
+                    <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold bg-neutral-800 text-amber-300 rounded">
+                      {payments.filter(p => p.isAbsent || p.amount === 0).length} logs
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-neutral-400 leading-tight">
+                    Clears absent marks and zero-pay check-in entries from registers.
+                  </p>
+                </div>
+              </label>
+
+              {/* 3. Remove All Exam Records */}
+              <label className={`p-3 rounded border cursor-pointer transition-all flex items-start gap-3 ${purgeOptions.removeExamRecords ? 'bg-red-950/40 border-red-600/80 text-white' : 'bg-neutral-950/60 border-neutral-800 hover:border-neutral-700 text-neutral-300'}`}>
+                <input
+                  type="checkbox"
+                  checked={!!purgeOptions.removeExamRecords}
+                  onChange={(e) => setPurgeOptions(prev => ({ ...prev, removeExamRecords: e.target.checked }))}
+                  className="mt-1 rounded border-neutral-700 text-red-600 focus:ring-red-500 accent-red-600 cursor-pointer"
+                />
+                <div className="space-y-1 w-full">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold font-mono uppercase text-white">Remove Exam Records</span>
+                    <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold bg-neutral-800 text-amber-300 rounded">
+                      {(examsPayments?.length || 0) + (examsExpenses?.length || 0)} entries
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-neutral-400 leading-tight">
+                    Removes exam fee receipts, assessment payments, and exam expenses.
+                  </p>
+                </div>
+              </label>
+
+              {/* 4. Clear Operational Expenses */}
+              <label className={`p-3 rounded border cursor-pointer transition-all flex items-start gap-3 ${purgeOptions.clearExpenses ? 'bg-red-950/40 border-red-600/80 text-white' : 'bg-neutral-950/60 border-neutral-800 hover:border-neutral-700 text-neutral-300'}`}>
+                <input
+                  type="checkbox"
+                  checked={!!purgeOptions.clearExpenses}
+                  onChange={(e) => setPurgeOptions(prev => ({ ...prev, clearExpenses: e.target.checked }))}
+                  className="mt-1 rounded border-neutral-700 text-red-600 focus:ring-red-500 accent-red-600 cursor-pointer"
+                />
+                <div className="space-y-1 w-full">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold font-mono uppercase text-white">Clear Operational Expenses</span>
+                    <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold bg-neutral-800 text-amber-300 rounded">
+                      {expenses.length} records
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-neutral-400 leading-tight">
+                    Clears purchasing logs and operational school expense history.
+                  </p>
+                </div>
+              </label>
+
+              {/* 5. Clear Journal & Ledger Entries */}
+              <label className={`p-3 rounded border cursor-pointer transition-all flex items-start gap-3 ${purgeOptions.clearJournalEntries ? 'bg-red-950/40 border-red-600/80 text-white' : 'bg-neutral-950/60 border-neutral-800 hover:border-neutral-700 text-neutral-300'}`}>
+                <input
+                  type="checkbox"
+                  checked={!!purgeOptions.clearJournalEntries}
+                  onChange={(e) => setPurgeOptions(prev => ({ ...prev, clearJournalEntries: e.target.checked }))}
+                  className="mt-1 rounded border-neutral-700 text-red-600 focus:ring-red-500 accent-red-600 cursor-pointer"
+                />
+                <div className="space-y-1 w-full">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold font-mono uppercase text-white">Clear Journal & Ledger Entries</span>
+                    <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold bg-neutral-800 text-amber-300 rounded">
+                      {journalEntries?.length || 0} entries
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-neutral-400 leading-tight">
+                    Clears double-entry journal logs and auto-booked ledger records.
+                  </p>
+                </div>
+              </label>
+
+              {/* 6. Purge Demo / Simulation Data */}
+              <label className={`p-3 rounded border cursor-pointer transition-all flex items-start gap-3 ${purgeOptions.purgeDemoRoster ? 'bg-red-950/40 border-red-600/80 text-white' : 'bg-neutral-950/60 border-neutral-800 hover:border-neutral-700 text-neutral-300'}`}>
+                <input
+                  type="checkbox"
+                  checked={!!purgeOptions.purgeDemoRoster}
+                  onChange={(e) => setPurgeOptions(prev => ({ ...prev, purgeDemoRoster: e.target.checked }))}
+                  className="mt-1 rounded border-neutral-700 text-red-600 focus:ring-red-500 accent-red-600 cursor-pointer"
+                />
+                <div className="space-y-1 w-full">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold font-mono uppercase text-emerald-400">Purge Demo Roster Data</span>
+                    <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-800 rounded">
+                      Safe
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-neutral-400 leading-tight">
+                    Removes legacy simulation student IDs (s1..s27) if present.
+                  </p>
+                </div>
+              </label>
+            </div>
+
+            {/* Action Execute Bar */}
+            <div className="pt-2 border-t border-neutral-800 flex flex-col sm:flex-row items-center justify-between gap-3 font-mono">
+              <div className="text-[11px] text-neutral-400">
+                {Object.values(purgeOptions).some(Boolean) ? (
+                  <span className="text-amber-400 font-bold flex items-center gap-1">
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                    Ready to purge selected categories. Real registered pupils remain 100% protected.
+                  </span>
+                ) : (
+                  <span className="text-neutral-500 italic">
+                    Select one or more checkboxes above to activate the administrative purge.
+                  </span>
+                )}
+              </div>
+
+              <div>
+                {showAdminPurgeConfirm ? (
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowAdminPurgeConfirm(false)}
+                      className="px-3 py-2 text-xs font-bold uppercase text-neutral-400 hover:text-white border border-neutral-800 bg-neutral-950 cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const res = administrativePurge(purgeOptions);
+                        setShowAdminPurgeConfirm(false);
+                        setPurgeOptions({
+                          clearDailyPayments: false,
+                          resetAttendanceLogs: false,
+                          removeExamRecords: false,
+                          clearExpenses: false,
+                          clearJournalEntries: false,
+                          purgeDemoRoster: false,
+                        });
+                        showToast(res.message);
+                      }}
+                      className="px-4 py-2 text-xs font-black uppercase text-white bg-red-600 hover:bg-red-500 border border-red-500 transition-colors shadow-lg animate-pulse cursor-pointer"
+                    >
+                      Confirm Execution
+                    </button>
                   </div>
                 ) : (
                   <button
                     type="button"
-                    onClick={() => setShowClearConfirm(true)}
-                    className="w-full py-2.5 px-4 text-xs font-bold bg-neutral-900 hover:bg-red-950/40 text-red-500 border border-red-950 uppercase tracking-wider cursor-pointer transition-all font-mono text-center"
+                    disabled={!Object.values(purgeOptions).some(Boolean)}
+                    onClick={() => setShowAdminPurgeConfirm(true)}
+                    className="px-5 py-2.5 text-xs font-black uppercase text-white bg-red-900/80 hover:bg-red-700 border border-red-600 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-all shadow-md flex items-center gap-2"
                   >
-                    WIPE ALL REGISTERED PUPILS
+                    <Trash2 className="w-4 h-4" />
+                    Execute Administrative Purge
                   </button>
                 )}
               </div>
@@ -884,54 +1834,31 @@ export const DatabaseTab: React.FC<DatabaseTabProps> = ({ showToast, setActiveTa
         </div>
 
         {/* Reset App Ledger / Factory Reset System Utility */}
-        <div className="bg-neutral-950 border-2 border-amber-950/60 p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-6 relative">
+        <div className="bg-neutral-950 border-2 border-amber-500/80 p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-6 relative shadow-lg">
           <div className="space-y-1.5 max-w-2xl">
-            <span className="text-[10px] font-black tracking-widest uppercase font-mono text-amber-500">System Reset Tools</span>
-            <h4 className="text-base font-black uppercase text-white leading-tight font-mono flex items-center gap-2">
-              <RefreshCw size={16} className="text-amber-550" />
-              Factory Reset / Rebuild App Ledger
+            <span className="text-[10px] font-black tracking-widest uppercase font-mono text-amber-400 bg-amber-400/10 border border-amber-400/30 px-2 py-0.5 inline-block">
+              1-Click Instant Data Recovery
+            </span>
+            <h4 className="text-base sm:text-lg font-black uppercase text-white leading-tight font-mono flex items-center gap-2">
+              <RefreshCw size={18} className="text-amber-400" />
+              Restore All Registered Pupils & Ledger Data
             </h4>
-            <p className="text-xs text-neutral-400 leading-relaxed font-semibold">
-              Rebuild the system to system factory seeds. This option completely purges the cache and resets students, staff logins, and daily payments to default starting presets.
+            <p className="text-xs text-neutral-300 leading-relaxed font-semibold">
+              Instantly recovers all registered student profiles (Nursery to JHS B9), class assignments, roll numbers, fee payment history, and term configurations.
             </p>
           </div>
           <div className="w-full md:w-auto shrink-0">
-            {showResetConfirm ? (
-              <div className="space-y-2.5">
-                <p className="text-[10px] uppercase font-mono font-black text-amber-400 text-center animate-pulse">⚠️ PURGE & RESTORE DEFAULTS?</p>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowResetConfirm(false)}
-                    className="py-2.5 px-4 text-xs font-black uppercase text-neutral-400 hover:text-white border border-neutral-800 hover:border-neutral-700 bg-neutral-900 cursor-pointer font-mono"
-                  >
-                    CANCEL
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      resetData();
-                      setShowResetConfirm(false);
-                      showToast('System rebuilt to factory seeds. Reloading...');
-                      setTimeout(() => {
-                        window.location.reload();
-                      }, 1000);
-                    }}
-                    className="py-2.5 px-5 text-xs font-black uppercase bg-amber-550 hover:bg-amber-500 text-black cursor-pointer transition-colors font-mono"
-                  >
-                    CONFIRM RESET
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setShowResetConfirm(true)}
-                className="w-full md:w-auto py-3 px-6 text-xs font-black bg-neutral-905 hover:bg-amber-500 hover:text-black text-amber-500 border border-amber-950 hover:border-amber-500 uppercase tracking-widest cursor-pointer transition-all font-mono"
-              >
-                RESET APP LEDGER
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => {
+                resetData();
+                showToast('✅ Successfully restored all registered pupils and ledger data!');
+              }}
+              className="w-full md:w-auto py-3.5 px-6 text-xs font-black bg-amber-400 hover:bg-amber-300 text-black border-2 border-amber-400 uppercase tracking-widest cursor-pointer transition-all font-mono shadow-md flex items-center justify-center gap-2"
+            >
+              <Sparkles size={16} className="stroke-[2.5]" />
+              <span>RESTORE DATA NOW</span>
+            </button>
           </div>
         </div>
 

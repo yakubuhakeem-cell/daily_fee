@@ -54,10 +54,16 @@ import {
   ArrowUpDown,
   Sparkles,
   Smartphone,
-  Link
+  Link,
+  History,
+  Coins,
+  CalendarDays,
+  ShieldAlert,
+  Award
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { VoiceSearchButton } from './VoiceSearchButton';
+import { SchoolLogo } from './SchoolLogo';
 
 export const TermPayersTab: React.FC = React.memo(() => {
   const { 
@@ -111,8 +117,10 @@ export const TermPayersTab: React.FC = React.memo(() => {
   // Selected student for detail overlay/modal and quick collection
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
 
-  // Active sub-tab inside the selected student modal (Ledger vs Analytics)
-  const [drawerActiveTab, setDrawerActiveTab] = useState<'ledger' | 'analytics'>('ledger');
+  // Active sub-tab inside the selected student modal (Ledger vs Analytics vs History)
+  const [drawerActiveTab, setDrawerActiveTab] = useState<'ledger' | 'analytics' | 'history'>('ledger');
+  const [termAccountSearch, setTermAccountSearch] = useState('');
+  const [termAccountFilter, setTermAccountFilter] = useState<'all' | 'payments' | 'attendance'>('all');
 
   // Payment mode state inside selected student modal
   const [paymentModeTab, setPaymentModeTab] = useState<'cash' | 'momo'>('cash');
@@ -1379,6 +1387,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
       <div className="flex border-b border-neutral-800 gap-2 mb-6">
         <button
           onClick={() => setViewMode('DIRECTORY')}
+          title="Scheme Pupil Registry: View all enrolled term-based fee pupils, lump-sum status, and grade breakdowns"
           className={`px-5 py-3 text-xs font-black uppercase tracking-wider font-mono border-t-2 transition-all cursor-pointer ${
             viewMode === 'DIRECTORY'
               ? 'border-t-amber-400 bg-neutral-900/40 text-amber-400'
@@ -1389,6 +1398,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
         </button>
         <button
           onClick={() => setViewMode('PENDING_REGISTRATIONS')}
+          title="Pending Payments Alert: Inspect pupils with overdue or partial term fee balances requiring attention"
           className={`px-5 py-3 text-xs font-black uppercase tracking-wider font-mono border-t-2 relative transition-all cursor-pointer ${
             viewMode === 'PENDING_REGISTRATIONS'
               ? 'border-t-red-500 bg-neutral-900/40 text-red-400'
@@ -1404,6 +1414,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
         </button>
         <button
           onClick={() => setViewMode('PAYMENT_HISTORY')}
+          title="Student Payment History: Filter transaction receipts, date logs, payment modes, and lump-sum records"
           className={`px-5 py-3 text-xs font-black uppercase tracking-wider font-mono border-t-2 relative transition-all cursor-pointer ${
             viewMode === 'PAYMENT_HISTORY'
               ? 'border-t-emerald-400 bg-neutral-900/40 text-emerald-400'
@@ -2931,6 +2942,18 @@ export const TermPayersTab: React.FC = React.memo(() => {
                       </button>
                       <button
                         type="button"
+                        onClick={() => setDrawerActiveTab('history')}
+                        className={`text-[9.5px] font-mono font-black uppercase tracking-wider px-3 py-1 border transition-all cursor-pointer ${
+                          drawerActiveTab === 'history'
+                            ? 'bg-amber-400 text-neutral-950 border-amber-400'
+                            : 'bg-transparent text-neutral-400 border-neutral-850 hover:text-white'
+                        }`}
+                        id="tab-view-history"
+                      >
+                        Account History
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => setDrawerActiveTab('analytics')}
                         className={`text-[9.5px] font-mono font-black uppercase tracking-wider px-3 py-1 border transition-all cursor-pointer ${
                           drawerActiveTab === 'analytics'
@@ -3044,6 +3067,134 @@ export const TermPayersTab: React.FC = React.memo(() => {
                           ))}
                         </div>
                       )}
+                    </div>
+                  )}
+
+                  {drawerActiveTab === 'history' && selectedStudentFinances && (
+                    <div className="space-y-4 animate-fadeIn">
+                      {/* Stat summary cards */}
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 font-mono text-xs">
+                        <div className="bg-neutral-950 p-3 border border-neutral-850 rounded-xs">
+                          <span className="text-[9px] font-black text-neutral-500 uppercase block">Total Term Paid</span>
+                          <strong className="text-sm text-emerald-400 font-black mt-0.5 block">
+                            GHC {selectedStudentFinances.totalPaid.toFixed(2)}
+                          </strong>
+                          <span className="text-[9px] text-neutral-500 block font-sans">
+                            {selectedStudentFinances.paidPayments.length} Receipts Issued
+                          </span>
+                        </div>
+
+                        <div className="bg-neutral-950 p-3 border border-neutral-850 rounded-xs">
+                          <span className="text-[9px] font-black text-neutral-500 uppercase block">Remaining Balance</span>
+                          <strong className={`text-sm font-black mt-0.5 block ${selectedStudentFinances.isCompleted ? 'text-emerald-400' : 'text-red-400'}`}>
+                            GHC {selectedStudentFinances.balanceDue.toFixed(2)}
+                          </strong>
+                          <span className="text-[9px] text-neutral-500 block font-sans">
+                            {selectedStudentFinances.percentDone.toFixed(0)}% Settled
+                          </span>
+                        </div>
+
+                        <div className="bg-neutral-950 p-3 border border-neutral-850 rounded-xs col-span-2 md:col-span-1">
+                          <span className="text-[9px] font-black text-neutral-500 uppercase block">Term Attendance</span>
+                          <strong className="text-sm text-amber-400 font-black mt-0.5 block">
+                            {selectedStudentFinances.presentDaysTerm} / {selectedStudentFinances.schoolDaysNoHolidaysCount} Days
+                          </strong>
+                          <span className="text-[9px] text-neutral-500 block font-sans">
+                            All-Access Pass Holder
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Search Bar */}
+                      <div className="relative">
+                        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-neutral-500" />
+                        <input
+                          type="text"
+                          value={termAccountSearch}
+                          onChange={(e) => setTermAccountSearch(e.target.value)}
+                          placeholder="Search date, ref code, notes, auditor..."
+                          className="w-full bg-neutral-950 border border-neutral-800 text-xs text-white pl-9 pr-8 py-2 focus:outline-none focus:border-amber-400 font-mono rounded-xs"
+                        />
+                        {termAccountSearch && (
+                          <button
+                            type="button"
+                            onClick={() => setTermAccountSearch('')}
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-neutral-500 hover:text-white"
+                          >
+                            <X size={12} />
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Timeline entries */}
+                      <div className="bg-neutral-950 border border-neutral-850 rounded-xs divide-y divide-neutral-900 max-h-72 overflow-y-auto">
+                        {selectedStudentFinances.paidPayments.filter(p => {
+                          if (!termAccountSearch.trim()) return true;
+                          const q = termAccountSearch.toLowerCase().trim();
+                          return (
+                            p.date.toLowerCase().includes(q) ||
+                            p.id.toLowerCase().includes(q) ||
+                            (p.notes && p.notes.toLowerCase().includes(q)) ||
+                            p.collectedBy.toLowerCase().includes(q) ||
+                            p.amount.toFixed(2).includes(q)
+                          );
+                        }).length === 0 ? (
+                          <div className="p-6 text-center text-neutral-500 font-mono space-y-1">
+                            <History size={20} className="mx-auto text-neutral-600 mb-1" />
+                            <p className="text-xs font-bold uppercase text-neutral-400">No matching account transactions.</p>
+                          </div>
+                        ) : (
+                          selectedStudentFinances.paidPayments
+                            .filter(p => {
+                              if (!termAccountSearch.trim()) return true;
+                              const q = termAccountSearch.toLowerCase().trim();
+                              return (
+                                p.date.toLowerCase().includes(q) ||
+                                p.id.toLowerCase().includes(q) ||
+                                (p.notes && p.notes.toLowerCase().includes(q)) ||
+                                p.collectedBy.toLowerCase().includes(q) ||
+                                p.amount.toFixed(2).includes(q)
+                              );
+                            })
+                            .map((p, idx) => (
+                              <div key={p.id} className="p-3 hover:bg-neutral-900/50 flex items-center justify-between font-mono text-xs">
+                                <div className="flex items-start gap-2.5">
+                                  <div className="p-2 bg-emerald-950/80 border border-emerald-800/80 text-emerald-400 rounded-xs mt-0.5 shrink-0">
+                                    <Coins size={14} />
+                                  </div>
+                                  <div className="space-y-0.5">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-white font-extrabold uppercase">Fee Installment #{idx + 1}</span>
+                                      <span className="text-[9px] text-amber-400 bg-neutral-900 border border-neutral-800 px-1.5 py-0.5 rounded-xs">
+                                        REF-{p.id.substring(0,8).toUpperCase()}
+                                      </span>
+                                    </div>
+                                    <p className="text-[10px] text-neutral-400 font-sans">
+                                      {p.notes ? `"${p.notes}"` : `Logged on ${p.date}`}
+                                    </p>
+                                    <p className="text-[9px] text-neutral-500">
+                                      Date: {p.date} • Auditor: {p.collectedBy}
+                                    </p>
+                                  </div>
+                                </div>
+
+                                <div className="text-right flex items-center gap-2">
+                                  <span className="text-sm font-black text-emerald-400 block font-mono">
+                                    + GHC {p.amount.toFixed(2)}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedReceiptPayment(p)}
+                                    className="bg-neutral-900 hover:bg-neutral-800 text-amber-400 border border-neutral-800 px-2 py-1 text-[9px] font-mono font-black uppercase transition-all cursor-pointer rounded-xs"
+                                    title="View Receipt"
+                                  >
+                                    Receipt
+                                  </button>
+                                </div>
+                              </div>
+                            ))
+                        )}
+                      </div>
                     </div>
                   )}
 
@@ -3954,384 +4105,320 @@ export const TermPayersTab: React.FC = React.memo(() => {
       )}
 
       {selectedReceiptPayment && receiptStudent && receiptStudentFinances && (
-        <div className="fixed inset-0 z-50 bg-neutral-950/90 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto no-print animate-fade-in">
-          <div className="bg-neutral-900 border-4 border-amber-400 p-6 max-w-lg w-full rounded-none space-y-4 shadow-[8px_8px_0px_0px_rgba(0,0,0,0.55)] relative text-white">
-            <button
-              onClick={() => setSelectedReceiptPayment(null)}
-              className="absolute top-4 right-4 text-neutral-400 hover:text-white font-mono text-xs p-1 cursor-pointer font-black border border-neutral-800 hover:border-red-500 hover:text-red-500 px-1.5 py-0.5 transition-all"
-            >
-              ✕ CLOSE
-            </button>
-            
-            <div className="text-center space-y-1 pb-2 border-b border-neutral-850">
-              <span className="text-[9px] font-mono font-black uppercase tracking-widest text-amber-400 block">SAAKO HOLY CHILD ACADEMY</span>
-              <h3 className="text-sm font-black uppercase tracking-tight font-mono text-white">
-                OFFICIAL TERM SCHEME RECEIPT
-              </h3>
-              <p className="text-[10px] text-neutral-500 font-mono">
-                REF-{selectedReceiptPayment.id.substring(0, 8).toUpperCase()}
-              </p>
-            </div>
-
-            {/* Receipt Content Card */}
-            <div className="bg-neutral-950 border border-neutral-800 p-4 space-y-3 font-mono text-[11px] rounded-none">
-              <div className="flex justify-between border-b border-neutral-900 pb-1.5">
-                <span className="text-neutral-550 uppercase font-bold">PUPIL BENEFICIARY:</span>
-                <span className="text-white font-black uppercase">{receiptStudent.name}</span>
-              </div>
-              <div className="flex justify-between border-b border-neutral-900 pb-1.5">
-                <span className="text-neutral-550 uppercase font-bold">ADMISSION ROLL ID:</span>
-                <span className="text-amber-400 font-black">{receiptStudent.rollNumber || `SHC-${receiptStudent.id.substring(0, 5).toUpperCase()}`}</span>
-              </div>
-              <div className="flex justify-between border-b border-neutral-900 pb-1.5">
-                <span className="text-neutral-550 uppercase font-bold">COHORT CLASS:</span>
-                <span className="text-white font-bold">{receiptStudent.class} ({receiptStudent.category})</span>
-              </div>
-              <div className="flex justify-between border-b border-neutral-900 pb-1.5">
-                <span className="text-neutral-550 uppercase font-bold">DATE CLEARED:</span>
-                <span className="text-white font-bold">{selectedReceiptPayment.date}</span>
-              </div>
-              <div className="flex justify-between border-b border-neutral-900 pb-1.5">
-                <span className="text-neutral-550 uppercase font-bold">REGISTRAR STAFF:</span>
-                <span className="text-white font-bold">{selectedReceiptPayment.collectedBy || 'Certified Registrar'}</span>
-              </div>
+        <>
+          {/* Screen UI Modal (Hidden when printing via no-print class) */}
+          <div className="fixed inset-0 z-50 bg-neutral-950/90 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto no-print animate-fade-in animate-duration-200">
+            <div className="relative w-full max-w-lg bg-neutral-900 border-4 border-amber-450 p-6 md:p-8 space-y-6 shadow-[8px_8px_0px_0px_rgba(251,191,36,0.15)] text-white">
               
-              {/* Financials details */}
-              <div className="bg-neutral-900/40 p-3.5 border border-neutral-850 space-y-2 mt-4 text-[11px]">
-                <div className="flex justify-between">
-                  <span className="text-neutral-400">Subscribed Term Fee:</span>
-                  <span className="text-neutral-200">GHC {receiptStudentFinances.termFee.toFixed(2)}</span>
-                </div>
-                {receiptStudentFinances.legacyDebt > 0 && (
-                  <div className="flex justify-between">
-                    <span className="text-neutral-400">Legacy Debt Carried:</span>
-                    <span className="text-neutral-200">GHC {receiptStudentFinances.legacyDebt.toFixed(2)}</span>
+              {/* Header section */}
+              <div className="flex justify-between items-start border-b border-neutral-800 pb-4">
+                <div className="flex items-start gap-3">
+                  <div className="p-2.5 bg-amber-400/10 border border-amber-400 text-amber-300 shrink-0">
+                    <Printer size={20} />
                   </div>
-                )}
-                <div className="flex justify-between border-t border-neutral-850/50 pt-1 text-xs">
-                  <span className="text-neutral-400 uppercase font-black text-[9px]">Total Cumulative Paid:</span>
-                  <span className="text-emerald-400 font-black">GHC {receiptStudentFinances.totalPaid.toFixed(2)}</span>
+                  <div>
+                    <span className="text-[9px] text-amber-400 font-mono tracking-widest font-black uppercase block">Ledger Transaction Receipt</span>
+                    <h3 className="text-base font-black uppercase tracking-tight">Fee Payment Docket</h3>
+                  </div>
                 </div>
-                <div className="flex justify-between text-xs">
-                  <span className="text-neutral-400 uppercase font-black text-[9px]">Remaining Balance:</span>
-                  <span className={`${receiptStudentFinances.balanceDue > 0 ? 'text-rose-400' : 'text-emerald-400'} font-black`}>
-                    GHC {receiptStudentFinances.balanceDue.toFixed(2)}
-                  </span>
+                <button 
+                  onClick={() => setSelectedReceiptPayment(null)} 
+                  className="p-1 cursor-pointer text-neutral-400 hover:text-white transition-colors"
+                  title="Close Receipt Overlay"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              {/* Receipt Details */}
+              <div className="space-y-5">
+                <div className="bg-neutral-950 p-4 border border-neutral-850 rounded-xs space-y-4 font-mono text-xs">
+                  
+                  {/* Header receipt info */}
+                  <div className="flex justify-between items-start border-b border-neutral-900 pb-3">
+                    <div>
+                      <span className="text-[9px] text-neutral-500 block uppercase font-bold">Pupil Name</span>
+                      <strong className="text-sm font-black text-white uppercase">{receiptStudent.name}</strong>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[9px] text-neutral-500 block uppercase font-bold">Grade / Class</span>
+                      <strong className="text-amber-400 uppercase">{receiptStudent.class} ({receiptStudent.category})</strong>
+                    </div>
+                  </div>
+
+                  {/* Meta info columns */}
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-3 pt-1 text-[11px]">
+                    <div>
+                      <span className="text-[9px] text-neutral-505 block uppercase">Admission ID</span>
+                      <strong className="text-neutral-300 font-bold">{receiptStudent.rollNumber || 'SHC-'+receiptStudent.id.substring(0,5).toUpperCase()}</strong>
+                    </div>
+                    
+                    <div>
+                      <span className="text-[9px] text-neutral-505 block uppercase">Receipt Reference</span>
+                      <strong className="text-neutral-300 truncate block select-all font-bold" title={selectedReceiptPayment.id}>
+                        REF-{selectedReceiptPayment.id.substring(0, 8).toUpperCase()}
+                      </strong>
+                    </div>
+
+                    <div>
+                      <span className="text-[9px] text-neutral-505 block uppercase">Payment Date</span>
+                      <strong className="text-neutral-300 font-bold">{selectedReceiptPayment.date}</strong>
+                    </div>
+
+                    <div>
+                      <span className="text-[9px] text-neutral-505 block uppercase">System Officer</span>
+                      <strong className="text-neutral-300 font-bold uppercase truncate block">{selectedReceiptPayment.collectedBy || 'Staff Registrar'}</strong>
+                    </div>
+                  </div>
+
+                  {/* Financial Summary breakdown */}
+                  <div className="bg-neutral-900/40 p-3 border border-neutral-850 space-y-1.5 text-[11px]">
+                    <div className="flex justify-between text-neutral-400">
+                      <span>Subscribed Term Fee:</span>
+                      <span className="text-neutral-200 font-bold">GHC {receiptStudentFinances.termFee.toFixed(2)}</span>
+                    </div>
+                    {receiptStudentFinances.legacyDebt > 0 && (
+                      <div className="flex justify-between text-neutral-400">
+                        <span>Legacy Debt Carried:</span>
+                        <span className="text-neutral-200 font-bold">GHC {receiptStudentFinances.legacyDebt.toFixed(2)}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between text-neutral-400 pt-1 border-t border-neutral-850">
+                      <span className="uppercase text-[9px] font-bold">Total Paid To Date:</span>
+                      <span className="text-emerald-400 font-black">GHC {receiptStudentFinances.totalPaid.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-neutral-400">
+                      <span className="uppercase text-[9px] font-bold">Remaining Balance Due:</span>
+                      <span className={`${receiptStudentFinances.balanceDue > 0 ? 'text-rose-400' : 'text-emerald-400'} font-black`}>
+                        GHC {receiptStudentFinances.balanceDue.toFixed(2)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Amount Block */}
+                  <div className="pt-3 border-t border-neutral-900 flex justify-between items-center">
+                    <div>
+                      <span className="text-[9px] text-neutral-500 block uppercase font-bold">Transaction Type</span>
+                      <span className="text-[9.5px] bg-neutral-900 text-amber-500 border border-neutral-850 px-2 py-0.5 font-bold uppercase rounded-sm inline-block mt-0.5">
+                        Term Fee Installment
+                      </span>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[9px] text-neutral-505 block uppercase font-bold">Amount Paid</span>
+                      <strong className="text-lg font-black text-emerald-400">
+                        GHC {selectedReceiptPayment.amount.toFixed(2)}
+                      </strong>
+                    </div>
+                  </div>
+
+                  {/* Details note */}
+                  {selectedReceiptPayment.notes && (
+                    <div className="p-2.5 bg-neutral-900 border border-neutral-850 rounded-xs text-[10px] text-neutral-400">
+                      <span className="text-[8px] uppercase text-neutral-500 block font-bold leading-none mb-1">DOCKET RECONCILIATION NOTES</span>
+                      {selectedReceiptPayment.notes}
+                    </div>
+                  )}
+                </div>
+
+                {/* Aesthetic Verification Seal */}
+                <div className="flex items-center justify-between px-4 py-3 bg-neutral-950 border border-neutral-850 text-xs font-mono rounded-xs">
+                  <div className="flex items-center gap-2">
+                    <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                    <span className="text-neutral-455 text-[10.5px]">Status: <strong className="text-emerald-400 font-black uppercase">VERIFIED SECURE</strong></span>
+                  </div>
+                  <span className="text-[9px] text-neutral-550 uppercase">Gate ID Code: SHC-{receiptStudent.id.substring(0,6).toUpperCase()}</span>
+                </div>
+
+                {/* Printing action and close btn */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 font-mono text-center">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      window.print();
+                    }}
+                    className="py-3 px-4 bg-amber-400 hover:bg-amber-300 text-black font-black uppercase text-xs tracking-widest transition-all cursor-pointer flex items-center justify-center gap-2 border border-amber-500"
+                    title="Export this receipt cleanly as a printable PDF invoice via browser print setup"
+                    id="btn-export-term-pdf"
+                  >
+                    <Printer size={15} className="stroke-[2.5]" />
+                    <span>Export PDF Invoice</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => downloadTermReceipt(
+                      receiptStudent,
+                      selectedReceiptPayment,
+                      receiptStudentFinances.totalPaid,
+                      receiptStudentFinances.balanceDue
+                    )}
+                    className="py-3 px-4 bg-emerald-500 hover:bg-emerald-400 text-black font-black uppercase text-xs tracking-widest transition-all cursor-pointer flex items-center justify-center gap-2 border border-emerald-600 font-bold"
+                    title="Save receipt record as an offline HTML file"
+                    id="btn-download-term-docket"
+                  >
+                    <Download size={15} className="stroke-[2.5]" />
+                    <span>Download Docket</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const messageText = `*SAAKO HOLY CHILD ACADEMY*\n*OFFICIAL TERM FEE RECEIPT*\n\n` +
+                        `*Pupil:* ${receiptStudent.name}\n` +
+                        `*Admission ID:* ${receiptStudent.rollNumber || `SHC-${receiptStudent.id.substring(0, 5).toUpperCase()}`}\n` +
+                        `*Class:* ${receiptStudent.class} (${receiptStudent.category})\n` +
+                        `*Payment Date:* ${selectedReceiptPayment.date}\n` +
+                        `*Receipt Reference:* REF-${selectedReceiptPayment.id.substring(0, 8).toUpperCase()}\n\n` +
+                        `_Financial Summary:_\n` +
+                        `* Installment Settled: GHC ${selectedReceiptPayment.amount.toFixed(2)}\n` +
+                        `* Total Term Fee: GHC ${receiptStudentFinances.termFee.toFixed(2)}\n` +
+                        `${receiptStudentFinances.legacyDebt > 0 ? `* Legacy Debt Carried: GHC ${receiptStudentFinances.legacyDebt.toFixed(2)}\n` : ''}` +
+                        `* Cumulative Paid to Date: GHC ${receiptStudentFinances.totalPaid.toFixed(2)}\n` +
+                        `* Remaining Balance: GHC ${receiptStudentFinances.balanceDue.toFixed(2)}\n\n` +
+                        `_Thank you for your prompt payment and support of our pupils. Verified by: ${selectedReceiptPayment.collectedBy || 'Certified Registrar'}._`;
+
+                      setWhatsAppReminderModal({
+                        student: receiptStudent,
+                        messageText,
+                        defaultPhone: receiptStudent.guardianPhone || ''
+                      });
+                    }}
+                    className="py-3 px-4 bg-emerald-650 hover:bg-emerald-550 text-white font-black uppercase text-xs tracking-widest transition-all cursor-pointer flex items-center justify-center gap-2 border border-emerald-800"
+                  >
+                    <MessageSquare size={15} />
+                    <span>Share Receipt</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setSelectedReceiptPayment(null)}
+                    className="py-3 px-4 bg-neutral-950 hover:bg-neutral-850 text-neutral-400 hover:text-white font-medium uppercase text-xs tracking-wider transition-colors border border-neutral-850 cursor-pointer"
+                  >
+                    Done
+                  </button>
                 </div>
               </div>
 
-              {/* Transacted amount badge */}
-              <div className="border-t-2 border-dashed border-neutral-800 pt-3 mt-4 flex items-center justify-between">
-                <div>
-                  <span className="text-[9px] text-neutral-500 font-black block uppercase">TRANSACTION STATUS</span>
-                  <span className="text-[10px] text-emerald-400 font-black">✓ VERIFIED & RECORDED</span>
-                </div>
-                <div className="text-right">
-                  <span className="text-[9px] text-neutral-500 font-black block uppercase">AMOUNT PAID</span>
-                  <span className="text-base text-emerald-400 font-black">
-                    GHC {selectedReceiptPayment.amount.toFixed(2)}
-                  </span>
-                </div>
-              </div>
-              
-              {selectedReceiptPayment.notes && (
-                <div className="text-[9.5px] text-neutral-400 border-t border-neutral-900 pt-2 italic leading-relaxed">
-                  Memo: "{selectedReceiptPayment.notes}"
-                </div>
-              )}
-            </div>
-
-            {/* Receipt actions */}
-            <div className="grid grid-cols-2 gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => window.print()}
-                className="bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black font-mono tracking-wider uppercase text-[10px] py-3.5 transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow"
-              >
-                <Printer size={13} className="stroke-[3.5]" />
-                <span>Print Receipt</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => downloadTermReceipt(receiptStudent, selectedReceiptPayment, receiptStudentFinances.totalPaid, receiptStudentFinances.balanceDue)}
-                className="bg-neutral-950 hover:bg-neutral-850 text-white hover:text-amber-400 border border-neutral-800 py-3.5 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-1.5"
-              >
-                <Download size={13} />
-                <span>Download Docket</span>
-              </button>
-            </div>
-
-            <div className="flex gap-2.5">
-              <button
-                type="button"
-                onClick={() => {
-                  const messageText = `*SAAKO HOLY CHILD ACADEMY*\n*OFFICIAL TERM FEE RECEIPT*\n\n` +
-                    `*Pupil:* ${receiptStudent.name}\n` +
-                    `*Admission ID:* ${receiptStudent.rollNumber || `SHC-${receiptStudent.id.substring(0, 5).toUpperCase()}`}\n` +
-                    `*Class:* ${receiptStudent.class} (${receiptStudent.category})\n` +
-                    `*Payment Date:* ${selectedReceiptPayment.date}\n` +
-                    `*Receipt Reference:* REF-${selectedReceiptPayment.id.substring(0, 8).toUpperCase()}\n\n` +
-                    `_Financial Summary:_\n` +
-                    `* Installment Settled: GHC ${selectedReceiptPayment.amount.toFixed(2)}\n` +
-                    `* Total Term Fee: GHC ${receiptStudentFinances.termFee.toFixed(2)}\n` +
-                    `${receiptStudentFinances.legacyDebt > 0 ? `* Legacy Debt Carried: GHC ${receiptStudentFinances.legacyDebt.toFixed(2)}\n` : ''}` +
-                    `* Cumulative Paid to Date: GHC ${receiptStudentFinances.totalPaid.toFixed(2)}\n` +
-                    `* Remaining Balance: GHC ${receiptStudentFinances.balanceDue.toFixed(2)}\n\n` +
-                    `_Thank you for your prompt payment and support of our pupils. Verified by: ${selectedReceiptPayment.collectedBy || 'Certified Registrar'}._`;
-
-                  setWhatsAppReminderModal({
-                    student: receiptStudent,
-                    messageText,
-                    defaultPhone: receiptStudent.guardianPhone || ''
-                  });
-                }}
-                className="w-full bg-emerald-950 hover:bg-emerald-900 text-emerald-400 border border-emerald-800 hover:border-emerald-500 py-3 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-1.5"
-              >
-                <MessageSquare size={12} />
-                <span>Share on WhatsApp</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setSelectedReceiptPayment(null)}
-                className="w-full bg-neutral-950 hover:bg-neutral-850 text-neutral-400 hover:text-white border border-neutral-800 py-3 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer"
-              >
-                ✕ Dismiss
-              </button>
             </div>
           </div>
-        </div>
-      )}
 
-      {/* PORTRAIT PHYSICAL PRINT-READY RECEIPT PAGE (HIDDEN ON SCREEN, VISIBLE ON PRINT) */}
-      {selectedReceiptPayment && receiptStudent && receiptStudentFinances && (
-        <div id="print-term-receipt" className="hidden print:block bg-white text-black p-8 font-sans leading-relaxed max-w-[210mm] mx-auto">
-          {/* DUAL COPIES OF THE RECEIPT: DOCK 1 (GUARDIAN'S COPY) & DOCK 2 (SCHOOL COPY) */}
-          
-          {/* -------------------- GUARDIAN COPY -------------------- */}
-          <div className="space-y-4 pb-8">
-            <div className="flex justify-between items-start border-b-2 border-black pb-3">
-              <div className="flex items-center gap-2">
-                <div className="h-10 w-10 border-2 border-black bg-black text-white font-black font-mono text-center flex items-center justify-center text-xs">
-                  SHCA
+          {/* PRINTER FRIENDLY PORTRAIT TERM RECEIPT SLIP (HIDDEN ON SCREEN, VISIBLE ON PRINT ONLY) */}
+          <div id="print-term-receipt" className="hidden print:block bg-white text-black p-12 max-w-[210mm] mx-auto font-sans leading-relaxed">
+            <div className="space-y-6">
+              
+              {/* Letterhead */}
+              <div className="border-b-4 border-black pb-4 flex justify-between items-start">
+                <div className="flex items-center gap-3">
+                  <SchoolLogo size={42} className="shrink-0" lightBackground={true} />
+                  <div className="space-y-1">
+                    <span className="text-[11px] font-black uppercase tracking-wider text-black bg-neutral-200 px-2.5 py-1 font-mono">
+                      SAAKO HOLY CHILD ACADEMY
+                    </span>
+                    <h2 className="text-xl font-black uppercase tracking-tight leading-none mt-2 font-sans font-bold">OFFICIAL PAYMENT RECEIPT</h2>
+                    <p className="text-[9px] text-neutral-600 font-black uppercase tracking-widest font-mono">
+                      TERM SCHEME LEDGER • TRANSACTION CONFIRMATION SLIP
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <h2 className="text-sm font-black uppercase tracking-tight">SAAKO HOLY CHILD ACADEMY</h2>
-                  <span className="text-[9px] text-neutral-600 block uppercase">Official Scholastic Receipts Registry</span>
+                
+                <div className="text-right space-y-1 font-mono">
+                  <span className="text-[11px] font-black uppercase px-3 py-1 bg-black text-white inline-block text-center font-bold">
+                    FEE TRANSACTION RECEIPT
+                  </span>
+                  <div className="text-[8.5px] text-neutral-600 uppercase font-black mt-2">
+                    TRANSACTION ID: SHC-TERM-{selectedReceiptPayment.date.replace(/-/g, '')}-{selectedReceiptPayment.id.substring(0,8).toUpperCase()}
+                  </div>
                 </div>
               </div>
-              <div className="text-right">
-                <span className="text-[9px] border-2 border-black font-black uppercase px-2 py-0.5">GUARDIAN'S COPY</span>
-                <span className="text-[9px] font-mono block mt-1.5 text-neutral-600">REF: REF-{selectedReceiptPayment.id.substring(0, 8).toUpperCase()}</span>
-              </div>
-            </div>
 
-            <div className="grid grid-cols-2 gap-4 text-xs font-mono my-3">
-              <div>
-                <span className="text-[8px] text-neutral-500 block">PUPIL BENEFICIARY:</span>
-                <strong className="text-black uppercase text-sm block">{receiptStudent.name}</strong>
-              </div>
-              <div>
-                <span className="text-[8px] text-neutral-500 block">ADMISSION ROLL NUMBER:</span>
-                <strong className="text-black block">{receiptStudent.rollNumber || `SHC-${receiptStudent.id.substring(0, 5).toUpperCase()}`}</strong>
-              </div>
-              <div>
-                <span className="text-[8px] text-neutral-500 block">COHORT GRADE:</span>
-                <strong className="text-black block">{receiptStudent.class} ({receiptStudent.category})</strong>
-              </div>
-              <div>
-                <span className="text-[8px] text-neutral-500 block">STUDENT GENDER:</span>
-                <strong className="text-black block">{receiptStudent.gender || 'Not Specified'}</strong>
-              </div>
-              <div>
-                <span className="text-[8px] text-neutral-500 block">GUARDIAN CONTACT:</span>
-                <strong className="text-black block">{receiptStudent.guardianPhone || 'Not Specified'}</strong>
-              </div>
-              <div>
-                <span className="text-[8px] text-neutral-500 block">BILLING SCHEME:</span>
-                <strong className="text-black block">{receiptStudent.paymentType === 'Term' ? 'Term Fee Scheme' : 'Daily Gate Scheme'}</strong>
-              </div>
-              <div className="col-span-2">
-                <span className="text-[8px] text-neutral-500 block">DATE CLEARED:</span>
-                <strong className="text-black block">{selectedReceiptPayment.date}</strong>
-              </div>
-            </div>
+              {/* Profile and Transaction breakdown */}
+              <div className="grid grid-cols-2 gap-8 text-[11px] leading-relaxed border-b border-neutral-300 pb-5">
+                <div className="font-sans space-y-1.5">
+                  <span className="text-[8.5px] font-black uppercase text-neutral-500 block text-neutral-510 font-bold">STUDENT BENEFICIARY</span>
+                  <div className="text-sm font-black text-black uppercase font-bold">{receiptStudent.name}</div>
+                  <div className="font-mono text-neutral-755 font-bold">Roll Ref: {receiptStudent.rollNumber || 'SHC-' + receiptStudent.id.substring(0, 5).toUpperCase()}</div>
+                  <div className="font-bold">Cohort Grade: {receiptStudent.class} ({receiptStudent.category})</div>
+                  <div><strong>Gender:</strong> {receiptStudent.gender || 'Not Specified'}</div>
+                  <div><strong>Guardian Contact:</strong> {receiptStudent.guardianPhone || 'Not Specified'}</div>
+                  <div><strong>Billing Scheme:</strong> Term Fee Scheme</div>
+                </div>
 
-            {/* Financial statement breakdown table */}
-            <table className="w-full text-left text-xs my-4 border-collapse font-mono">
-              <thead>
-                <tr className="border-b border-black">
-                  <th className="py-1 font-bold">FEES TYPE DESCRIPTION</th>
-                  <th className="py-1 text-right font-bold">DEBIT COMMITMENT</th>
-                  <th className="py-1 text-right font-bold">CUMULATIVE PAID</th>
-                  <th className="py-1 text-right font-bold">BALANCE DUE</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr className="border-b border-neutral-200">
-                  <td className="py-1.5">Standard School Term Subscription Fee</td>
-                  <td className="py-1.5 text-right">GHC {receiptStudentFinances.termFee.toFixed(2)}</td>
-                  <td className="py-1.5 text-right">-</td>
-                  <td className="py-1.5 text-right">-</td>
-                </tr>
-                {receiptStudentFinances.legacyDebt > 0 && (
+                <div className="border-l pl-8 border-neutral-200 font-mono space-y-1.5">
+                  <span className="text-[8.5px] font-black uppercase text-neutral-500 block font-sans font-bold">TRANSACTION METRICS</span>
+                  <div><strong>Date Cleared:</strong> {selectedReceiptPayment.date}</div>
+                  <div><strong>Installment Settled:</strong> GHC {selectedReceiptPayment.amount.toFixed(2)}</div>
+                  <div><strong>Subscribed Term Fee:</strong> GHC {receiptStudentFinances.termFee.toFixed(2)}</div>
+                  <div><strong>Cumulative Paid to Date:</strong> GHC {receiptStudentFinances.totalPaid.toFixed(2)}</div>
+                  <div><strong>Remaining Balance:</strong> GHC {receiptStudentFinances.balanceDue.toFixed(2)}</div>
+                  <div><strong>Registrar Officer:</strong> {selectedReceiptPayment.collectedBy || 'Certified Registrar'}</div>
+                  <div><strong>Verification Code:</strong> SUCCESSFUL DEPOSIT SECURITIES ✔️</div>
+                </div>
+              </div>
+
+              {/* Financial Statement Breakdown Table */}
+              <table className="w-full text-left text-xs my-4 border-collapse font-mono">
+                <thead>
+                  <tr className="border-b border-black">
+                    <th className="py-1 font-bold">FEES TYPE DESCRIPTION</th>
+                    <th className="py-1 text-right font-bold">DEBIT COMMITMENT</th>
+                    <th className="py-1 text-right font-bold">CUMULATIVE PAID</th>
+                    <th className="py-1 text-right font-bold">BALANCE DUE</th>
+                  </tr>
+                </thead>
+                <tbody>
                   <tr className="border-b border-neutral-200">
-                    <td className="py-1.5">Pre-adoption Legacy Arrears / Debt Carried</td>
-                    <td className="py-1.5 text-right">GHC {receiptStudentFinances.legacyDebt.toFixed(2)}</td>
+                    <td className="py-1.5">Standard School Term Subscription Fee</td>
+                    <td className="py-1.5 text-right">GHC {receiptStudentFinances.termFee.toFixed(2)}</td>
                     <td className="py-1.5 text-right">-</td>
                     <td className="py-1.5 text-right">-</td>
                   </tr>
-                )}
-                <tr className="border-b-2 border-black font-bold bg-neutral-50">
-                  <td className="py-1.5 font-sans">Summary (Fee Obligation + Legacy Arrears)</td>
-                  <td className="py-1.5 text-right">GHC {(receiptStudentFinances.termFee + receiptStudentFinances.legacyDebt).toFixed(2)}</td>
-                  <td className="py-1.5 text-right text-emerald-700">GHC {receiptStudentFinances.totalPaid.toFixed(2)}</td>
-                  <td className="py-1.5 text-right text-rose-700">GHC {receiptStudentFinances.balanceDue.toFixed(2)}</td>
-                </tr>
-              </tbody>
-            </table>
-
-            {/* Cleared payment row with stamp */}
-            <div className="flex justify-between items-center my-4 pt-1">
-              <div className="border border-emerald-600/50 bg-emerald-50 p-2 border-dashed flex items-center gap-2 max-w-sm">
-                <div className="text-[10px] text-emerald-800 leading-tight font-sans">
-                  <div className="font-black text-[8px] uppercase tracking-wider">OFFICIAL SYSTEM SEAL</div>
-                  <div>AUTHORIZED & CHECKED-IN</div>
-                  <div className="font-mono text-[7.5px] text-neutral-500">SIGN: {selectedReceiptPayment.collectedBy || 'Certified Registrar'}</div>
-                </div>
-              </div>
-              
-              <div className="text-right">
-                <span className="text-[8px] text-neutral-500 font-black uppercase block font-sans">INSTANT AMOUNT PAID</span>
-                <strong className="text-lg font-black font-mono text-emerald-700">GHC {selectedReceiptPayment.amount.toFixed(2)}</strong>
-              </div>
-            </div>
-
-            {selectedReceiptPayment.notes && (
-              <div className="text-[9px] text-neutral-600 font-mono italic">
-                Notes: "{selectedReceiptPayment.notes}"
-              </div>
-            )}
-            
-            <div className="grid grid-cols-2 gap-8 pt-6 font-mono text-[9px]">
-              <div className="border-t border-neutral-400 pt-1 text-center">
-                Parent Signature & Date
-              </div>
-              <div className="border-t border-neutral-400 pt-1 text-center">
-                Registrar Staff Sign / Stamp
-              </div>
-            </div>
-          </div>
-
-          {/* TEAR OFF DIVIDER */}
-          <div className="border-t-2 border-dashed border-neutral-400 my-6 pt-4 text-center select-none text-[8.5px] font-mono tracking-widest text-neutral-500 flex items-center justify-center gap-2">
-            <span>✂</span>
-            <span>TEAR ALONG THIS LINE TO SEPARATE COPIES</span>
-            <span>✂</span>
-          </div>
-
-          {/* -------------------- SCHOOL ARCHIVE COPY -------------------- */}
-          <div className="space-y-4 pt-4">
-            <div className="flex justify-between items-start border-b-2 border-black pb-3">
-              <div className="flex items-center gap-2">
-                <div className="h-10 w-10 border-2 border-black bg-black text-white font-black font-mono text-center flex items-center justify-center text-xs">
-                  SHCA
-                </div>
-                <div>
-                  <h2 className="text-sm font-black uppercase tracking-tight">SAAKO HOLY CHILD ACADEMY</h2>
-                  <span className="text-[9px] text-neutral-600 block uppercase">Official Scholastic Receipts Registry</span>
-                </div>
-              </div>
-              <div className="text-right">
-                <span className="text-[9px] border-2 border-black bg-neutral-100 font-black uppercase px-2 py-0.5">SCHOOL ARCHIVE COPY</span>
-                <span className="text-[9px] font-mono block mt-1.5 text-neutral-600">REF: REF-{selectedReceiptPayment.id.substring(0, 8).toUpperCase()}</span>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4 text-xs font-mono my-3">
-              <div>
-                <span className="text-[8px] text-neutral-500 block">PUPIL BENEFICIARY:</span>
-                <strong className="text-black uppercase text-sm block">{receiptStudent.name}</strong>
-              </div>
-              <div>
-                <span className="text-[8px] text-neutral-500 block">ADMISSION ROLL NUMBER:</span>
-                <strong className="text-black block">{receiptStudent.rollNumber || `SHC-${receiptStudent.id.substring(0, 5).toUpperCase()}`}</strong>
-              </div>
-              <div>
-                <span className="text-[8px] text-neutral-500 block">COHORT GRADE:</span>
-                <strong className="text-black block">{receiptStudent.class} ({receiptStudent.category})</strong>
-              </div>
-              <div>
-                <span className="text-[8px] text-neutral-500 block">STUDENT GENDER:</span>
-                <strong className="text-black block">{receiptStudent.gender || 'Not Specified'}</strong>
-              </div>
-              <div>
-                <span className="text-[8px] text-neutral-500 block">GUARDIAN CONTACT:</span>
-                <strong className="text-black block">{receiptStudent.guardianPhone || 'Not Specified'}</strong>
-              </div>
-              <div>
-                <span className="text-[8px] text-neutral-500 block">BILLING SCHEME:</span>
-                <strong className="text-black block">{receiptStudent.paymentType === 'Term' ? 'Term Fee Scheme' : 'Daily Gate Scheme'}</strong>
-              </div>
-              <div className="col-span-2">
-                <span className="text-[8px] text-neutral-500 block">DATE CLEARED:</span>
-                <strong className="text-black block">{selectedReceiptPayment.date}</strong>
-              </div>
-            </div>
-
-            {/* Condensed table for school archive */}
-            <table className="w-full text-left text-[11px] my-3 border-collapse font-mono">
-              <thead>
-                <tr className="border-b border-black">
-                  <th className="py-1 font-bold">SUMMARY BREAKDOWN</th>
-                  <th className="py-1 text-right font-bold">AMOUNT VALUE</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td className="py-1">Standard Term fee Due</td>
-                  <td className="py-1 text-right">GHC {receiptStudentFinances.termFee.toFixed(2)}</td>
-                </tr>
-                {receiptStudentFinances.legacyDebt > 0 && (
-                  <tr>
-                    <td className="py-1">Legacy Debt Carried</td>
-                    <td className="py-1 text-right">GHC {receiptStudentFinances.legacyDebt.toFixed(2)}</td>
+                  {receiptStudentFinances.legacyDebt > 0 && (
+                    <tr className="border-b border-neutral-200">
+                      <td className="py-1.5">Pre-adoption Legacy Arrears / Debt Carried</td>
+                      <td className="py-1.5 text-right">GHC {receiptStudentFinances.legacyDebt.toFixed(2)}</td>
+                      <td className="py-1.5 text-right">-</td>
+                      <td className="py-1.5 text-right">-</td>
+                    </tr>
+                  )}
+                  <tr className="border-b-2 border-black font-bold bg-neutral-50">
+                    <td className="py-1.5 font-sans">Summary (Fee Obligation + Legacy Arrears)</td>
+                    <td className="py-1.5 text-right">GHC {(receiptStudentFinances.termFee + receiptStudentFinances.legacyDebt).toFixed(2)}</td>
+                    <td className="py-1.5 text-right text-emerald-700">GHC {receiptStudentFinances.totalPaid.toFixed(2)}</td>
+                    <td className="py-1.5 text-right text-rose-700">GHC {receiptStudentFinances.balanceDue.toFixed(2)}</td>
                   </tr>
-                )}
-                <tr>
-                  <td className="py-1">Total Obligation</td>
-                  <td className="py-1 text-right font-bold">GHC {(receiptStudentFinances.termFee + receiptStudentFinances.legacyDebt).toFixed(2)}</td>
-                </tr>
-                <tr className="border-t border-black font-bold">
-                  <td className="py-1.5">THIS INSTALLMENT RECORDED</td>
-                  <td className="py-1.5 text-right text-emerald-700">GHC {selectedReceiptPayment.amount.toFixed(2)}</td>
-                </tr>
-                <tr className="border-t border-neutral-300 font-bold">
-                  <td className="py-1">Total Paid to Date (Including this)</td>
-                  <td className="py-1 text-right">GHC {receiptStudentFinances.totalPaid.toFixed(2)}</td>
-                </tr>
-                <tr className="border-t border-neutral-300 font-bold">
-                  <td className="py-1">Outstanding Balance Remaining</td>
-                  <td className="py-1 text-right text-rose-700">GHC {receiptStudentFinances.balanceDue.toFixed(2)}</td>
-                </tr>
-              </tbody>
-            </table>
+                </tbody>
+              </table>
 
-            {selectedReceiptPayment.notes && (
-              <div className="text-[9px] text-neutral-600 font-mono italic">
-                Memo: "{selectedReceiptPayment.notes}"
+              {/* Receipt message */}
+              <div className="p-4 border border-neutral-300 bg-neutral-50 rounded-sm text-xs space-y-2">
+                <span className="text-[10px] font-black text-black block font-mono uppercase font-bold">SECURITY TRANSACTION CONFIRMATION SUMMARY</span>
+                <p className="text-[10px] leading-relaxed font-sans text-neutral-700">
+                  This receipt confirms a monetary transaction of <strong className="text-black font-bold">GHC {selectedReceiptPayment.amount.toFixed(2)}</strong> paid on <strong className="text-black font-bold">{selectedReceiptPayment.date}</strong> in favor of the pupil <strong className="text-black font-bold">{receiptStudent.name}</strong>.
+                  The fee covers the subscribed term fee installment under the active scholastic term register.
+                </p>
               </div>
-            )}
 
-            <div className="grid grid-cols-2 gap-8 pt-4 font-mono text-[9px]">
-              <div className="border-t border-neutral-400 pt-1 text-center">
-                Depositor Signature
+              {/* Signature deck */}
+              <div className="pt-12 flex justify-between items-end font-sans">
+                <div className="space-y-1 text-left font-mono">
+                  <div className="text-[8px] text-neutral-500 uppercase">OFFICIAL QR GATE REFERENCE</div>
+                  <div className="text-[10px] font-bold tracking-widest text-neutral-800 uppercase bg-neutral-100 p-1.5 inline-block font-mono">
+                    *SHCR-TERM-{receiptStudent.id.substring(0,8).toUpperCase()}*
+                  </div>
+                </div>
+
+                <div className="text-right space-y-2">
+                  <div className="inline-block border-b border-black w-32 h-6" />
+                  <div className="text-[7.5px] font-black uppercase text-neutral-700 tracking-wider font-sans font-bold">
+                    Audit Desk Signature
+                    <span className="text-[7px] text-neutral-400 block mt-0.5 font-normal">SAAKO HOLY CHILD ACADEMY CHECKPOINT</span>
+                  </div>
+                </div>
               </div>
-              <div className="border-t border-neutral-400 pt-1 text-center">
-                Registrar Verification & Seal
-              </div>
+
             </div>
           </div>
-        </div>
+        </>
       )}
     </div>
   );

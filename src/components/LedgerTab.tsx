@@ -395,6 +395,7 @@ export function LedgerTab() {
       <div className="flex border-b-2 border-neutral-900 bg-neutral-905 p-1 gap-1">
         <button
           onClick={() => setActiveSubTab('journals')}
+          title="Journal Book & Ledger: View double-entry debit/credit journal entries, balance reconciliations, and account audit trails"
           className={`flex-1 md:flex-none px-6 py-3 font-mono text-[10px] font-black uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
             activeSubTab === 'journals'
               ? 'bg-amber-400 text-black border-b-2 border-black'
@@ -413,6 +414,7 @@ export function LedgerTab() {
               setSelectedStaffId(firstTeacher.teacherId);
             }
           }}
+          title="Performance Salary adjustments: Audit teacher ratings, KPI scores, and automated performance-based bonus or deduction payouts"
           className={`flex-1 md:flex-none px-6 py-3 font-mono text-[10px] font-black uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
             activeSubTab === 'performance_salary'
               ? 'bg-amber-400 text-black border-b-2 border-black'

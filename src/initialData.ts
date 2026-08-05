@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Student, UserAccount, PaymentRecord, SchoolCategory, StudentClass } from './types';
+import { Student, UserAccount, PaymentRecord, ExamsPayment, SchoolCategory, StudentClass } from './types';
 
 // Helper to determine category
 export function getClassCategory(className: StudentClass): SchoolCategory {
@@ -24,8 +24,7 @@ export const INITIAL_USERS: UserAccount[] = [
     role: 'Administrator',
     mfaEnabled: true,
     mfaSecret: 'SHA-SAAKOKEY2003',
-    passwordEnabled: true,
-    password: 'admin2026'
+    passwordEnabled: true
   }
 ];
 
@@ -37,8 +36,20 @@ export const ORIGINAL_DEMO_STUDENT_IDS: string[] = [
 
 export const INITIAL_STUDENTS: Student[] = [];
 
-// Let's seed some payments for the last school week: May 25, May 26, May 27, May 28, May 29.
-// Today is May 30 (Sat).
+export function generateRandomPassword(length = 8): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+  let result = '';
+  for (let i = 0; i < length; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+}
+
 export function generateSeedPayments(): PaymentRecord[] {
   return [];
 }
+
+export function generateSeedExamsPayments(): ExamsPayment[] {
+  return [];
+}
+

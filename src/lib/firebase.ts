@@ -5,6 +5,12 @@
 
 import { initializeApp } from 'firebase/app';
 import { 
+  getAuth, 
+  signInWithEmailAndPassword, 
+  sendPasswordResetEmail,
+  createUserWithEmailAndPassword
+} from 'firebase/auth';
+import { 
   initializeFirestore,
   getFirestore, 
   collection, 
@@ -24,6 +30,46 @@ const dbId = (!firebaseConfig.firestoreDatabaseId || firebaseConfig.firestoreDat
   : firebaseConfig.firestoreDatabaseId;
 
 const app = initializeApp(firebaseConfig);
+
+export const firebaseAuth = getAuth(app);
+
+export async function firebaseLogin(email: string, pass: string) {
+  try {
+    const userCredential = await signInWithEmailAndPassword(firebaseAuth, email.trim(), pass);
+    return { success: true, user: userCredential.user };
+  } catch (err: any) {
+    console.warn("Firebase Auth signIn failed:", err);
+    return { success: false, error: err.message || "Authentication failed.", code: err.code };
+  }
+}
+
+export async function firebaseSendPasswordReset(email: string) {
+  try {
+    await sendPasswordResetEmail(firebaseAuth, email.trim());
+    return { success: true };
+  } catch (err: any) {
+    console.warn("Firebase Auth password reset failed:", err);
+    let msg = "Failed to send password reset email.";
+    if (err.code === 'auth/user-not-found') {
+      msg = "No Firebase Authentication account registered with this email.";
+    } else if (err.code === 'auth/invalid-email') {
+      msg = "Please enter a valid email address.";
+    } else if (err.message) {
+      msg = err.message;
+    }
+    return { success: false, error: msg };
+  }
+}
+
+export async function firebaseCreateAccount(email: string, pass: string) {
+  try {
+    const userCredential = await createUserWithEmailAndPassword(firebaseAuth, email.trim(), pass);
+    return { success: true, user: userCredential.user };
+  } catch (err: any) {
+    console.warn("Firebase Auth create user failed:", err);
+    return { success: false, error: err.message || "Failed to create Firebase Auth user.", code: err.code };
+  }
+}
 
 // Initialize with memoryLocalCache and experimentalForceLongPolling to prevent iframe storage/connection blocks
 export const firestoreDb = initializeFirestore(app, {
