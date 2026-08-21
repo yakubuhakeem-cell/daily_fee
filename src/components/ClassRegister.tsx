@@ -17,6 +17,7 @@ import { findBestMatchingStudent } from '../utils/fuzzyNameMatcher';
 import { getStudentPickupCode, getSchoolWeekInfo } from '../utils/pickupCode';
 import { PickupPassesModal } from './PickupPassesModal';
 import { AdmissionFormModal } from './AdmissionFormModal';
+import { PunctualityAwardsModal } from './PunctualityAwardsModal';
 import QRCode from 'qrcode';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -120,6 +121,7 @@ export const ClassRegister: React.FC = React.memo(() => {
   const weekInfo = useMemo(() => getSchoolWeekInfo(), []);
   const [showPickupPassesModal, setShowPickupPassesModal] = useState(false);
   const [showAdmissionFormModal, setShowAdmissionFormModal] = useState(false);
+  const [showPunctualityAwardsModal, setShowPunctualityAwardsModal] = useState(false);
   const [admissionFormStudent, setAdmissionFormStudent] = useState<Student | null>(null);
   const [isExpressFeeOpen, setIsExpressFeeOpen] = useState(false);
 
@@ -4389,6 +4391,17 @@ export const ClassRegister: React.FC = React.memo(() => {
               >
                 <Printer size={14} className="stroke-[3]" />
                 <span>Admission Forms</span>
+              </button>
+
+              <button
+                id="punctuality-awards-trigger"
+                type="button"
+                onClick={() => setShowPunctualityAwardsModal(true)}
+                className="bg-neutral-900 hover:bg-amber-400 hover:text-black text-amber-400 border-2 border-neutral-800 hover:border-amber-400 py-3 px-4 text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-colors cursor-pointer shrink-0 flex-1 sm:flex-initial min-w-[140px]"
+                title="View Punctuality & 100% Attendance Honors and generate Official Citations"
+              >
+                <Award size={14} className="stroke-[3]" />
+                <span>Punctuality Honors</span>
               </button>
 
               <button
@@ -11996,6 +12009,13 @@ export const ClassRegister: React.FC = React.memo(() => {
           setAdmissionFormStudent(null);
         }}
         initialStudent={admissionFormStudent}
+        initialClass={selectedClass}
+      />
+
+      {/* Punctuality & 100% Attendance Honors and Awards Modal */}
+      <PunctualityAwardsModal
+        isOpen={showPunctualityAwardsModal}
+        onClose={() => setShowPunctualityAwardsModal(false)}
         initialClass={selectedClass}
       />
 

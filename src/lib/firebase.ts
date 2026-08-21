@@ -24,7 +24,7 @@ import {
   getDocFromServer,
   memoryLocalCache
 } from 'firebase/firestore';
-import firebaseConfig from '../../firebase-applet-config.json';
+import rawFirebaseConfig from '../../firebase-applet-config.json';
 import { Student, PaymentRecord, UserAccount, Term, Expense, WorkerSalary, SystemSettings, BudgetTarget, AuditLog, TeacherEvaluation, JournalEntry, TrashItem } from '../types';
 
 export { onAuthStateChanged };
@@ -34,9 +34,22 @@ export function safeDocId(id: any): string {
   return String(id).replace(/\//g, '_').trim();
 }
 
-const dbId = (!firebaseConfig.firestoreDatabaseId || firebaseConfig.firestoreDatabaseId === 'default') 
+// Support Vite environment variables (Vercel deployments) with fallback to firebase-applet-config.json
+const firebaseConfig = {
+  apiKey: (import.meta as any).env?.VITE_FIREBASE_API_KEY || rawFirebaseConfig.apiKey,
+  authDomain: (import.meta as any).env?.VITE_FIREBASE_AUTH_DOMAIN || rawFirebaseConfig.authDomain,
+  projectId: (import.meta as any).env?.VITE_FIREBASE_PROJECT_ID || rawFirebaseConfig.projectId,
+  storageBucket: (import.meta as any).env?.VITE_FIREBASE_STORAGE_BUCKET || rawFirebaseConfig.storageBucket,
+  messagingSenderId: (import.meta as any).env?.VITE_FIREBASE_MESSAGING_SENDER_ID || rawFirebaseConfig.messagingSenderId,
+  appId: (import.meta as any).env?.VITE_FIREBASE_APP_ID || rawFirebaseConfig.appId,
+  measurementId: (import.meta as any).env?.VITE_FIREBASE_MEASUREMENT_ID || rawFirebaseConfig.measurementId || '',
+  firestoreDatabaseId: (import.meta as any).env?.VITE_FIREBASE_FIRESTORE_DATABASE_ID || (import.meta as any).env?.VITE_FIREBASE_DATABASE_ID || rawFirebaseConfig.firestoreDatabaseId,
+};
+
+const rawDbId = firebaseConfig.firestoreDatabaseId;
+const dbId = (!rawDbId || rawDbId === 'default' || rawDbId === '(default)') 
   ? undefined 
-  : firebaseConfig.firestoreDatabaseId;
+  : rawDbId;
 
 const app = initializeApp(firebaseConfig);
 

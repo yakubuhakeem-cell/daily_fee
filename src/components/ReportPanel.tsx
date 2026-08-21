@@ -12,13 +12,14 @@ import {
   UserCheck, CalendarRange, AlertTriangle, TrendingUp, UserMinus, Eye,
   ZoomIn, ZoomOut, FileText, Check, Info, MessageSquare, Share2,
   Lock, Unlock, Users, Receipt, Coins, TrendingDown, Database, Utensils,
-  Download, Zap, Copy
+  Download, Zap, Copy, Trophy
 } from 'lucide-react';
 import { SchoolLogo } from './SchoolLogo';
 import { VoiceSearchButton } from './VoiceSearchButton';
 import { AuditTrailTab } from './AuditTrailTab';
 import { DatabaseTab } from './DatabaseTab';
 import { CanteenBookletModal } from './CanteenBookletModal';
+import { PunctualityAwardsModal } from './PunctualityAwardsModal';
 import { isHolidayOrVacationDate } from '../utils/termUtils';
 import * as XLSX from 'xlsx';
 
@@ -103,6 +104,7 @@ export const ReportPanel: React.FC = React.memo(() => {
   const [emailLoading, setEmailLoading] = useState(false);
 
   // Bulk Print states
+  const [showAwardsModal, setShowAwardsModal] = useState(false);
   const [showPrintModal, setShowPrintModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
@@ -2059,6 +2061,16 @@ export const ReportPanel: React.FC = React.memo(() => {
         </div>
 
         <div className="flex flex-wrap gap-2 w-full sm:w-auto">
+          {/* 🏆 Punctuality & 100% Attendance Honors */}
+          <button
+            onClick={() => setShowAwardsModal(true)}
+            className="flex-1 sm:flex-initial text-[10px] font-black bg-amber-400/20 hover:bg-amber-400 hover:text-black text-amber-400 py-3.5 px-4 transition-all border-2 border-amber-400/60 hover:border-amber-400 uppercase tracking-widest cursor-pointer flex items-center justify-center gap-1.5 shadow-sm"
+            title="View Punctuality & 100% Attendance Honors, Rankings & Print Official Citations"
+            id="btn-report-punctuality-awards"
+          >
+            <Trophy size={14} className="stroke-[2.5]" /> Punctuality Awards
+          </button>
+
           {/* ⚡ Quick Daily Export (CSV) - 1-Click today's snapshot */}
           <button
             onClick={() => handleQuickDailyCSVExport(currentDate)}
@@ -6874,6 +6886,12 @@ B7 to B9: GHC [SUM]`}
         onClose={() => setShowCanteenBookletModal(false)}
         students={students}
         activeTerm={activeTerm}
+      />
+
+      {/* Punctuality & 100% Attendance Honors & Citations Modal */}
+      <PunctualityAwardsModal
+        isOpen={showAwardsModal}
+        onClose={() => setShowAwardsModal(false)}
       />
 
       {/* Toast Alert Header */}

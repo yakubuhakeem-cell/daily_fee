@@ -26,6 +26,7 @@ import { AcademicHistoryDrawer } from './components/AcademicHistoryDrawer';
 import { SystemCapacityWarningModal, SystemCapacityBanner } from './components/SystemCapacityWarningModal';
 import { ChangePasswordModal } from './components/ChangePasswordModal';
 import { BackupNoticeModal } from './components/BackupNoticeModal';
+import { PunctualityAwardsModal } from './components/PunctualityAwardsModal';
 import { 
   Fingerprint, 
   LayoutDashboard, 
@@ -48,6 +49,7 @@ import {
   Phone,
   Coins,
   Award,
+  Trophy,
   AlertCircle,
   Check,
   ChevronDown,
@@ -147,6 +149,7 @@ function NavigationWrapper() {
   const [copiedUrl, setCopiedUrl] = useState(false);
 
   const [isAddPupilModalOpen, setIsAddPupilModalOpen] = useState(false);
+  const [isAwardsModalOpen, setIsAwardsModalOpen] = useState(false);
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   const [newPupilName, setNewPupilName] = useState('');
   const [newPupilClass, setNewPupilClass] = useState<StudentClass>('B1');
@@ -676,6 +679,16 @@ function NavigationWrapper() {
 
             <div className="flex gap-2">
               <button
+                onClick={() => setIsAwardsModalOpen(true)}
+                className="bg-amber-400/15 hover:bg-amber-400 hover:text-black text-amber-400 px-3 py-1.5 border border-amber-400/40 hover:border-amber-400 font-mono text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer rounded-none"
+                title="Punctuality & 100% Attendance Honors, Rankings & Citations"
+                id="btn-desktop-punctuality-awards"
+              >
+                <Trophy size={13} className="stroke-[2.5]" />
+                <span className="hidden lg:inline">Punctuality Awards</span>
+                <span className="lg:hidden">Awards</span>
+              </button>
+              <button
                 onClick={() => setIsCapacityModalOpen(true)}
                 className="bg-neutral-800 hover:bg-amber-400 hover:text-black text-amber-400 px-3 py-1.5 border border-neutral-700 hover:border-amber-400 font-mono text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer rounded-none"
                 title="View System Capacity & Operational Limits"
@@ -747,6 +760,15 @@ function NavigationWrapper() {
                 <span>+ Pupil</span>
               </button>
             )}
+            <button
+              onClick={() => setIsAwardsModalOpen(true)}
+              className="bg-amber-400/20 text-amber-400 px-2 py-1.5 border border-amber-400/50 font-mono text-[10px] font-black uppercase tracking-wider flex items-center gap-1 transition-all cursor-pointer rounded-none"
+              title="Punctuality & 100% Attendance Honors"
+              id="btn-mobile-punctuality-awards"
+            >
+              <Trophy size={11} className="stroke-[3]" />
+              <span>Awards</span>
+            </button>
             <button
               onClick={() => setIsCapacityModalOpen(true)}
               className="bg-neutral-800 text-amber-400 px-2 py-1.5 border border-neutral-700 font-mono text-[10px] font-black uppercase tracking-wider flex items-center gap-1 transition-all cursor-pointer rounded-none"
@@ -1025,6 +1047,14 @@ function NavigationWrapper() {
           </div>
 
           <div className="space-y-6 shrink-0">
+            <button
+              onClick={() => setIsAwardsModalOpen(true)}
+              className="w-full bg-amber-400 hover:bg-amber-300 text-neutral-950 border-2 border-neutral-950 p-3.5 font-mono text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[1px_1px_0px_0px_rgba(0,0,0,1)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none rounded-none no-print"
+              title="Punctuality & 100% Attendance Honors & Citations"
+            >
+              <Trophy size={15} className="stroke-[3]" />
+              <span>🏆 Punctuality Awards</span>
+            </button>
             <button
               onClick={() => setIsAcademicDrawerOpen(true)}
               className="w-full bg-amber-400/10 hover:bg-amber-400/20 text-amber-400 border-2 border-amber-400/35 hover:border-amber-400 p-3.5 font-mono text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer shadow-[3px_3px_0px_0px_rgba(245,158,11,0.2)] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[1px_1px_0px_0px_rgba(245,158,11,0.2)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none rounded-none no-print"
@@ -1939,6 +1969,12 @@ function NavigationWrapper() {
       <SystemCapacityWarningModal
         isOpen={isCapacityModalOpen}
         onClose={() => setIsCapacityModalOpen(false)}
+      />
+
+      {/* PUNCTUALITY & 100% ATTENDANCE HONORS & AWARDS MODAL */}
+      <PunctualityAwardsModal
+        isOpen={isAwardsModalOpen}
+        onClose={() => setIsAwardsModalOpen(false)}
       />
 
       {/* CHANGE MY PASSWORD MODAL */}
