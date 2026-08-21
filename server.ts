@@ -27,6 +27,7 @@ interface DatabaseSchema {
   examsSettings?: any;
   teacherEvaluations?: any[];
   journalEntries?: any[];
+  trashItems?: any[];
 }
 
 function generateServerSchoolDays(startDateStr: string, daysCount: number): string[] {
@@ -52,40 +53,131 @@ function generateServerSchoolDays(startDateStr: string, daysCount: number): stri
   return schoolDays;
 }
 
+const BACKUP_DIR = path.join(process.cwd(), "backups");
+if (!fs.existsSync(BACKUP_DIR)) {
+  try {
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  } catch (e) {
+    console.error("Failed to create backups directory:", e);
+  }
+}
+
+function recoverFromLatestBackup(): DatabaseSchema | null {
+  try {
+    if (!fs.existsSync(BACKUP_DIR)) return null;
+    const backupFiles = fs.readdirSync(BACKUP_DIR)
+      .filter(f => f.endsWith(".json"))
+      .sort()
+      .reverse(); // Newest first
+
+    for (const bFile of backupFiles) {
+      try {
+        const fullPath = path.join(BACKUP_DIR, bFile);
+        const raw = fs.readFileSync(fullPath, "utf-8");
+        const parsed = JSON.parse(raw);
+        if (parsed && (Array.isArray(parsed.students) || Array.isArray(parsed.payments) || Array.isArray(parsed.users))) {
+          console.log(`[Database Self-Healing] Successfully auto-recovered database state from backup: ${bFile} (${parsed.students?.length || 0} students, ${parsed.payments?.length || 0} payments)`);
+          // Repair DB_FILE with this valid backup
+          fs.writeFileSync(DB_FILE, JSON.stringify(parsed, null, 2), "utf-8");
+          return parsed;
+        }
+      } catch (err) {
+        console.warn(`[Database Self-Healing] Backup ${bFile} was unparseable:`, err);
+      }
+    }
+  } catch (e) {
+    console.error("[Database Self-Healing] Failed searching backups:", e);
+  }
+  return null;
+}
+
+function sanitizeDatabaseSchema(parsed: any): DatabaseSchema {
+  if (!parsed.users) parsed.users = [];
+  if (!parsed.students) parsed.students = [];
+  if (!parsed.payments) {
+    parsed.payments = [];
+  } else if (Array.isArray(parsed.payments)) {
+    // Deduplicate payments by [studentId + date] to ensure 100% financial integrity
+    const studentDateMap = new Map<string, any>();
+    const cleanPayments: any[] = [];
+    parsed.payments.forEach((p: any) => {
+      if (!p || !p.studentId || !p.date) {
+        if (p && p.id) cleanPayments.push(p);
+        return;
+      }
+      const key = `${p.studentId}_${p.date}`;
+      const existing = studentDateMap.get(key);
+      if (!existing) {
+        studentDateMap.set(key, p);
+        cleanPayments.push(p);
+      } else {
+        const pTime = getItemTime(p);
+        const existTime = getItemTime(existing);
+        let pIsBetter = false;
+        if (p.amount > 0 && existing.amount === 0) pIsBetter = true;
+        else if (p.amount === 0 && existing.amount > 0) pIsBetter = false;
+        else pIsBetter = pTime >= existTime;
+
+        if (pIsBetter) {
+          const idx = cleanPayments.indexOf(existing);
+          if (idx > -1) cleanPayments[idx] = p;
+          studentDateMap.set(key, p);
+        }
+      }
+    });
+    parsed.payments = cleanPayments;
+  }
+  if (!parsed.terms) parsed.terms = [];
+  if (!parsed.expenses) parsed.expenses = [];
+  if (!parsed.salaries) parsed.salaries = [];
+  if (!parsed.whatsappLogs) parsed.whatsappLogs = [];
+  if (!parsed.auditLogs) parsed.auditLogs = [];
+  if (!parsed.budgetTargets) parsed.budgetTargets = [];
+  if (!parsed.examsPayments) parsed.examsPayments = [];
+  if (!parsed.examsExpenses) parsed.examsExpenses = [];
+  if (!parsed.examsSettings) parsed.examsSettings = null;
+  if (!parsed.teacherEvaluations) parsed.teacherEvaluations = [];
+  if (!parsed.journalEntries) parsed.journalEntries = [];
+  if (!parsed.trashItems) {
+    parsed.trashItems = [];
+  } else {
+    // Auto-purge items in trash older than 30 days
+    const nowMs = Date.now();
+    const unexpired = parsed.trashItems.filter((ti: any) => {
+      if (!ti.expiresAt) return true;
+      return new Date(ti.expiresAt).getTime() > nowMs;
+    });
+    if (unexpired.length !== parsed.trashItems.length) {
+      parsed.trashItems = unexpired;
+    }
+  }
+  return parsed as DatabaseSchema;
+}
+
 function loadDatabase(): DatabaseSchema {
   try {
     if (fs.existsSync(DB_FILE)) {
       const raw = fs.readFileSync(DB_FILE, "utf-8");
-      const parsed = JSON.parse(raw);
-      if (!parsed.whatsappLogs) {
-        parsed.whatsappLogs = [];
+      if (raw.trim().length > 0) {
+        const parsed = JSON.parse(raw);
+        // If parsed data is unexpectedly completely empty or corrupted, check backups
+        if ((!parsed.students || parsed.students.length === 0) && (!parsed.payments || parsed.payments.length === 0)) {
+          const recovered = recoverFromLatestBackup();
+          if (recovered) return sanitizeDatabaseSchema(recovered);
+        }
+        return sanitizeDatabaseSchema(parsed);
       }
-      if (!parsed.auditLogs) {
-        parsed.auditLogs = [];
-      }
-      if (!parsed.budgetTargets) {
-        parsed.budgetTargets = [];
-      }
-      if (!parsed.examsPayments) {
-        parsed.examsPayments = [];
-      }
-      if (!parsed.examsExpenses) {
-        parsed.examsExpenses = [];
-      }
-      if (!parsed.examsSettings) {
-        parsed.examsSettings = null;
-      }
-      if (!parsed.teacherEvaluations) {
-        parsed.teacherEvaluations = [];
-      }
-      if (!parsed.journalEntries) {
-        parsed.journalEntries = [];
-      }
-      return parsed;
     }
   } catch (error) {
-    console.error("Failed to load local DB file, using fallback:", error);
+    console.error("[Database Alert] Failed to load local DB file due to parse error, attempting auto-recovery:", error);
+    const recovered = recoverFromLatestBackup();
+    if (recovered) return sanitizeDatabaseSchema(recovered);
   }
+
+  // Final attempt to recover from backup if DB_FILE was missing
+  const recovered = recoverFromLatestBackup();
+  if (recovered) return sanitizeDatabaseSchema(recovered);
+
   return { 
     users: [], 
     students: [], 
@@ -105,20 +197,14 @@ function loadDatabase(): DatabaseSchema {
   };
 }
 
-const BACKUP_DIR = path.join(process.cwd(), "backups");
-if (!fs.existsSync(BACKUP_DIR)) {
-  try {
-    fs.mkdirSync(BACKUP_DIR, { recursive: true });
-  } catch (e) {
-    console.error("Failed to create backups directory:", e);
-  }
-}
-
 let lastAutoBackupTime = 0;
 
 function saveDatabase(data: DatabaseSchema) {
   try {
     const serialized = JSON.stringify(data, null, 2);
+    // Validate serialized JSON before writing
+    JSON.parse(serialized);
+
     const tmpFile = `${DB_FILE}.tmp.${Date.now()}`;
     
     // Atomic write pattern: write to temp file then rename atomically
@@ -160,6 +246,7 @@ async function addAuditLog(log: {
   studentId?: string;
   studentName?: string;
   amount?: number;
+  snapshotData?: any;
 }) {
   const logId = "log_" + Date.now() + "_" + Math.floor(Math.random() * 1000);
   const logEntry = {
@@ -220,16 +307,21 @@ if (fs.existsSync(CONFIG_FILE)) {
   }
 }
 
-// Automatically seed Cloud Firestore on server boot if Firestore is empty
-async function bootstrapCloudSeeding() {
+function safeDocId(id: any): string {
+  if (!id) return `doc_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  return String(id).replace(/\//g, '_').trim();
+}
+
+// Automatically sync Cloud Firestore with server db.json on boot
+async function bootstrapCloudSync() {
   if (!firestoreDb) return;
   try {
-    console.log("Checking Cloud Firestore seed status...");
+    console.log("Checking Cloud Firestore status on server startup...");
     const qSnapshot = await withTimeout(getDocs(collection(firestoreDb, "users")), 15000, "Seed Check");
+    const local = loadDatabase();
+    
     if (qSnapshot.empty) {
-      console.log("Cloud Firestore is empty. Seeding Firestore with local db.json database...");
-      const local = loadDatabase();
-      const timestamp = new Date().toISOString();
+      console.log("Cloud Firestore is empty. Seeding Firestore with local database...");
 
       // Seed Users
       if (local.users && local.users.length > 0) {
@@ -238,7 +330,7 @@ async function bootstrapCloudSeeding() {
           const batch = writeBatch(firestoreDb);
           chunk.forEach(item => {
             if (item && item.id) {
-              batch.set(doc(firestoreDb, "users", item.id), item);
+              batch.set(doc(firestoreDb, "users", safeDocId(item.id)), item);
             }
           });
           await withTimeout(batch.commit(), 15000, "Seed Users Batch");
@@ -263,7 +355,7 @@ async function bootstrapCloudSeeding() {
           const batch = writeBatch(firestoreDb);
           chunk.forEach(item => {
             if (item && item.id) {
-              batch.set(doc(firestoreDb, "students", item.id), item);
+              batch.set(doc(firestoreDb, "students", safeDocId(item.id)), item);
             }
           });
           await withTimeout(batch.commit(), 15000, "Seed Students Batch");
@@ -281,7 +373,7 @@ async function bootstrapCloudSeeding() {
           const batch = writeBatch(firestoreDb);
           chunk.forEach(item => {
             if (item && item.id) {
-              batch.set(doc(firestoreDb, "payments", item.id), item);
+              batch.set(doc(firestoreDb, "payments", safeDocId(item.id)), item);
             }
           });
           await withTimeout(batch.commit(), 15000, "Seed Payments Batch");
@@ -290,7 +382,8 @@ async function bootstrapCloudSeeding() {
 
       // Seed Terms
       let termsToSeed = local.terms || [];
-      if (termsToSeed.length === 0) {
+      const isDefaultTermDeleted = Array.isArray(local.trashItems) && local.trashItems.some((tr: any) => tr.originalId === 'term_default' || tr.id === 'term_default' || tr.id === 'trash_term_default');
+      if (termsToSeed.length === 0 && !isDefaultTermDeleted) {
         const defaultTerms = [{
           id: 'term_default',
           name: 'Term 1 (April - August 2026)',
@@ -309,7 +402,7 @@ async function bootstrapCloudSeeding() {
           const batch = writeBatch(firestoreDb);
           chunk.forEach(item => {
             if (item && item.id) {
-              batch.set(doc(firestoreDb, "terms", item.id), item);
+              batch.set(doc(firestoreDb, "terms", safeDocId(item.id)), item);
             }
           });
           await withTimeout(batch.commit(), 15000, "Seed Terms Batch");
@@ -318,10 +411,62 @@ async function bootstrapCloudSeeding() {
 
       console.log("Automatic server-side Cloud Firestore seeding completed successfully!");
     } else {
-      console.log("Cloud Firestore contains live records. Standard bootstrap seeding bypassed.");
+      console.log("Cloud Firestore contains live records. Synchronizing Cloud Firestore into server state on startup...");
+      
+      const [usersSnap, studentsSnap, paymentsSnap, termsSnap, expensesSnap, salariesSnap, examsPSnap, examsESnap, sysDocSnap] = await Promise.all([
+        getDocs(collection(firestoreDb, "users")).catch(() => null),
+        getDocs(collection(firestoreDb, "students")).catch(() => null),
+        getDocs(collection(firestoreDb, "payments")).catch(() => null),
+        getDocs(collection(firestoreDb, "terms")).catch(() => null),
+        getDocs(collection(firestoreDb, "expenses")).catch(() => null),
+        getDocs(collection(firestoreDb, "salaries")).catch(() => null),
+        getDocs(collection(firestoreDb, "examsPayments")).catch(() => null),
+        getDocs(collection(firestoreDb, "examsExpenses")).catch(() => null),
+        getDoc(doc(firestoreDb, "systemSettings", "main")).catch(() => null)
+      ]);
+
+      if (usersSnap && !usersSnap.empty) {
+        const cloudUsers = usersSnap.docs.map(d => d.data());
+        local.users = mergeAndSync(local.users, cloudUsers, "users", local.trashItems);
+      }
+      if (studentsSnap && !studentsSnap.empty) {
+        const cloudStudents = studentsSnap.docs.map(d => d.data());
+        local.students = mergeAndSync(local.students, cloudStudents, "students", local.trashItems);
+      }
+      if (paymentsSnap && !paymentsSnap.empty) {
+        const cloudPayments = paymentsSnap.docs.map(d => d.data());
+        local.payments = mergeAndSync(local.payments, cloudPayments, "payments", local.trashItems);
+      }
+      if (termsSnap && !termsSnap.empty) {
+        const cloudTerms = termsSnap.docs.map(d => d.data());
+        local.terms = mergeAndSync(local.terms, cloudTerms, "terms", local.trashItems);
+      }
+      if (expensesSnap && !expensesSnap.empty) {
+        const cloudExpenses = expensesSnap.docs.map(d => d.data());
+        local.expenses = mergeAndSync(local.expenses, cloudExpenses, "expenses", local.trashItems);
+      }
+      if (salariesSnap && !salariesSnap.empty) {
+        const cloudSalaries = salariesSnap.docs.map(d => d.data());
+        local.salaries = mergeAndSync(local.salaries, cloudSalaries, "salaries", local.trashItems);
+      }
+      if (examsPSnap && !examsPSnap.empty) {
+        const cloudExamsP = examsPSnap.docs.map(d => d.data());
+        local.examsPayments = mergeAndSync(local.examsPayments, cloudExamsP, "examsPayments", local.trashItems);
+      }
+      if (examsESnap && !examsESnap.empty) {
+        const cloudExamsE = examsESnap.docs.map(d => d.data());
+        local.examsExpenses = mergeAndSync(local.examsExpenses, cloudExamsE, "examsExpenses", local.trashItems);
+      }
+      if (sysDocSnap && sysDocSnap.exists()) {
+        const cloudSettings = sysDocSnap.data() as any;
+        local.systemSettings = { ...(local.systemSettings || {}), ...cloudSettings };
+      }
+
+      saveDatabase(local);
+      console.log(`Server startup Cloud Firestore synchronization complete: ${local.students?.length || 0} students, ${local.payments?.length || 0} payments, ${local.users?.length || 0} users.`);
     }
   } catch (err) {
-    console.error("Error during automatic server bootstrap seeding:", err);
+    console.error("Error during automatic server bootstrap sync:", err);
   }
 }
 
@@ -338,15 +483,28 @@ function getItemTime(item: any): number {
 function mergeAndSync<T extends { id: string }>(
   localList: T[] | undefined | null,
   cloudList: T[] | undefined | null,
-  collectionName: string
+  collectionName: string,
+  trashItems?: any[]
 ): T[] {
+  const deletedTrashIds = new Set<string>();
+  if (Array.isArray(trashItems)) {
+    trashItems.forEach(t => {
+      if (t) {
+        if (t.id) deletedTrashIds.add(t.id);
+        if (t.originalId) deletedTrashIds.add(t.originalId);
+        if (t.studentId && collectionName === 'students' && t.itemType === 'student') deletedTrashIds.add(t.studentId);
+        if (t.recordData?.id) deletedTrashIds.add(t.recordData.id);
+      }
+    });
+  }
+
   const mergedMap = new Map<string, T>();
   const unsyncedItems: T[] = [];
   
-  // Add all local items first
+  // Add all local items first (excluding soft-deleted ones)
   if (Array.isArray(localList)) {
     localList.forEach(item => {
-      if (item && typeof item === "object" && item.id) {
+      if (item && typeof item === "object" && item.id && !deletedTrashIds.has(item.id)) {
         mergedMap.set(item.id, item);
       }
     });
@@ -355,7 +513,7 @@ function mergeAndSync<T extends { id: string }>(
   // Merge cloud items using item-level timestamp conflict resolution
   if (Array.isArray(cloudList)) {
     cloudList.forEach(cloudItem => {
-      if (cloudItem && typeof cloudItem === "object" && cloudItem.id) {
+      if (cloudItem && typeof cloudItem === "object" && cloudItem.id && !deletedTrashIds.has(cloudItem.id)) {
         const localItem = mergedMap.get(cloudItem.id);
         if (!localItem) {
           mergedMap.set(cloudItem.id, cloudItem);
@@ -376,11 +534,11 @@ function mergeAndSync<T extends { id: string }>(
     });
   }
 
-  // Find items that exist locally but are missing from the cloud
+  // Find items that exist locally but are missing from the cloud (and not soft-deleted)
   const cloudIds = new Set((cloudList || []).map(item => item?.id).filter(Boolean));
   if (Array.isArray(localList)) {
     localList.forEach(item => {
-      if (item && typeof item === "object" && item.id && !cloudIds.has(item.id)) {
+      if (item && typeof item === "object" && item.id && !deletedTrashIds.has(item.id) && !cloudIds.has(item.id)) {
         if (!unsyncedItems.some(u => u.id === item.id)) {
           unsyncedItems.push(item);
         }
@@ -390,23 +548,76 @@ function mergeAndSync<T extends { id: string }>(
 
   // Sync unsynced items to Firestore in the background
   if (unsyncedItems.length > 0 && firestoreDb) {
-    console.log(`[Self-Healing Sync] Found ${unsyncedItems.length} unsynced items in "${collectionName}". Syncing to Firestore...`);
-    try {
-      const batch = writeBatch(firestoreDb);
-      let count = 0;
-      unsyncedItems.forEach(item => {
-        if (item && item.id) {
-          batch.set(doc(firestoreDb, collectionName, item.id), item);
-          count++;
+    console.log(`[Self-Healing Sync] Found ${unsyncedItems.length} unsynced items in "${collectionName}". Syncing to Firestore in chunks...`);
+    (async () => {
+      try {
+        for (let i = 0; i < unsyncedItems.length; i += 400) {
+          const chunk = unsyncedItems.slice(i, i + 400);
+          const batch = writeBatch(firestoreDb);
+          chunk.forEach(item => {
+            if (item && item.id) {
+              batch.set(doc(firestoreDb, collectionName, safeDocId(item.id)), item);
+            }
+          });
+          await withTimeout(batch.commit(), 15000, `Self-Healing Sync ${collectionName} chunk`);
         }
-      });
-      if (count > 0) {
-        withTimeout(batch.commit(), 8000, `Self-Healing Sync ${collectionName}`)
-          .then(() => console.log(`[Self-Healing Sync] Successfully synced ${count} items to "${collectionName}"`))
-          .catch(err => console.error(`[Self-Healing Sync] Failed to sync ${collectionName} in background:`, err));
+        console.log(`[Self-Healing Sync] Successfully synced ${unsyncedItems.length} items to "${collectionName}"`);
+      } catch (e) {
+        console.error(`[Self-Healing Sync] Error syncing ${collectionName} in background:`, e);
       }
-    } catch (e) {
-      console.error(`[Self-Healing Sync] Error building writeBatch for ${collectionName}:`, e);
+    })();
+  }
+
+  // Enforce single authoritative payment record per [studentId + date] for payments
+  if (collectionName === "payments") {
+    const byStudentDate = new Map<string, any>();
+    const duplicateIdsToDelete: string[] = [];
+
+    Array.from(mergedMap.values()).forEach((p: any) => {
+      if (!p || !p.studentId || !p.date) return;
+      const key = `${p.studentId}_${p.date}`;
+      const existing = byStudentDate.get(key);
+      if (!existing) {
+        byStudentDate.set(key, p);
+      } else {
+        const pTime = getItemTime(p);
+        const existTime = getItemTime(existing);
+        let pIsAuthoritative = false;
+        if (p.amount > 0 && existing.amount === 0) {
+          pIsAuthoritative = true;
+        } else if (p.amount === 0 && existing.amount > 0) {
+          pIsAuthoritative = false;
+        } else {
+          pIsAuthoritative = pTime >= existTime;
+        }
+
+        if (pIsAuthoritative) {
+          duplicateIdsToDelete.push(existing.id);
+          mergedMap.delete(existing.id);
+          byStudentDate.set(key, p);
+        } else {
+          duplicateIdsToDelete.push(p.id);
+          mergedMap.delete(p.id);
+        }
+      }
+    });
+
+    if (duplicateIdsToDelete.length > 0 && firestoreDb) {
+      (async () => {
+        try {
+          for (let i = 0; i < duplicateIdsToDelete.length; i += 400) {
+            const chunk = duplicateIdsToDelete.slice(i, i + 400);
+            const batch = writeBatch(firestoreDb);
+            chunk.forEach(id => {
+              batch.delete(doc(firestoreDb, "payments", safeDocId(id)));
+            });
+            await withTimeout(batch.commit(), 8000, "Clean duplicate payment docs");
+          }
+          console.log(`[Auto-Deduplication] Cleaned ${duplicateIdsToDelete.length} obsolete duplicate payment documents from Firestore.`);
+        } catch (e) {
+          console.error("[Auto-Deduplication] Error cleaning duplicate docs:", e);
+        }
+      })();
     }
   }
 
@@ -452,8 +663,8 @@ async function startServer() {
     next();
   });
 
-  // Run the seeding bootstrap check
-  bootstrapCloudSeeding();
+  // Run the seeding and synchronization bootstrap check
+  bootstrapCloudSync();
 
   // API health check
   app.get("/api/health", (req, res) => {
@@ -548,21 +759,22 @@ INSTRUCTIONS:
 
   // GET /api/users
   app.get("/api/users", async (req, res) => {
-    if (firestoreDb) {
-      try {
-        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "users")), 1500, "getUsers");
-        const list = qSnaps.docs.map(d => d.data());
-        // Sync local cache
-        const dbLocal = loadDatabase();
-        dbLocal.users = mergeAndSync(dbLocal.users, list, "users");
-        saveDatabase(dbLocal);
-        return res.json(dbLocal.users);
-      } catch (e) {
-        console.error("Firestore getUsers failed, falling back to local SQLite/JSON:", e);
-      }
-    }
     const db = loadDatabase();
     res.json(db.users || []);
+
+    if (firestoreDb) {
+      (async () => {
+        try {
+          const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "users")), 10000, "getUsers");
+          const list = qSnaps.docs.map(d => d.data());
+          const dbLocal = loadDatabase();
+          dbLocal.users = mergeAndSync(dbLocal.users, list, "users", dbLocal.trashItems);
+          saveDatabase(dbLocal);
+        } catch (e) {
+          console.error("Firestore getUsers background sync failed:", e);
+        }
+      })();
+    }
   });
 
   // POST /api/users
@@ -582,7 +794,7 @@ INSTRUCTIONS:
 
     if (firestoreDb) {
       try {
-        await withTimeout(setDoc(doc(firestoreDb, "users", user.id), user), 1500, "saveUser");
+        await withTimeout(setDoc(doc(firestoreDb, "users", user.id), user), 8000, "saveUser");
       } catch (e) {
         console.error("Firestore saveUser failed:", e);
       }
@@ -603,7 +815,7 @@ INSTRUCTIONS:
 
     if (firestoreDb) {
       try {
-        await withTimeout(deleteDoc(doc(firestoreDb, "users", id)), 1500, "deleteUser");
+        await withTimeout(deleteDoc(doc(firestoreDb, "users", id)), 8000, "deleteUser");
       } catch (e) {
         console.error("Firestore deleteUser failed:", e);
       }
@@ -613,21 +825,22 @@ INSTRUCTIONS:
 
   // GET /api/students
   app.get("/api/students", async (req, res) => {
-    if (firestoreDb) {
-      try {
-        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "students")), 1500, "getStudents");
-        const list = qSnaps.docs.map(d => d.data());
-        // Sync local cache
-        const dbLocal = loadDatabase();
-        dbLocal.students = mergeAndSync(dbLocal.students, list, "students");
-        saveDatabase(dbLocal);
-        return res.json(dbLocal.students);
-      } catch (e) {
-        console.error("Firestore getStudents failed, falling back to local database:", e);
-      }
-    }
     const db = loadDatabase();
     res.json(db.students || []);
+
+    if (firestoreDb) {
+      (async () => {
+        try {
+          const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "students")), 10000, "getStudents");
+          const list = qSnaps.docs.map(d => d.data());
+          const dbLocal = loadDatabase();
+          dbLocal.students = mergeAndSync(dbLocal.students, list, "students", dbLocal.trashItems);
+          saveDatabase(dbLocal);
+        } catch (e) {
+          console.error("Firestore getStudents background sync failed:", e);
+        }
+      })();
+    }
   });
 
   // POST /api/students
@@ -647,7 +860,7 @@ INSTRUCTIONS:
 
     if (firestoreDb) {
       try {
-        await withTimeout(setDoc(doc(firestoreDb, "students", student.id), student), 1500, "saveStudent");
+        await withTimeout(setDoc(doc(firestoreDb, "students", student.id), student), 8000, "saveStudent");
       } catch (e) {
         console.error("Firestore saveStudent failed:", e);
       }
@@ -678,7 +891,7 @@ INSTRUCTIONS:
     if (firestoreDb) {
       try {
         const promises = studentsArray.map(student => 
-          withTimeout(setDoc(doc(firestoreDb, "students", student.id), student), 1500, "saveStudent")
+          withTimeout(setDoc(doc(firestoreDb, "students", student.id), student), 8000, "saveStudent")
         );
         await Promise.all(promises);
       } catch (e) {
@@ -705,11 +918,11 @@ INSTRUCTIONS:
 
     if (firestoreDb) {
       try {
-        await withTimeout(deleteDoc(doc(firestoreDb, "students", id)), 1500, "deleteStudent");
+        await withTimeout(deleteDoc(doc(firestoreDb, "students", id)), 8000, "deleteStudent");
         
         // Cascade delete associated payments in Firestore
         const paymentsRef = collection(firestoreDb, "payments");
-        const qSnaps = await withTimeout(getDocs(paymentsRef), 1500, "cascadePaymentsQuery");
+        const qSnaps = await withTimeout(getDocs(paymentsRef), 8000, "cascadePaymentsQuery");
         const batch = writeBatch(firestoreDb);
         let hasDeleted = false;
         qSnaps.docs.forEach((docSnap) => {
@@ -720,7 +933,7 @@ INSTRUCTIONS:
           }
         });
         if (hasDeleted) {
-          await withTimeout(batch.commit(), 1500, "cascadePaymentsBatchCommit");
+          await withTimeout(batch.commit(), 8000, "cascadePaymentsBatchCommit");
         }
       } catch (e) {
         console.error("Firestore deleteStudent failed:", e);
@@ -731,30 +944,49 @@ INSTRUCTIONS:
 
   // GET /api/payments
   app.get("/api/payments", async (req, res) => {
-    if (firestoreDb) {
-      try {
-        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "payments")), 1500, "getPayments");
-        const list = qSnaps.docs.map(d => d.data());
-        // Sync local cache
-        const dbLocal = loadDatabase();
-        dbLocal.payments = mergeAndSync(dbLocal.payments, list, "payments");
-        saveDatabase(dbLocal);
-        return res.json(dbLocal.payments);
-      } catch (e) {
-        console.error("Firestore getPayments failed, falling back to local database:", e);
-      }
-    }
     const db = loadDatabase();
     res.json(db.payments || []);
+
+    if (firestoreDb) {
+      (async () => {
+        try {
+          const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "payments")), 10000, "getPayments");
+          const list = qSnaps.docs.map(d => d.data());
+          const dbLocal = loadDatabase();
+          dbLocal.payments = mergeAndSync(dbLocal.payments, list, "payments", dbLocal.trashItems);
+          saveDatabase(dbLocal);
+        } catch (e) {
+          console.error("Firestore getPayments background sync failed:", e);
+        }
+      })();
+    }
   });
 
   // POST /api/payments
   app.post("/api/payments", async (req, res) => {
     const payment = req.body;
+    if (!payment || !payment.id) {
+      return res.status(400).json({ error: "Invalid payment record" });
+    }
 
     // Save to local cache backup
     const dbLocal = loadDatabase();
     if (!dbLocal.payments) dbLocal.payments = [];
+
+    // STRICT REPLACEMENT RULE:
+    // If there is any existing payment record for this student on this exact date with a different ID,
+    // remove it to guarantee zero duplicate records.
+    const obsoleteOldDocIds: string[] = [];
+    if (payment.studentId && payment.date) {
+      dbLocal.payments = dbLocal.payments.filter((p) => {
+        if (p.studentId === payment.studentId && p.date === payment.date && p.id !== payment.id) {
+          obsoleteOldDocIds.push(p.id);
+          return false;
+        }
+        return true;
+      });
+    }
+
     const idx = dbLocal.payments.findIndex((p) => p.id === payment.id);
     if (idx >= 0) {
       dbLocal.payments[idx] = payment;
@@ -765,12 +997,18 @@ INSTRUCTIONS:
 
     if (firestoreDb) {
       try {
-        await withTimeout(setDoc(doc(firestoreDb, "payments", payment.id), payment), 1500, "savePayment");
+        await withTimeout(setDoc(doc(firestoreDb, "payments", safeDocId(payment.id)), payment), 2000, "savePayment");
+        // Delete obsolete duplicate documents in Firestore
+        if (obsoleteOldDocIds.length > 0) {
+          for (const oldId of obsoleteOldDocIds) {
+            deleteDoc(doc(firestoreDb, "payments", safeDocId(oldId))).catch(() => {});
+          }
+        }
       } catch (e) {
         console.error("Firestore savePayment failed:", e);
       }
     }
-    res.json({ success: true });
+    res.json({ success: true, replacedOldCount: obsoleteOldDocIds.length });
   });
 
   // POST /api/payments/batch
@@ -783,6 +1021,30 @@ INSTRUCTIONS:
     // Save to local cache backup
     const dbLocal = loadDatabase();
     if (!dbLocal.payments) dbLocal.payments = [];
+
+    const obsoleteOldDocIds: string[] = [];
+    const incomingByStudentDate = new Map<string, any>();
+    payments.forEach((p: any) => {
+      if (p && p.id && p.studentId && p.date) {
+        incomingByStudentDate.set(`${p.studentId}_${p.date}`, p);
+      }
+    });
+
+    // Remove any older conflicting records matching (studentId, date) with a different ID
+    if (incomingByStudentDate.size > 0) {
+      dbLocal.payments = dbLocal.payments.filter((p) => {
+        if (p.studentId && p.date) {
+          const key = `${p.studentId}_${p.date}`;
+          const incoming = incomingByStudentDate.get(key);
+          if (incoming && incoming.id !== p.id) {
+            obsoleteOldDocIds.push(p.id);
+            return false;
+          }
+        }
+        return true;
+      });
+    }
+
     payments.forEach((p) => {
       const idx = dbLocal.payments.findIndex((exist) => exist.id === p.id);
       if (idx >= 0) {
@@ -800,15 +1062,24 @@ INSTRUCTIONS:
           const chunk = payments.slice(i, i + 400);
           const batch = writeBatch(firestoreDb);
           chunk.forEach((p) => {
-            batch.set(doc(firestoreDb, "payments", p.id), p);
+            batch.set(doc(firestoreDb, "payments", safeDocId(p.id)), p);
           });
-          await withTimeout(batch.commit(), 2000, "savePaymentsBatch");
+          await withTimeout(batch.commit(), 4000, "savePaymentsBatch");
+        }
+
+        if (obsoleteOldDocIds.length > 0) {
+          for (let i = 0; i < obsoleteOldDocIds.length; i += 400) {
+            const chunk = obsoleteOldDocIds.slice(i, i + 400);
+            const batch = writeBatch(firestoreDb);
+            chunk.forEach(id => batch.delete(doc(firestoreDb, "payments", safeDocId(id))));
+            await withTimeout(batch.commit(), 4000, "deleteObsoletePaymentDocsBatch");
+          }
         }
       } catch (e) {
         console.error("Firestore savePayments batch failed:", e);
       }
     }
-    res.json({ success: true });
+    res.json({ success: true, count: payments.length, replacedOldCount: obsoleteOldDocIds.length });
   });
 
   // DELETE /api/payments/:id
@@ -830,6 +1101,44 @@ INSTRUCTIONS:
       }
     }
     res.json({ success: true });
+  });
+
+  // POST /api/payments/delete-batch
+  app.post("/api/payments/delete-batch", async (req, res) => {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: "ids must be a non-empty array of strings" });
+    }
+
+    const idsSet = new Set(ids);
+
+    // 1. Remove from local JSON backup
+    const dbLocal = loadDatabase();
+    if (dbLocal.payments) {
+      const initialLen = dbLocal.payments.length;
+      dbLocal.payments = dbLocal.payments.filter((p) => !idsSet.has(p.id));
+      if (dbLocal.payments.length !== initialLen) {
+        saveDatabase(dbLocal);
+      }
+    }
+
+    // 2. Delete from Cloud Firestore in chunks of 400
+    if (firestoreDb) {
+      try {
+        for (let i = 0; i < ids.length; i += 400) {
+          const chunk = ids.slice(i, i + 400);
+          const batch = writeBatch(firestoreDb);
+          chunk.forEach((id: string) => {
+            batch.delete(doc(firestoreDb, "payments", safeDocId(id)));
+          });
+          await withTimeout(batch.commit(), 4000, "deletePaymentsBatchFirestore");
+        }
+      } catch (e) {
+        console.error("Firestore deletePaymentsBatch failed:", e);
+      }
+    }
+
+    res.json({ success: true, count: ids.length });
   });
 
   // DELETE /api/payments/student/:studentId
@@ -1002,61 +1311,87 @@ INSTRUCTIONS:
 
   // POST /api/seed
   app.post("/api/seed", async (req, res) => {
-    const { users, students, payments, terms } = req.body;
+    const payload = req.body || {};
+    const {
+      users, students, payments, terms,
+      expenses, salaries, examsPayments, examsExpenses,
+      examsSettings, journalEntries, teacherEvaluations, budgetTargets,
+      whatsappLogs, systemSettings
+    } = payload;
     
     // Save to local cache backup
     const dbLocal = loadDatabase();
-    dbLocal.users = users !== undefined ? users : dbLocal.users;
-    dbLocal.students = students !== undefined ? students : dbLocal.students;
-    dbLocal.payments = payments !== undefined ? payments : dbLocal.payments;
-    dbLocal.terms = terms !== undefined ? terms : dbLocal.terms;
+    if (users !== undefined) dbLocal.users = users;
+    if (students !== undefined) dbLocal.students = students;
+    if (payments !== undefined) dbLocal.payments = payments;
+    if (terms !== undefined) dbLocal.terms = terms;
+    if (expenses !== undefined) dbLocal.expenses = expenses;
+    if (salaries !== undefined) dbLocal.salaries = salaries;
+    if (examsPayments !== undefined) dbLocal.examsPayments = examsPayments;
+    if (examsExpenses !== undefined) dbLocal.examsExpenses = examsExpenses;
+    if (examsSettings !== undefined) dbLocal.examsSettings = examsSettings;
+    if (journalEntries !== undefined) dbLocal.journalEntries = journalEntries;
+    if (teacherEvaluations !== undefined) dbLocal.teacherEvaluations = teacherEvaluations;
+    if (budgetTargets !== undefined) dbLocal.budgetTargets = budgetTargets;
+    if (whatsappLogs !== undefined) dbLocal.whatsappLogs = whatsappLogs;
+    if (systemSettings !== undefined) dbLocal.systemSettings = systemSettings;
     saveDatabase(dbLocal);
 
     if (firestoreDb) {
-      try {
-        const seedCol = async (colName: string, items: any[]) => {
-          await clearCollection(colName);
-          if (!items || items.length === 0) return;
-          for (let i = 0; i < items.length; i += 400) {
-            const chunk = items.slice(i, i + 400);
-            const batch = writeBatch(firestoreDb);
-            chunk.forEach((item) => {
-              if (item && item.id) {
-                batch.set(doc(firestoreDb, colName, item.id), item);
-              }
-            });
-            await withTimeout(batch.commit(), 3000, `seedCollectionBatch-${colName}`);
-          }
-        };
+      (async () => {
+        try {
+          const seedCol = async (colName: string, items: any[]) => {
+            await clearCollection(colName);
+            if (!items || items.length === 0) return;
+            for (let i = 0; i < items.length; i += 400) {
+              const chunk = items.slice(i, i + 400);
+              const batch = writeBatch(firestoreDb);
+              chunk.forEach((item) => {
+                if (item && item.id) {
+                  batch.set(doc(firestoreDb, colName, item.id), item);
+                }
+              });
+              await withTimeout(batch.commit(), 15000, `seedCollectionBatch-${colName}`);
+            }
+          };
 
-        if (users !== undefined) await seedCol("users", users);
-        if (students !== undefined) await seedCol("students", students);
-        if (payments !== undefined) await seedCol("payments", payments);
-        if (terms !== undefined) await seedCol("terms", terms);
-      } catch (e) {
-        console.error("Firestore complete seeding failed:", e);
-      }
+          if (users !== undefined) await seedCol("users", users);
+          if (students !== undefined) await seedCol("students", students);
+          if (payments !== undefined) await seedCol("payments", payments);
+          if (terms !== undefined) await seedCol("terms", terms);
+          if (expenses !== undefined) await seedCol("expenses", expenses);
+          if (salaries !== undefined) await seedCol("salaries", salaries);
+          if (examsPayments !== undefined) await seedCol("exams_payments", examsPayments);
+          if (examsExpenses !== undefined) await seedCol("exams_expenses", examsExpenses);
+          if (journalEntries !== undefined) await seedCol("journal_entries", journalEntries);
+          if (teacherEvaluations !== undefined) await seedCol("teacher_evaluations", teacherEvaluations);
+          if (budgetTargets !== undefined) await seedCol("budget_targets", budgetTargets);
+        } catch (e) {
+          console.error("Firestore background seeding failed:", e);
+        }
+      })();
     }
     res.json({ success: true });
   });
 
   // GET /api/terms
   app.get("/api/terms", async (req, res) => {
-    if (firestoreDb) {
-      try {
-        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "terms")), 1500, "getTerms");
-        const list = qSnaps.docs.map(d => d.data());
-        // Sync local cache
-        const dbLocal = loadDatabase();
-        dbLocal.terms = mergeAndSync(dbLocal.terms, list, "terms");
-        saveDatabase(dbLocal);
-        return res.json(dbLocal.terms);
-      } catch (e) {
-        console.error("Firestore getTerms failed, falling back to local database:", e);
-      }
-    }
     const db = loadDatabase();
     res.json(db.terms || []);
+
+    if (firestoreDb) {
+      (async () => {
+        try {
+          const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "terms")), 10000, "getTerms");
+          const list = qSnaps.docs.map(d => d.data());
+          const dbLocal = loadDatabase();
+          dbLocal.terms = mergeAndSync(dbLocal.terms, list, "terms", dbLocal.trashItems);
+          saveDatabase(dbLocal);
+        } catch (e) {
+          console.error("Firestore getTerms background sync failed:", e);
+        }
+      })();
+    }
   });
 
   // POST /api/terms
@@ -1076,7 +1411,7 @@ INSTRUCTIONS:
 
     if (firestoreDb) {
       try {
-        await withTimeout(setDoc(doc(firestoreDb, "terms", term.id), term), 1500, "saveTerm");
+        await withTimeout(setDoc(doc(firestoreDb, "terms", term.id), term), 8000, "saveTerm");
       } catch (e) {
         console.error("Firestore saveTerm failed:", e);
       }
@@ -1091,8 +1426,31 @@ INSTRUCTIONS:
       return res.status(400).json({ error: "Terms must be an array" });
     }
 
-    // Save to local cache backup
+    // Save to local cache backup and record deleted terms in trashItems
     const dbLocal = loadDatabase();
+    if (!dbLocal.trashItems) dbLocal.trashItems = [];
+    const newTermIds = new Set(terms.map((t: any) => t.id));
+
+    if (Array.isArray(dbLocal.terms)) {
+      dbLocal.terms.forEach((oldTerm) => {
+        if (oldTerm && oldTerm.id && !newTermIds.has(oldTerm.id)) {
+          if (!dbLocal.trashItems.some((tr: any) => tr.originalId === oldTerm.id || tr.id === oldTerm.id)) {
+            dbLocal.trashItems.push({
+              id: `trash_term_${oldTerm.id}`,
+              originalId: oldTerm.id,
+              itemType: 'term',
+              deletedAt: new Date().toISOString()
+            });
+          }
+          if (firestoreDb) {
+            deleteDoc(doc(firestoreDb, "terms", oldTerm.id)).catch((e) => {
+              console.error(`Failed to delete removed batch term ${oldTerm.id} from Firestore:`, e);
+            });
+          }
+        }
+      });
+    }
+
     dbLocal.terms = terms;
     saveDatabase(dbLocal);
 
@@ -1104,7 +1462,7 @@ INSTRUCTIONS:
           chunk.forEach((t) => {
             batch.set(doc(firestoreDb, "terms", t.id), t);
           });
-          await withTimeout(batch.commit(), 2000, "saveTermsBatch");
+          await withTimeout(batch.commit(), 8000, "saveTermsBatch");
         }
       } catch (e) {
         console.error("Firestore saveTerms batch failed:", e);
@@ -1117,16 +1475,25 @@ INSTRUCTIONS:
   app.delete("/api/terms/:id", async (req, res) => {
     const id = req.params.id;
 
-    // Save to local cache backup
+    // Save to local cache backup and record in trashItems
     const dbLocal = loadDatabase();
+    if (!dbLocal.trashItems) dbLocal.trashItems = [];
+    if (!dbLocal.trashItems.some((tr: any) => tr.originalId === id || tr.id === id)) {
+      dbLocal.trashItems.push({
+        id: `trash_term_${id}`,
+        originalId: id,
+        itemType: 'term',
+        deletedAt: new Date().toISOString()
+      });
+    }
     if (dbLocal.terms) {
       dbLocal.terms = dbLocal.terms.filter((t) => t.id !== id);
-      saveDatabase(dbLocal);
     }
+    saveDatabase(dbLocal);
 
     if (firestoreDb) {
       try {
-        await withTimeout(deleteDoc(doc(firestoreDb, "terms", id)), 1500, "deleteTerm");
+        await withTimeout(deleteDoc(doc(firestoreDb, "terms", id)), 8000, "deleteTerm");
       } catch (e) {
         console.error("Firestore deleteTerm failed:", e);
       }
@@ -1136,21 +1503,22 @@ INSTRUCTIONS:
 
   // GET /api/expenses
   app.get("/api/expenses", async (req, res) => {
-    if (firestoreDb) {
-      try {
-        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "expenses")), 1500, "getExpenses");
-        const list = qSnaps.docs.map(d => d.data());
-        // Sync local cache
-        const dbLocal = loadDatabase();
-        dbLocal.expenses = mergeAndSync(dbLocal.expenses, list, "expenses");
-        saveDatabase(dbLocal);
-        return res.json(dbLocal.expenses);
-      } catch (e) {
-        console.error("Firestore getExpenses failed, falling back to local database:", e);
-      }
-    }
     const db = loadDatabase();
     res.json(db.expenses || []);
+
+    if (firestoreDb) {
+      (async () => {
+        try {
+          const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "expenses")), 10000, "getExpenses");
+          const list = qSnaps.docs.map(d => d.data());
+          const dbLocal = loadDatabase();
+          dbLocal.expenses = mergeAndSync(dbLocal.expenses, list, "expenses", dbLocal.trashItems);
+          saveDatabase(dbLocal);
+        } catch (e) {
+          console.error("Firestore getExpenses background sync failed:", e);
+        }
+      })();
+    }
   });
 
   // POST /api/expenses
@@ -1170,7 +1538,7 @@ INSTRUCTIONS:
 
     if (firestoreDb) {
       try {
-        await withTimeout(setDoc(doc(firestoreDb, "expenses", expense.id), expense), 1500, "saveExpense");
+        await withTimeout(setDoc(doc(firestoreDb, "expenses", expense.id), expense), 8000, "saveExpense");
       } catch (e) {
         console.error("Firestore saveExpense failed:", e);
       }
@@ -1191,7 +1559,7 @@ INSTRUCTIONS:
 
     if (firestoreDb) {
       try {
-        await withTimeout(deleteDoc(doc(firestoreDb, "expenses", id)), 1500, "deleteExpense");
+        await withTimeout(deleteDoc(doc(firestoreDb, "expenses", id)), 8000, "deleteExpense");
       } catch (e) {
         console.error("Firestore deleteExpense failed:", e);
       }
@@ -1201,21 +1569,22 @@ INSTRUCTIONS:
 
   // GET /api/salaries
   app.get("/api/salaries", async (req, res) => {
-    if (firestoreDb) {
-      try {
-        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "salaries")), 1500, "getSalaries");
-        const list = qSnaps.docs.map(d => d.data());
-        // Sync local cache
-        const dbLocal = loadDatabase();
-        dbLocal.salaries = mergeAndSync(dbLocal.salaries, list, "salaries");
-        saveDatabase(dbLocal);
-        return res.json(dbLocal.salaries);
-      } catch (e) {
-        console.error("Firestore getSalaries failed, falling back to local database:", e);
-      }
-    }
     const db = loadDatabase();
     res.json(db.salaries || []);
+
+    if (firestoreDb) {
+      (async () => {
+        try {
+          const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "salaries")), 10000, "getSalaries");
+          const list = qSnaps.docs.map(d => d.data());
+          const dbLocal = loadDatabase();
+          dbLocal.salaries = mergeAndSync(dbLocal.salaries, list, "salaries", dbLocal.trashItems);
+          saveDatabase(dbLocal);
+        } catch (e) {
+          console.error("Firestore getSalaries background sync failed:", e);
+        }
+      })();
+    }
   });
 
   // POST /api/salaries
@@ -1235,7 +1604,7 @@ INSTRUCTIONS:
 
     if (firestoreDb) {
       try {
-        await withTimeout(setDoc(doc(firestoreDb, "salaries", salary.id), salary), 1500, "saveSalary");
+        await withTimeout(setDoc(doc(firestoreDb, "salaries", salary.id), salary), 8000, "saveSalary");
       } catch (e) {
         console.error("Firestore saveSalary failed:", e);
       }
@@ -1256,7 +1625,7 @@ INSTRUCTIONS:
 
     if (firestoreDb) {
       try {
-        await withTimeout(deleteDoc(doc(firestoreDb, "salaries", id)), 1500, "deleteSalary");
+        await withTimeout(deleteDoc(doc(firestoreDb, "salaries", id)), 8000, "deleteSalary");
       } catch (e) {
         console.error("Firestore deleteSalary failed:", e);
       }
@@ -1268,11 +1637,11 @@ INSTRUCTIONS:
   app.get("/api/evaluations", async (req, res) => {
     if (firestoreDb) {
       try {
-        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "teacher_evaluations")), 1500, "getTeacherEvaluations");
+        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "teacher_evaluations")), 10000, "getTeacherEvaluations");
         const list = qSnaps.docs.map(d => d.data());
         // Sync local cache
         const dbLocal = loadDatabase();
-        dbLocal.teacherEvaluations = mergeAndSync(dbLocal.teacherEvaluations, list, "teacher_evaluations");
+        dbLocal.teacherEvaluations = mergeAndSync(dbLocal.teacherEvaluations, list, "teacher_evaluations", dbLocal.trashItems);
         saveDatabase(dbLocal);
         return res.json(dbLocal.teacherEvaluations);
       } catch (e) {
@@ -1300,7 +1669,7 @@ INSTRUCTIONS:
 
     if (firestoreDb) {
       try {
-        await withTimeout(setDoc(doc(firestoreDb, "teacher_evaluations", evaluation.id), evaluation), 1500, "saveTeacherEvaluation");
+        await withTimeout(setDoc(doc(firestoreDb, "teacher_evaluations", evaluation.id), evaluation), 8000, "saveTeacherEvaluation");
       } catch (e) {
         console.error("Firestore saveTeacherEvaluation failed:", e);
       }
@@ -1321,7 +1690,7 @@ INSTRUCTIONS:
 
     if (firestoreDb) {
       try {
-        await withTimeout(deleteDoc(doc(firestoreDb, "teacher_evaluations", id)), 1500, "deleteTeacherEvaluation");
+        await withTimeout(deleteDoc(doc(firestoreDb, "teacher_evaluations", id)), 8000, "deleteTeacherEvaluation");
       } catch (e) {
         console.error("Firestore deleteTeacherEvaluation failed:", e);
       }
@@ -1333,10 +1702,10 @@ INSTRUCTIONS:
   app.get("/api/journal_entries", async (req, res) => {
     if (firestoreDb) {
       try {
-        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "journal_entries")), 1500, "getJournalEntries");
+        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "journal_entries")), 10000, "getJournalEntries");
         const list = qSnaps.docs.map(d => d.data());
         const dbLocal = loadDatabase();
-        dbLocal.journalEntries = mergeAndSync(dbLocal.journalEntries, list, "journal_entries");
+        dbLocal.journalEntries = mergeAndSync(dbLocal.journalEntries, list, "journal_entries", dbLocal.trashItems);
         saveDatabase(dbLocal);
         return res.json(dbLocal.journalEntries);
       } catch (e) {
@@ -1362,7 +1731,7 @@ INSTRUCTIONS:
 
     if (firestoreDb) {
       try {
-        await withTimeout(setDoc(doc(firestoreDb, "journal_entries", entry.id), entry), 1500, "saveJournalEntry");
+        await withTimeout(setDoc(doc(firestoreDb, "journal_entries", entry.id), entry), 8000, "saveJournalEntry");
       } catch (e) {
         console.error("Firestore saveJournalEntry failed:", e);
       }
@@ -1381,7 +1750,7 @@ INSTRUCTIONS:
 
     if (firestoreDb) {
       try {
-        await withTimeout(deleteDoc(doc(firestoreDb, "journal_entries", id)), 1500, "deleteJournalEntry");
+        await withTimeout(deleteDoc(doc(firestoreDb, "journal_entries", id)), 8000, "deleteJournalEntry");
       } catch (e) {
         console.error("Firestore deleteJournalEntry failed:", e);
       }
@@ -1393,11 +1762,11 @@ INSTRUCTIONS:
   app.get("/api/budget_targets", async (req, res) => {
     if (firestoreDb) {
       try {
-        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "budget_targets")), 1500, "getBudgetTargets");
+        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "budget_targets")), 10000, "getBudgetTargets");
         const list = qSnaps.docs.map(d => d.data());
         // Sync local cache
         const dbLocal = loadDatabase();
-        dbLocal.budgetTargets = mergeAndSync(dbLocal.budgetTargets, list, "budget_targets");
+        dbLocal.budgetTargets = mergeAndSync(dbLocal.budgetTargets, list, "budget_targets", dbLocal.trashItems);
         saveDatabase(dbLocal);
         return res.json(dbLocal.budgetTargets);
       } catch (e) {
@@ -1425,7 +1794,7 @@ INSTRUCTIONS:
 
     if (firestoreDb) {
       try {
-        await withTimeout(setDoc(doc(firestoreDb, "budget_targets", target.id), target), 1500, "saveBudgetTarget");
+        await withTimeout(setDoc(doc(firestoreDb, "budget_targets", target.id), target), 8000, "saveBudgetTarget");
       } catch (e) {
         console.error("Firestore saveBudgetTarget failed:", e);
       }
@@ -1446,7 +1815,7 @@ INSTRUCTIONS:
 
     if (firestoreDb) {
       try {
-        await withTimeout(deleteDoc(doc(firestoreDb, "budget_targets", id)), 1500, "deleteBudgetTarget");
+        await withTimeout(deleteDoc(doc(firestoreDb, "budget_targets", id)), 8000, "deleteBudgetTarget");
       } catch (e) {
         console.error("Firestore deleteBudgetTarget failed:", e);
       }
@@ -1458,10 +1827,10 @@ INSTRUCTIONS:
   app.get("/api/exams/payments", async (req, res) => {
     if (firestoreDb) {
       try {
-        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "exams_payments")), 1500, "getExamsPayments");
+        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "exams_payments")), 10000, "getExamsPayments");
         const list = qSnaps.docs.map(d => d.data());
         const dbLocal = loadDatabase();
-        dbLocal.examsPayments = mergeAndSync(dbLocal.examsPayments, list, "exams_payments");
+        dbLocal.examsPayments = mergeAndSync(dbLocal.examsPayments, list, "exams_payments", dbLocal.trashItems);
         saveDatabase(dbLocal);
         return res.json(dbLocal.examsPayments);
       } catch (e) {
@@ -1487,7 +1856,7 @@ INSTRUCTIONS:
 
     if (firestoreDb) {
       try {
-        await withTimeout(setDoc(doc(firestoreDb, "exams_payments", payment.id), payment), 1500, "saveExamsPayment");
+        await withTimeout(setDoc(doc(firestoreDb, "exams_payments", payment.id), payment), 8000, "saveExamsPayment");
       } catch (e) {
         console.error("Firestore saveExamsPayment failed:", e);
       }
@@ -1523,7 +1892,7 @@ INSTRUCTIONS:
               batch.set(doc(firestoreDb, "exams_payments", p.id), p);
             }
           });
-          await withTimeout(batch.commit(), 2000, "saveExamsPaymentsBatch");
+          await withTimeout(batch.commit(), 8000, "saveExamsPaymentsBatch");
         }
       } catch (e) {
         console.error("Firestore saveExamsPayments batch failed:", e);
@@ -1543,7 +1912,7 @@ INSTRUCTIONS:
 
     if (firestoreDb) {
       try {
-        await withTimeout(deleteDoc(doc(firestoreDb, "exams_payments", id)), 1500, "deleteExamsPayment");
+        await withTimeout(deleteDoc(doc(firestoreDb, "exams_payments", id)), 8000, "deleteExamsPayment");
       } catch (e) {
         console.error("Firestore deleteExamsPayment failed:", e);
       }
@@ -1555,10 +1924,10 @@ INSTRUCTIONS:
   app.get("/api/exams/expenses", async (req, res) => {
     if (firestoreDb) {
       try {
-        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "exams_expenses")), 1500, "getExamsExpenses");
+        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "exams_expenses")), 10000, "getExamsExpenses");
         const list = qSnaps.docs.map(d => d.data());
         const dbLocal = loadDatabase();
-        dbLocal.examsExpenses = mergeAndSync(dbLocal.examsExpenses, list, "exams_expenses");
+        dbLocal.examsExpenses = mergeAndSync(dbLocal.examsExpenses, list, "exams_expenses", dbLocal.trashItems);
         saveDatabase(dbLocal);
         return res.json(dbLocal.examsExpenses);
       } catch (e) {
@@ -1584,7 +1953,7 @@ INSTRUCTIONS:
 
     if (firestoreDb) {
       try {
-        await withTimeout(setDoc(doc(firestoreDb, "exams_expenses", expense.id), expense), 1500, "saveExamsExpense");
+        await withTimeout(setDoc(doc(firestoreDb, "exams_expenses", expense.id), expense), 8000, "saveExamsExpense");
       } catch (e) {
         console.error("Firestore saveExamsExpense failed:", e);
       }
@@ -1603,7 +1972,7 @@ INSTRUCTIONS:
 
     if (firestoreDb) {
       try {
-        await withTimeout(deleteDoc(doc(firestoreDb, "exams_expenses", id)), 1500, "deleteExamsExpense");
+        await withTimeout(deleteDoc(doc(firestoreDb, "exams_expenses", id)), 8000, "deleteExamsExpense");
       } catch (e) {
         console.error("Firestore deleteExamsExpense failed:", e);
       }
@@ -1728,7 +2097,7 @@ INSTRUCTIONS:
 
   // POST /api/audit-logs (Frontend manual logging of actions)
   app.post("/api/audit-logs", async (req, res) => {
-    const { action, category, operatorName, operatorRole, details, studentId, studentName, amount } = req.body;
+    const { action, category, operatorName, operatorRole, details, studentId, studentName, amount, snapshotData } = req.body;
     if (!action || !category || !operatorName || !operatorRole || !details) {
       return res.status(400).json({ error: "Missing required audit log parameters." });
     }
@@ -1740,9 +2109,241 @@ INSTRUCTIONS:
       details,
       studentId,
       studentName,
-      amount
+      amount,
+      snapshotData
     });
     res.json({ success: true });
+  });
+
+  // GET /api/trash (Retrieve all soft-deleted trash items)
+  app.get("/api/trash", async (req, res) => {
+    if (firestoreDb) {
+      try {
+        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "trash_items")), 2000, "getTrashItems");
+        const list = qSnaps.docs.map(d => d.data());
+        const nowMs = Date.now();
+        const unexpired = list.filter((ti: any) => !ti.expiresAt || new Date(ti.expiresAt).getTime() > nowMs);
+        const sorted = unexpired.sort((a, b) => new Date(b.deletedAt).getTime() - new Date(a.deletedAt).getTime());
+        const dbLocal = loadDatabase();
+        dbLocal.trashItems = sorted;
+        saveDatabase(dbLocal);
+        return res.json(sorted);
+      } catch (e) {
+        console.error("Firestore getTrashItems failed, falling back to local database:", e);
+      }
+    }
+    const dbLocal = loadDatabase();
+    const nowMs = Date.now();
+    const unexpired = (dbLocal.trashItems || []).filter((ti: any) => !ti.expiresAt || new Date(ti.expiresAt).getTime() > nowMs);
+    if (unexpired.length !== (dbLocal.trashItems || []).length) {
+      dbLocal.trashItems = unexpired;
+      saveDatabase(dbLocal);
+    }
+    const sorted = unexpired.sort((a: any, b: any) => new Date(b.deletedAt).getTime() - new Date(a.deletedAt).getTime());
+    res.json(sorted);
+  });
+
+  // POST /api/trash (Soft delete / Move item to trash)
+  app.post("/api/trash", async (req, res) => {
+    const { id, originalId, itemType, recordData, deletedBy, reason, studentId, studentName, amount, itemCount, class: itemClass } = req.body;
+    if (!itemType || !recordData) {
+      return res.status(400).json({ error: "Missing required parameters for trash record." });
+    }
+
+    const nowIso = new Date().toISOString();
+    const expiresIso = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(); // 30 days retention
+
+    const trashItem = {
+      id: id || `trash_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      originalId: originalId || id || `orig_${Date.now()}`,
+      itemType,
+      recordData,
+      deletedAt: req.body.deletedAt || nowIso,
+      expiresAt: req.body.expiresAt || expiresIso,
+      deletedBy: deletedBy || "System Admin",
+      reason: reason || "Item soft-deleted by user action",
+      studentId,
+      studentName,
+      amount,
+      itemCount,
+      class: itemClass
+    };
+
+    const dbLocal = loadDatabase();
+    if (!dbLocal.trashItems) dbLocal.trashItems = [];
+    const existingIndex = dbLocal.trashItems.findIndex((t: any) => t.id === trashItem.id);
+    if (existingIndex >= 0) {
+      dbLocal.trashItems[existingIndex] = trashItem;
+    } else {
+      dbLocal.trashItems.unshift(trashItem);
+    }
+    saveDatabase(dbLocal);
+
+    if (firestoreDb) {
+      try {
+        await withTimeout(setDoc(doc(firestoreDb, "trash_items", trashItem.id), trashItem), 1500, "saveTrashItem");
+      } catch (e) {
+        console.error("Firestore saveTrashItem failed:", e);
+      }
+    }
+
+    res.json({ success: true, item: trashItem });
+  });
+
+  // POST /api/trash/restore/:id (Restore item from trash back to active ledger)
+  app.post("/api/trash/restore/:id", async (req, res) => {
+    const trashId = req.params.id;
+    const dbLocal = loadDatabase();
+    if (!dbLocal.trashItems) dbLocal.trashItems = [];
+
+    const item = dbLocal.trashItems.find((t: any) => t.id === trashId);
+    if (!item) {
+      return res.status(404).json({ error: "Trash item not found or already purged." });
+    }
+
+    let restoredDescription = "";
+
+    if (item.itemType === "payment") {
+      const paymentToRestore = item.recordData.payment || item.recordData;
+      if (paymentToRestore && paymentToRestore.id) {
+        if (!dbLocal.payments) dbLocal.payments = [];
+        if (!dbLocal.payments.some((p: any) => p.id === paymentToRestore.id)) {
+          dbLocal.payments.unshift(paymentToRestore);
+        }
+        if (Array.isArray(item.recordData.relatedMarkers)) {
+          item.recordData.relatedMarkers.forEach((m: any) => {
+            if (!dbLocal.payments.some((p: any) => p.id === m.id)) {
+              dbLocal.payments.unshift(m);
+            }
+          });
+        }
+        if (firestoreDb) {
+          try {
+            await setDoc(doc(firestoreDb, "payments", paymentToRestore.id), paymentToRestore);
+          } catch (e) {
+            console.error("Firestore restore payment error:", e);
+          }
+        }
+        restoredDescription = `Restored fee payment entry of GHC ${(paymentToRestore.amount || 0).toFixed(2)} for ${paymentToRestore.studentName || 'Pupil'}`;
+      }
+    } else if (item.itemType === "bulk_payments") {
+      const paymentsArray = Array.isArray(item.recordData) ? item.recordData : (item.recordData?.payments || []);
+      if (!dbLocal.payments) dbLocal.payments = [];
+      let count = 0;
+      paymentsArray.forEach((p: any) => {
+        if (p && p.id && !dbLocal.payments.some((existing: any) => existing.id === p.id)) {
+          dbLocal.payments.unshift(p);
+          count++;
+          if (firestoreDb) {
+            setDoc(doc(firestoreDb, "payments", p.id), p).catch(e => console.error("Firestore bulk restore error:", e));
+          }
+        }
+      });
+      restoredDescription = `Restored ${count} fee payment entries from bulk trash archive`;
+    } else if (item.itemType === "student") {
+      const studentToRestore = item.recordData.student || item.recordData;
+      if (studentToRestore && studentToRestore.id) {
+        if (!dbLocal.students) dbLocal.students = [];
+        const sIndex = dbLocal.students.findIndex((s: any) => s.id === studentToRestore.id);
+        if (sIndex >= 0) dbLocal.students[sIndex] = studentToRestore;
+        else dbLocal.students.unshift(studentToRestore);
+
+        if (Array.isArray(item.recordData.payments)) {
+          if (!dbLocal.payments) dbLocal.payments = [];
+          item.recordData.payments.forEach((p: any) => {
+            if (!dbLocal.payments.some((existing: any) => existing.id === p.id)) {
+              dbLocal.payments.unshift(p);
+            }
+          });
+        }
+        if (firestoreDb) {
+          try {
+            await setDoc(doc(firestoreDb, "students", studentToRestore.id), studentToRestore);
+          } catch (e) {
+            console.error("Firestore restore student error:", e);
+          }
+        }
+        restoredDescription = `Restored pupil profile "${studentToRestore.name}" (${studentToRestore.class || 'Class'})`;
+      }
+    } else if (item.itemType === "expense") {
+      const expenseToRestore = item.recordData.expense || item.recordData;
+      if (expenseToRestore && expenseToRestore.id) {
+        if (!dbLocal.expenses) dbLocal.expenses = [];
+        if (!dbLocal.expenses.some((e: any) => e.id === expenseToRestore.id)) {
+          dbLocal.expenses.unshift(expenseToRestore);
+        }
+        restoredDescription = `Restored expense item "${expenseToRestore.description}"`;
+      }
+    }
+
+    // Remove item from trash
+    dbLocal.trashItems = dbLocal.trashItems.filter((t: any) => t.id !== trashId);
+    saveDatabase(dbLocal);
+
+    if (firestoreDb) {
+      try {
+        await deleteDoc(doc(firestoreDb, "trash_items", trashId));
+      } catch (e) {
+        console.error("Firestore delete trash item error:", e);
+      }
+    }
+
+    await addAuditLog({
+      action: "RESTORE_TRASH_ITEM",
+      category: item.itemType === "student" ? "students" : item.itemType === "expense" ? "expenses" : "payments",
+      operatorName: req.body.operator || "System Admin",
+      operatorRole: "admin",
+      details: restoredDescription || `Restored ${item.itemType} record from trash bin.`
+    });
+
+    res.json({ success: true, message: restoredDescription || "Record successfully restored from trash!", item });
+  });
+
+  // DELETE /api/trash/:id (Permanently delete single trash item)
+  app.delete("/api/trash/:id", async (req, res) => {
+    const trashId = req.params.id;
+    const dbLocal = loadDatabase();
+    if (dbLocal.trashItems) {
+      dbLocal.trashItems = dbLocal.trashItems.filter((t: any) => t.id !== trashId);
+      saveDatabase(dbLocal);
+    }
+    if (firestoreDb) {
+      try {
+        await deleteDoc(doc(firestoreDb, "trash_items", trashId));
+      } catch (e) {
+        console.error("Firestore delete trash item error:", e);
+      }
+    }
+    res.json({ success: true });
+  });
+
+  // DELETE /api/trash (Empty entire trash collection)
+  app.delete("/api/trash", async (req, res) => {
+    const dbLocal = loadDatabase();
+    const count = dbLocal.trashItems ? dbLocal.trashItems.length : 0;
+    dbLocal.trashItems = [];
+    saveDatabase(dbLocal);
+
+    if (firestoreDb) {
+      try {
+        const qSnaps = await getDocs(collection(firestoreDb, "trash_items"));
+        for (const docSnap of qSnaps.docs) {
+          await deleteDoc(doc(firestoreDb, "trash_items", docSnap.id));
+        }
+      } catch (e) {
+        console.error("Firestore empty trash error:", e);
+      }
+    }
+
+    await addAuditLog({
+      action: "EMPTY_TRASH_BIN",
+      category: "security",
+      operatorName: req.body.operator || "System Admin",
+      operatorRole: "admin",
+      details: `Permanently emptied ${count} item(s) from soft delete trash bin.`
+    });
+
+    res.json({ success: true, message: `Permanently emptied ${count} trash record(s).` });
   });
 
   // POST /api/whatsapp/send
@@ -2012,7 +2613,7 @@ INSTRUCTIONS:
 
       // Re-sync with Cloud Firestore if available
       if (firestoreDb) {
-        bootstrapCloudSeeding().catch(e => console.error("Cloud re-seed after restore error:", e));
+        bootstrapCloudSync().catch(e => console.error("Cloud re-seed after restore error:", e));
       }
 
       await addAuditLog({

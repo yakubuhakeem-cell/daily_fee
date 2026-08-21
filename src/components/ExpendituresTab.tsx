@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { useApp, getStudentBaselineTermFee } from '../context/AppContext';
+import { useApp, getStudentBaselineTermFee, isTermPayer } from '../context/AppContext';
 import { Expense, WorkerSalary, ExpenseCategory, PaymentMethod } from '../types';
+import { TeacherSalaryIncrementModal } from './TeacherSalaryIncrementModal';
 import { 
   Plus, 
   Trash2, 
@@ -105,6 +106,7 @@ export const ExpendituresTab: React.FC = () => {
 
   // Bulk Salaries Modal & Form States
   const [showBulkSalaryModal, setShowBulkSalaryModal] = useState(false);
+  const [showSalaryIncrementModal, setShowSalaryIncrementModal] = useState(false);
   const [bulkMonthYear, setBulkMonthYear] = useState('');
   const [bulkDate, setBulkDate] = useState(currentDate);
   const [bulkMethod, setBulkMethod] = useState<PaymentMethod>('Cash');
@@ -636,6 +638,18 @@ export const ExpendituresTab: React.FC = () => {
 
           {activeSubTab === 'salaries' && (
             <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowSalaryIncrementModal(true);
+                  playFeedbackSound('click');
+                }}
+                className="bg-neutral-900 hover:bg-neutral-800 text-amber-400 hover:text-amber-300 border-2 border-amber-500/50 px-3.5 py-2 font-black text-[11px] font-mono uppercase tracking-wider flex items-center gap-1.5 transition-all w-full sm:w-auto justify-center cursor-pointer rounded-xs"
+                title="Teacher & Worker Salary Increment Summary, individual percentage variations & term expenditure forecast"
+              >
+                <TrendingUp size={14} />
+                <span>Increment Summary</span>
+              </button>
               <button
                 onClick={() => {
                   setShowBulkSalaryModal(true);
@@ -1247,14 +1261,14 @@ export const ExpendituresTab: React.FC = () => {
             {/* Comparison Metrics Grid */}
             {(() => {
               // 1. Term Payers expected fees
-              const activeTermPayers = students.filter(s => s.active !== false && s.paymentType === 'Term');
+              const activeTermPayers = students.filter(s => s.active !== false && isTermPayer(s));
               const totalTermPayersExpected = activeTermPayers.reduce((sum, s) => {
                 const fee = getStudentBaselineTermFee(s.class, systemSettings);
                 return sum + (s.termFee ?? fee) + (s.legacyDebt ?? 0);
               }, 0);
 
               // 2. Daily Payers expected fees
-              const activeDailyPayers = students.filter(s => s.active !== false && (s.paymentType === 'Daily' || !s.paymentType));
+              const activeDailyPayers = students.filter(s => s.active !== false && !isTermPayer(s));
               const dailyGateFee = systemSettings?.baselineDailyFee ?? 5.00;
               const expectedDailyRevenue = activeDailyPayers.length * dailyGateFee * termSchoolDays * (dailyCollectionRate / 100);
 
@@ -2738,6 +2752,12 @@ Thank you for your dedicated service to Saako Holy Child Academy!`}
           </div>
         );
       })()}
+
+      {/* Teacher & Worker Salary Increment Summary Modal */}
+      <TeacherSalaryIncrementModal
+        isOpen={showSalaryIncrementModal}
+        onClose={() => setShowSalaryIncrementModal(false)}
+      />
     </div>
   );
 };

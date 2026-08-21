@@ -5,14 +5,17 @@
 
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { SystemSettings } from '../types';
-import { Save, RefreshCw, Check, Landmark, School, Sparkles, Info, Palette, Clock } from 'lucide-react';
+import { SystemSettings, StudentClass } from '../types';
+import { Save, RefreshCw, Check, Landmark, School, Sparkles, Info, Palette, Clock, Hash, Wand2, UserCheck, ShieldCheck, AlertCircle } from 'lucide-react';
 import { SchoolLogo } from './SchoolLogo';
+import { PUPIL_ID_FORMAT_OPTIONS, PupilIdFormatStyle, formatPupilId } from '../utils/pupilIdUtils';
 
 export const SettingsPanel: React.FC = () => {
-  const { systemSettings, updateSystemSettings, playFeedbackSound, storageMode } = useApp();
+  const { systemSettings, updateSystemSettings, playFeedbackSound, storageMode, standardizePupilIds, students } = useApp();
   const [success, setSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [standardizeLoading, setStandardizeLoading] = useState(false);
+  const [standardizeResult, setStandardizeResult] = useState<string | null>(null);
 
   // Local state for the settings form
   const [schoolName, setSchoolName] = useState(systemSettings?.schoolName || 'SAAKO HOLY CHILD ACADEMY');
@@ -41,8 +44,14 @@ export const SettingsPanel: React.FC = () => {
   const [lateFeeCutoffTime, setLateFeeCutoffTime] = useState(systemSettings?.lateFeeCutoffTime || '08:30');
   const [lateFeePercentage, setLateFeePercentage] = useState(systemSettings?.lateFeePercentage ?? 10);
 
+  // Pupil ID Formatting Options
+  const [pupilIdFormat, setPupilIdFormat] = useState<PupilIdFormatStyle>(systemSettings?.pupilIdFormat || 'PREFIX_CLASS_NUM');
+  const [pupilIdPrefix, setPupilIdPrefix] = useState(systemSettings?.pupilIdPrefix || 'SHC');
+  const [pupilIdPadding, setPupilIdPadding] = useState<number>(systemSettings?.pupilIdPadding || 3);
+  const [pupilIdSeparator, setPupilIdSeparator] = useState<string>(systemSettings?.pupilIdSeparator || '-');
+
   // Sub-tabs state
-  const [activeSubTab, setActiveSubTab] = useState<'financial' | 'appearance'>('appearance');
+  const [activeSubTab, setActiveSubTab] = useState<'appearance' | 'pupil_id' | 'financial'>('appearance');
 
   // Interactive templates/presets to quickly theme the app
   const presets = [
@@ -158,7 +167,11 @@ export const SettingsPanel: React.FC = () => {
       whatsappGatewayType: whatsappGatewayMode === 'direct' ? 'direct' : 'api',
       whatsappGatewayMode,
       whatsappWebhookUrl,
-      whatsappWebhookToken
+      whatsappWebhookToken,
+      pupilIdFormat,
+      pupilIdPrefix: pupilIdPrefix.trim().toUpperCase() || 'SHC',
+      pupilIdPadding: Number(pupilIdPadding),
+      pupilIdSeparator
     };
 
     const isOk = await updateSystemSettings(payload);
@@ -204,7 +217,7 @@ export const SettingsPanel: React.FC = () => {
       </div>
 
       {/* Sub-Tabs Navigation for System Settings */}
-      <div className="flex border-b border-neutral-800 gap-6 mt-4 pb-0.5">
+      <div className="flex border-b border-neutral-800 gap-6 mt-4 pb-0.5 overflow-x-auto">
         <button
           type="button"
           onClick={() => {
@@ -212,7 +225,7 @@ export const SettingsPanel: React.FC = () => {
             playFeedbackSound('success');
           }}
           title="Appearance & Identity: Configure school name, institution logo, currency symbol, and theme settings"
-          className={`pb-3 font-mono text-[11px] font-black uppercase tracking-widest border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
+          className={`pb-3 font-mono text-[11px] font-black uppercase tracking-widest border-b-2 transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap ${
             activeSubTab === 'appearance'
               ? 'border-amber-400 text-amber-400'
               : 'border-transparent text-neutral-500 hover:text-white'
@@ -224,11 +237,27 @@ export const SettingsPanel: React.FC = () => {
         <button
           type="button"
           onClick={() => {
+            setActiveSubTab('pupil_id');
+            playFeedbackSound('success');
+          }}
+          title="Pupil ID & Admission Format: Configure custom student ID prefixes, patterns, zero-padding, separators, and bulk standardization"
+          className={`pb-3 font-mono text-[11px] font-black uppercase tracking-widest border-b-2 transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap ${
+            activeSubTab === 'pupil_id'
+              ? 'border-amber-400 text-amber-400'
+              : 'border-transparent text-neutral-500 hover:text-white'
+          }`}
+        >
+          <Hash className="w-3.5 h-3.5 shrink-0" />
+          Pupil ID & Admission No
+        </button>
+        <button
+          type="button"
+          onClick={() => {
             setActiveSubTab('financial');
             playFeedbackSound('success');
           }}
           title="Financial & Rates: Set baseline daily entry fees, term lump-sum rates, and early payment discount policies"
-          className={`pb-3 font-mono text-[11px] font-black uppercase tracking-widest border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
+          className={`pb-3 font-mono text-[11px] font-black uppercase tracking-widest border-b-2 transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap ${
             activeSubTab === 'financial'
               ? 'border-amber-400 text-amber-400'
               : 'border-transparent text-neutral-500 hover:text-white'
@@ -240,7 +269,7 @@ export const SettingsPanel: React.FC = () => {
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
-        {activeSubTab === 'appearance' ? (
+        {activeSubTab === 'appearance' && (
           /* Sub-tab Content: Appearance & Identity */
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-fadeIn">
             <div className="bg-neutral-900/60 border border-neutral-800 shadow-lg p-5 rounded-lg space-y-4">
@@ -476,7 +505,290 @@ export const SettingsPanel: React.FC = () => {
               </div>
             </div>
           </div>
-        ) : (
+        )}
+
+        {activeSubTab === 'pupil_id' && (
+          /* Sub-tab Content: Pupil ID & Admission Format */
+          <div className="space-y-6 animate-fadeIn">
+            {/* Top Overview Box */}
+            <div className="bg-neutral-900/60 border border-neutral-800 shadow-lg p-5 rounded-lg">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-neutral-800 pb-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-amber-400/10 border border-amber-400/20 flex items-center justify-center text-amber-400">
+                    <Hash className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-black text-neutral-100 tracking-wider uppercase font-mono">
+                      Pupil ID & Admission Number Standard
+                    </h3>
+                    <p className="text-xs text-neutral-400 mt-0.5">
+                      Configure how student IDs are formatted and auto-generated across all registers, ID cards, and statements.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-mono font-bold bg-neutral-800 text-amber-300 px-3 py-1.5 rounded border border-neutral-700">
+                    Active Roster: {students.length} Pupils
+                  </span>
+                </div>
+              </div>
+
+              {/* Format Patterns Grid */}
+              <div className="mt-5 space-y-3">
+                <label className="block text-xs font-mono font-bold text-neutral-300 uppercase tracking-wider">
+                  Select Pupil ID Pattern Style
+                </label>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {PUPIL_ID_FORMAT_OPTIONS.map((opt) => {
+                    const isSelected = pupilIdFormat === opt.id;
+                    const samplePrefix = pupilIdPrefix.trim().toUpperCase() || 'SHC';
+                    const sampleSep = pupilIdSeparator;
+                    const samplePad = pupilIdPadding;
+                    const sampleNum = String(1).padStart(samplePad, '0');
+                    const curYear = new Date().getFullYear();
+
+                    let dynamicExample = opt.example;
+                    if (opt.id === 'PREFIX_CLASS_NUM') {
+                      dynamicExample = `${samplePrefix}${sampleSep}B5${sampleSep}${sampleNum}`;
+                    } else if (opt.id === 'PREFIX_YEAR_CLASS_NUM') {
+                      dynamicExample = `${samplePrefix}${sampleSep}${curYear}${sampleSep}B5${sampleSep}${sampleNum}`;
+                    } else if (opt.id === 'PREFIX_YEAR_NUM') {
+                      dynamicExample = `${samplePrefix}${sampleSep}${curYear}${sampleSep}${sampleNum}`;
+                    } else if (opt.id === 'PREFIX_NUM') {
+                      dynamicExample = `${samplePrefix}${sampleSep}${sampleNum}`;
+                    } else if (opt.id === 'CLASS_NUM') {
+                      dynamicExample = `B5${sampleSep}${sampleNum}`;
+                    } else if (opt.id === 'CUSTOM_NUM') {
+                      dynamicExample = sampleNum;
+                    }
+
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => {
+                          setPupilIdFormat(opt.id);
+                          playFeedbackSound('success');
+                        }}
+                        className={`text-left p-3.5 rounded-lg border transition-all cursor-pointer relative group flex flex-col justify-between ${
+                          isSelected
+                            ? 'bg-amber-500/10 border-amber-400 ring-1 ring-amber-400/40 shadow-lg shadow-amber-500/5'
+                            : 'bg-neutral-950/70 border-neutral-800 hover:border-neutral-700 hover:bg-neutral-900/50'
+                        }`}
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className={`text-xs font-bold font-mono tracking-wide ${isSelected ? 'text-amber-300' : 'text-neutral-200'}`}>
+                              {opt.label}
+                            </span>
+                            {isSelected && (
+                              <span className="text-[9px] font-mono font-black uppercase bg-amber-400 text-black px-1.5 py-0.5 rounded">
+                                Selected
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[10px] text-neutral-400 leading-relaxed font-sans">
+                            {opt.description}
+                          </p>
+                        </div>
+                        <div className="mt-3 pt-2.5 border-t border-neutral-800/80 flex items-center justify-between">
+                          <span className="text-[9px] font-mono text-neutral-500 uppercase">Live Output:</span>
+                          <span className={`font-mono text-xs font-black tracking-wider px-2 py-0.5 rounded ${
+                            isSelected ? 'bg-amber-400 text-black font-extrabold' : 'bg-neutral-900 text-neutral-300 border border-neutral-800'
+                          }`}>
+                            {dynamicExample}
+                          </span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Formatting Parameters */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-6 pt-5 border-t border-neutral-800">
+                <div>
+                  <label className="block text-xs font-mono font-bold text-neutral-300 uppercase tracking-wider mb-1.5">
+                    Institution / School Prefix
+                  </label>
+                  <input
+                    type="text"
+                    value={pupilIdPrefix}
+                    onChange={(e) => setPupilIdPrefix(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
+                    placeholder="e.g. SHC, SAAKO, APEX"
+                    maxLength={8}
+                    className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-400 rounded p-2.5 text-xs text-white font-mono uppercase font-bold focus:outline-none transition-colors"
+                  />
+                  <p className="text-[10px] text-neutral-500 mt-1 font-mono">
+                    Max 8 uppercase alphanumeric chars.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-mono font-bold text-neutral-300 uppercase tracking-wider mb-1.5">
+                    Separator Character
+                  </label>
+                  <select
+                    value={pupilIdSeparator}
+                    onChange={(e) => setPupilIdSeparator(e.target.value)}
+                    className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-400 rounded p-2.5 text-xs text-white font-mono focus:outline-none transition-colors"
+                  >
+                    <option value="-">- (Hyphen: SHC-B5-001)</option>
+                    <option value="/">/ (Slash: SHC/B5/001)</option>
+                    <option value=".">. (Dot: SHC.B5.001)</option>
+                    <option value="_">_ (Underscore: SHC_B5_001)</option>
+                    <option value="">None (Concatenated: SHCB5001)</option>
+                  </select>
+                  <p className="text-[10px] text-neutral-500 mt-1 font-mono">
+                    Character between prefix, class, and numbers.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-mono font-bold text-neutral-300 uppercase tracking-wider mb-1.5">
+                    Sequential Digits Padding
+                  </label>
+                  <select
+                    value={pupilIdPadding}
+                    onChange={(e) => setPupilIdPadding(Number(e.target.value))}
+                    className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-400 rounded p-2.5 text-xs text-white font-mono focus:outline-none transition-colors"
+                  >
+                    <option value={2}>2 Digits (01 – 99)</option>
+                    <option value={3}>3 Digits (001 – 999) [Recommended]</option>
+                    <option value={4}>4 Digits (0001 – 9999)</option>
+                  </select>
+                  <p className="text-[10px] text-neutral-500 mt-1 font-mono">
+                    Leading zeroes for roll sequence.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Live Multi-Class Preview & Bulk Standardization */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Live Preview Box */}
+              <div className="bg-neutral-900/60 border border-neutral-800 shadow-lg p-5 rounded-lg space-y-4">
+                <div className="flex items-center gap-2 border-b border-neutral-800 pb-3">
+                  <Wand2 className="w-4 h-4 text-amber-400" />
+                  <h3 className="text-sm font-black text-neutral-200 tracking-wider uppercase font-mono">
+                    Live Roster ID Simulation
+                  </h3>
+                </div>
+                <p className="text-xs text-neutral-400">
+                  Here is how pupil admission numbers appear across various school grade levels with the selected formatting options:
+                </p>
+                
+                <div className="space-y-2 bg-neutral-950/70 p-3 rounded-lg border border-neutral-850">
+                  {[
+                    { name: 'Kofi Mensah', cls: 'Nursery 1' as StudentClass, idx: 1 },
+                    { name: 'Abena Osei', cls: 'KG2' as StudentClass, idx: 4 },
+                    { name: 'Kwame Boateng', cls: 'B1' as StudentClass, idx: 7 },
+                    { name: 'Priscilla Owusu', cls: 'B5' as StudentClass, idx: 12 },
+                    { name: 'Emanuel Adams', cls: 'B9' as StudentClass, idx: 25 },
+                  ].map((sample) => {
+                    const samplePrefix = pupilIdPrefix.trim().toUpperCase() || 'SHC';
+                    const sampleSep = pupilIdSeparator;
+                    const samplePad = pupilIdPadding;
+                    const sampleNum = String(sample.idx).padStart(samplePad, '0');
+                    const curYear = new Date().getFullYear();
+                    const shortClass = sample.cls.startsWith('Nursery') ? 'N1' : sample.cls;
+
+                    let sampleId = `${samplePrefix}${sampleSep}${shortClass}${sampleSep}${sampleNum}`;
+                    if (pupilIdFormat === 'PREFIX_YEAR_CLASS_NUM') {
+                      sampleId = `${samplePrefix}${sampleSep}${curYear}${sampleSep}${shortClass}${sampleSep}${sampleNum}`;
+                    } else if (pupilIdFormat === 'PREFIX_YEAR_NUM') {
+                      sampleId = `${samplePrefix}${sampleSep}${curYear}${sampleSep}${sampleNum}`;
+                    } else if (pupilIdFormat === 'PREFIX_NUM') {
+                      sampleId = `${samplePrefix}${sampleSep}${sampleNum}`;
+                    } else if (pupilIdFormat === 'CLASS_NUM') {
+                      sampleId = `${shortClass}${sampleSep}${sampleNum}`;
+                    } else if (pupilIdFormat === 'CUSTOM_NUM') {
+                      sampleId = sampleNum;
+                    }
+
+                    return (
+                      <div key={sample.name} className="flex items-center justify-between py-1.5 px-2.5 rounded bg-neutral-900/60 border border-neutral-800/80 text-xs">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+                          <span className="font-bold text-neutral-200">{sample.name}</span>
+                          <span className="text-[10px] text-neutral-500 font-mono">({sample.cls})</span>
+                        </div>
+                        <span className="font-mono font-black text-amber-300 bg-neutral-950 px-2 py-0.5 rounded border border-neutral-800">
+                          {sampleId}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* 1-Click Roster Standardization Box */}
+              <div className="bg-neutral-900/60 border border-neutral-800 shadow-lg p-5 rounded-lg space-y-4 flex flex-col justify-between">
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 border-b border-neutral-800 pb-3">
+                    <UserCheck className="w-4 h-4 text-emerald-400" />
+                    <h3 className="text-sm font-black text-neutral-200 tracking-wider uppercase font-mono">
+                      1-Click Roster Standardization
+                    </h3>
+                  </div>
+                  <p className="text-xs text-neutral-300 leading-relaxed">
+                    Have existing pupils with legacy, inconsistent, or unformatted IDs? Standardize the entire school roster to match the selected scheme in a single click.
+                  </p>
+                  
+                  <div className="bg-amber-950/20 border border-amber-500/30 p-3 rounded text-[11px] text-amber-300 space-y-1">
+                    <div className="flex items-center gap-1.5 font-bold">
+                      <ShieldCheck className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      Non-Destructive Upgrade:
+                    </div>
+                    <p className="text-[10px] text-neutral-400 leading-relaxed">
+                      Payment history, ledger balances, and guardian records remain fully intact. Only the display ID and roll code will be cleanly standardized.
+                    </p>
+                  </div>
+
+                  {standardizeResult && (
+                    <div className="p-3 bg-emerald-950/40 border border-emerald-500/30 rounded text-xs text-emerald-300 font-mono flex items-start gap-2">
+                      <Check className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                      <span>{standardizeResult}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="pt-3 border-t border-neutral-800">
+                  <button
+                    type="button"
+                    disabled={standardizeLoading}
+                    onClick={() => {
+                      setStandardizeLoading(true);
+                      setStandardizeResult(null);
+                      playFeedbackSound('success');
+                      setTimeout(() => {
+                        const res = standardizePupilIds(pupilIdFormat);
+                        setStandardizeLoading(false);
+                        setStandardizeResult(res.message);
+                        playFeedbackSound('success');
+                      }, 300);
+                    }}
+                    className="w-full bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 disabled:opacity-50 text-black font-mono font-black uppercase text-xs tracking-wider py-3 px-4 rounded shadow-lg transition-all cursor-pointer flex items-center justify-center gap-2"
+                  >
+                    {standardizeLoading ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        Standardizing {students.length} Pupils...
+                      </>
+                    ) : (
+                      <>
+                        <Wand2 className="w-4 h-4" />
+                        Standardize All {students.length} Pupil IDs Now
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeSubTab === 'financial' && (
           /* Sub-tab Content: Financial & Rates */
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-fadeIn">
             <div className="bg-neutral-900/60 border border-neutral-800 shadow-lg p-5 rounded-lg space-y-4">

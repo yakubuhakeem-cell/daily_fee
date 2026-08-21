@@ -2,6 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { idbEngine } from '../lib/idbEngine';
 import { Student, PaymentRecord, ExamsPayment, StudentClass, SchoolCategory, AdministrativePurgeOptions } from '../types';
+import { DeleteConfirmationModal, DeleteConfirmDetails } from './DeleteConfirmationModal';
+import { DuplicateReconciliationModal } from './DuplicateReconciliationModal';
+import { ClearClassFeesModal } from './ClearClassFeesModal';
 import { 
   Database, 
   RefreshCw, 
@@ -60,8 +63,11 @@ export const DatabaseTab: React.FC<DatabaseTabProps> = ({ showToast, setActiveTa
     purgeOnlyDemoData,
     purgeDuplicatePayments,
     purgeAdvancePayments,
+    purgeOutOfTermPayments,
+    purgeClassOutOfTermAndDuplicates,
     purgeRepeatedAndAdvancePayments,
     purgePublicHolidayPayments,
+    purgePaymentsExceptYesterdayAndToday,
     deleteAllAutomaticEntries,
     currentDate,
     activeTerm,
@@ -87,22 +93,16 @@ export const DatabaseTab: React.FC<DatabaseTabProps> = ({ showToast, setActiveTa
     examsSettings,
     importDatabaseBackup,
     administrativePurge,
-    journalEntries
+    journalEntries,
+    carryForwardTermBalances
   } = useApp();
 
   // Local States
   const [localTimeLeft, setLocalTimeLeft] = useState<number>(30 * 60);
   const [backupLabel, setBackupLabel] = useState('');
-  const [purgeOptions, setPurgeOptions] = useState<AdministrativePurgeOptions>({
-    clearDailyPayments: false,
-    resetAttendanceLogs: false,
-    removeExamRecords: false,
-    clearExpenses: false,
-    clearJournalEntries: false,
-    purgeDemoRoster: false,
-  });
-  const [showAdminPurgeConfirm, setShowAdminPurgeConfirm] = useState(false);
-  const [showBackupPurgeConfirm, setShowBackupPurgeConfirm] = useState(false);
+  const [showReconciliationModal, setShowReconciliationModal] = useState(false);
+  const [showClearClassFeesModal, setShowClearClassFeesModal] = useState(false);
+  const [deleteConfirmDetails, setDeleteConfirmDetails] = useState<DeleteConfirmDetails | null>(null);
   const [showRestoreConfirmId, setShowRestoreConfirmId] = useState<string | null>(null);
   const [showPurgeDemoConfirm, setShowPurgeDemoConfirm] = useState(false);
   const [showClearPaymentsConfirm, setShowClearPaymentsConfirm] = useState(false);
@@ -708,43 +708,13 @@ Esi Baah,B1,Female,Akwasi Baah,0240007788,Primary,0`;
               <h4 className="text-sm font-black uppercase text-white tracking-wider font-mono flex items-center gap-2">
                 🔄 Periodic Background Sync
               </h4>
-              {storageMode === 'cloud' && (
-                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-mono leading-none border uppercase tracking-wider font-bold ${
-                  bgSyncEnabled
-                    ? 'bg-emerald-950 text-emerald-400 border-emerald-900 animate-pulse'
-                    : 'bg-neutral-900 text-neutral-500 border-neutral-800'
-                }`}>
-                  {bgSyncEnabled ? 'ENABLED' : 'DISABLED'}
-                </span>
-              )}
+              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-mono leading-none border uppercase tracking-wider font-bold bg-neutral-900 text-neutral-400 border-neutral-800">
+                {bgSyncEnabled && storageMode === 'cloud' ? 'ENABLED' : 'DISABLED (SAFE MODE)'}
+              </span>
             </div>
             <p className="text-[11px] text-neutral-400 leading-relaxed font-semibold">
-              Refresh pupil rosters, student details, and cash check-ins automatically in the background (every 30 seconds) while online. Ensures multi-device changes persist in near-realtime.
+              Automatic background synchronization polling is disabled by default to prevent unexpected data overwrites or fallback loss when restoring backups. Data changes are saved directly and manual cloud sync remains available whenever requested.
             </p>
-            
-            {bgSyncEnabled && storageMode === 'cloud' && (
-              <div className="flex items-center gap-3 text-[10px] font-mono font-bold uppercase tracking-wider text-neutral-500">
-                <span className="flex items-center gap-1.5">
-                  Status: 
-                  {bgSyncStatus === 'syncing' ? (
-                    <span className="text-amber-400 animate-pulse flex items-center gap-1">
-                      <span className="inline-block animate-spin">⌛</span> Syncing...
-                    </span>
-                  ) : bgSyncStatus === 'success' ? (
-                    <span className="text-emerald-400">✓ Sync Active & Clean</span>
-                  ) : bgSyncStatus === 'error' ? (
-                    <span className="text-red-400">✗ Sync Timeout / Error</span>
-                  ) : (
-                    <span className="text-neutral-400">Idle</span>
-                  )}
-                </span>
-                {lastBgSyncTime && (
-                  <span className="border-l border-neutral-800 pl-3">
-                    Last Active Handshake: <strong className="text-neutral-300">{lastBgSyncTime}</strong>
-                  </span>
-                )}
-              </div>
-            )}
           </div>
 
           <div className="flex items-center gap-3 shrink-0 self-end md:self-auto">
@@ -754,14 +724,14 @@ Esi Baah,B1,Female,Akwasi Baah,0240007788,Primary,0`;
                 checked={bgSyncEnabled}
                 onChange={(e) => {
                   if (storageMode !== 'cloud' && e.target.checked) {
-                    showToast('Please enable Firestore Cloud Sync first to trigger background syncing.');
+                    showToast('Please enable Firestore Cloud Sync first.');
                     return;
                   }
                   setBgSyncEnabled(e.target.checked);
                   showToast(
                     e.target.checked
-                      ? 'Background sync enabled. The system will sync with Firebase every 30 seconds.'
-                      : 'Background sync disabled. Switched back to manual-only synchronization.'
+                      ? 'Background sync enabled.'
+                      : 'Background sync disabled. Operating in safe direct mode.'
                   );
                 }}
                 disabled={storageMode !== 'cloud'}
@@ -1304,37 +1274,6 @@ Esi Baah,B1,Female,Akwasi Baah,0240007788,Primary,0`;
               </span>
               {backups.length > 0 && (
                 <div className="shrink-0">
-                  {showBackupPurgeConfirm ? (
-                    <div className="flex items-center gap-2">
-                      <span className="text-[9px] font-mono font-bold uppercase text-red-400 animate-pulse">WIPE ALL?</span>
-                      <button
-                        type="button"
-                        onClick={() => setShowBackupPurgeConfirm(false)}
-                        className="text-[9px] font-bold uppercase text-neutral-400 hover:text-white underline font-mono cursor-pointer"
-                      >
-                        CANCEL
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          clearAllBackups();
-                          setShowBackupPurgeConfirm(false);
-                          showToast('Cleared all local backups.');
-                        }}
-                        className="text-[9px] font-bold uppercase text-red-500 hover:text-red-400 underline font-mono cursor-pointer"
-                      >
-                        CONFIRM
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setShowBackupPurgeConfirm(true)}
-                      className="text-[9px] font-bold uppercase text-neutral-500 hover:text-red-400 underline font-mono transition-colors cursor-pointer"
-                    >
-                      Purge Backup Cache
-                    </button>
-                  )}
                 </div>
               )}
             </div>
@@ -1483,352 +1422,197 @@ Esi Baah,B1,Female,Akwasi Baah,0240007788,Primary,0`;
             </div>
           </div>
 
-          {/* Clean Up Repeated & Advance Payments Section */}
-          {(() => {
-            const map = new Map<string, number>();
-            payments.forEach(p => {
-              const k = `${p.studentId}_${p.date}`;
-              map.set(k, (map.get(k) || 0) + 1);
-            });
-            let dupCount = 0;
-            map.forEach(c => { if (c > 1) dupCount += (c - 1); });
 
-            const advCount = payments.filter(p => {
-              const n = (p.notes || '').toLowerCase();
-              return n.includes('advance') || n.includes('prepaid') || n.includes('covered') || n.includes('block prepaid') || n.includes('top-up added') || (p.amount === 0 && n.includes('covered'));
-            }).length;
 
-            return (
-              <div className="p-5 bg-neutral-900/60 border-2 border-amber-500/40 rounded flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                <div className="space-y-1 max-w-xl">
-                  <span className="text-[10px] font-bold text-amber-400 uppercase tracking-widest font-mono flex items-center gap-1">
-                    <Trash2 size={12} /> Payment Ledger Maintenance
-                  </span>
-                  <h5 className="text-sm font-bold uppercase text-white font-mono">Clean Up Repeated & Advance Payments</h5>
-                  <p className="text-[11px] text-neutral-300 font-medium leading-relaxed">
-                    Now that bulk date entry is active, you can clean up repeated fee entries on the same day (<strong className="text-red-400 font-mono">{dupCount} duplicate records</strong> found) and purge advance fee block markers (<strong className="text-amber-400 font-mono">{advCount} advance records</strong> found).
-                  </p>
-                </div>
-
-                <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto shrink-0 font-mono">
-                  <button
-                    type="button"
-                    disabled={dupCount === 0}
-                    onClick={() => {
-                      const res = purgeDuplicatePayments();
-                      showToast(res.message);
-                    }}
-                    className="px-3.5 py-2.5 bg-red-950/80 hover:bg-red-900 border border-red-700 text-red-200 text-xs font-bold uppercase tracking-wider transition-all disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
-                  >
-                    Purge Duplicates ({dupCount})
-                  </button>
-                  <button
-                    type="button"
-                    disabled={advCount === 0}
-                    onClick={() => {
-                      const res = purgeAdvancePayments();
-                      showToast(res.message);
-                    }}
-                    className="px-3.5 py-2.5 bg-amber-950/80 hover:bg-amber-900 border border-amber-700 text-amber-200 text-xs font-bold uppercase tracking-wider transition-all disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
-                  >
-                    Purge Advances ({advCount})
-                  </button>
-                  <button
-                    type="button"
-                    disabled={dupCount === 0 && advCount === 0}
-                    onClick={() => {
-                      const res = purgeRepeatedAndAdvancePayments({ duplicates: true, advance: true });
-                      showToast(res.message);
-                    }}
-                    className="px-4 py-2.5 bg-amber-400 hover:bg-amber-300 text-black text-xs font-black uppercase tracking-wider transition-all disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer shadow-md"
-                  >
-                    Clean All ({dupCount + advCount})
-                  </button>
-                </div>
-              </div>
-            );
-          })()}
-
-          {/* Delete All Automatic Entries & Holiday Charges Banner */}
-          <div className="p-4 bg-red-950/30 border border-red-900/60 rounded flex flex-col md:flex-row items-center justify-between gap-4">
+          {/* Automated Term Transition Carry-Forward Banner */}
+          <div className="p-4 bg-indigo-950/40 border-2 border-indigo-800/80 rounded flex flex-col md:flex-row items-center justify-between gap-4 font-mono">
             <div className="space-y-1">
-              <span className="text-[9px] font-bold text-red-400 uppercase tracking-wider font-mono">Policy Compliance Guard</span>
+              <span className="text-[9px] font-bold text-indigo-400 uppercase tracking-wider font-mono">Academic Term Transition Maintenance</span>
               <h5 className="text-sm font-bold uppercase text-white font-mono flex items-center gap-2">
-                <span>Delete All Automatic & Holiday Entries</span>
+                <RefreshCw size={15} className="text-indigo-400" />
+                <span>Automated Term Balances Carry-Forward</span>
               </h5>
               <p className="text-[11px] text-neutral-300 leading-relaxed">
-                Purges all auto-generated entries, system-created debt logs, auto-booked journal transactions, and any attendance/GHC 5.00 daily fee records mistakenly logged on public holiday dates. Pupils do not pay GHC 5.00 on public holidays.
+                Calculates each active pupil's remaining unpaid term fee balance and converts it into their <strong className="text-amber-400">Legacy Debt</strong> balance for the next term, preserving all historical unpaid balances.
               </p>
             </div>
             <div className="flex flex-col sm:flex-row gap-2 shrink-0 font-mono">
               <button
                 type="button"
                 onClick={() => {
-                  const res = purgePublicHolidayPayments();
-                  showToast(res.message);
+                  setDeleteConfirmDetails({
+                    title: "TERM TRANSITION CARRY-FORWARD",
+                    subtitle: "Calculates unpaid balances and resets active term daily logs.",
+                    affectedCountMessage: "Converts remaining unpaid balances into Legacy Debt for the next term.",
+                    whatWillBeDeleted: [
+                      "Active term daily check-in and payment logs (converted into legacy arrear balance)",
+                      "Current term active ledger session state"
+                    ],
+                    whatWillBePreserved: [
+                      "Each pupil's overall financial balance (safely moved to Legacy Debt)",
+                      `All ${students.length} registered pupil profiles & class assignments`,
+                      "Exams fee payments & expense records"
+                    ],
+                    verificationText: "TRANSITION",
+                    confirmButtonText: "CONFIRM TERM CARRY-FORWARD",
+                    onConfirm: () => {
+                      const res = carryForwardTermBalances({ resetPaymentsForNewTerm: true });
+                      setDeleteConfirmDetails(null);
+                      showToast(res.message);
+                    },
+                    onCancel: () => setDeleteConfirmDetails(null)
+                  });
                 }}
-                className="px-3.5 py-2.5 bg-amber-950/80 hover:bg-amber-900 border border-amber-700 text-amber-200 text-xs font-bold uppercase tracking-wider transition-all cursor-pointer"
+                className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black uppercase tracking-wider transition-all cursor-pointer shadow-md rounded-sm"
               >
-                Clear Holiday Charges Only
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (window.confirm("Are you sure you want to delete ALL automatic entries, system-created debt logs, auto-booked ledger records, and holiday payments?")) {
-                    const res = deleteAllAutomaticEntries();
-                    showToast(res.message);
-                  }
-                }}
-                className="px-4 py-2.5 bg-red-600 hover:bg-red-500 text-white text-xs font-black uppercase tracking-wider transition-all cursor-pointer shadow-lg"
-              >
-                Delete All Automatic Entries
+                Execute Carry-Forward (Reset Term Logs)
               </button>
             </div>
           </div>
 
-          {/* Granular Administrative Purge Control Panel */}
-          <div className="p-5 bg-neutral-900/80 border border-red-900/50 rounded-lg space-y-4 shadow-xl">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-neutral-800 pb-3">
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <span className="px-2 py-0.5 text-[9px] font-black uppercase font-mono bg-red-950 text-red-400 border border-red-800 rounded">
-                    Granular Administrative Purge
-                  </span>
-                  <span className="text-xs font-mono font-bold text-emerald-400 flex items-center gap-1">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                    Master Roster Protected ({students.length} Pupils Kept Intact)
-                  </span>
-                </div>
-                <h4 className="text-base font-bold uppercase text-white font-mono flex items-center gap-2">
-                  Selective Data Purge Utility
-                </h4>
-                <p className="text-xs text-neutral-400">
-                  Select specific historical datasets below to clear them. <strong className="text-amber-300">Your master roster of registered pupils will remain 100% safe and intact.</strong>
-                </p>
-              </div>
-              
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPurgeOptions({
-                      clearDailyPayments: true,
-                      resetAttendanceLogs: true,
-                      removeExamRecords: true,
-                      clearExpenses: true,
-                      clearJournalEntries: true,
-                      purgeDemoRoster: true,
-                    });
-                  }}
-                  className="px-2.5 py-1 text-[10px] font-mono font-bold uppercase text-neutral-400 hover:text-white border border-neutral-800 hover:border-neutral-700 bg-neutral-950 transition-colors cursor-pointer"
-                >
-                  Select All
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPurgeOptions({
-                      clearDailyPayments: false,
-                      resetAttendanceLogs: false,
-                      removeExamRecords: false,
-                      clearExpenses: false,
-                      clearJournalEntries: false,
-                      purgeDemoRoster: false,
-                    });
-                  }}
-                  className="px-2.5 py-1 text-[10px] font-mono font-bold uppercase text-neutral-400 hover:text-white border border-neutral-800 hover:border-neutral-700 bg-neutral-950 transition-colors cursor-pointer"
-                >
-                  Deselect All
-                </button>
-              </div>
+          {/* Teacher Hard-Copy Reconciliation & Duplicate Audit Center */}
+          <div className="p-4 bg-amber-950/30 border-2 border-amber-500/80 rounded flex flex-col md:flex-row items-center justify-between gap-4 font-mono">
+            <div className="space-y-1">
+              <span className="text-[9px] font-bold text-amber-400 uppercase tracking-wider font-mono flex items-center gap-1">
+                <ShieldAlert size={12} /> Physical Hard-Copy Verification Center
+              </span>
+              <h5 className="text-sm font-bold uppercase text-white font-mono flex items-center gap-2">
+                <ShieldAlert size={15} className="text-amber-400" />
+                <span>Pupil Payments Hard-Copy Reconciliation & Duplicate Audit</span>
+              </h5>
+              <p className="text-[11px] text-neutral-300 leading-relaxed">
+                Audits all same-day multi-payment records side-by-side. Differentiates true network sync ghosts from legitimate multiple installments recorded in teachers' physical hard-copy paper receipt booklets before purging.
+              </p>
             </div>
-
-            {/* Checkbox Options Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {/* 1. Clear All Daily Payments */}
-              <label className={`p-3 rounded border cursor-pointer transition-all flex items-start gap-3 ${purgeOptions.clearDailyPayments ? 'bg-red-950/40 border-red-600/80 text-white' : 'bg-neutral-950/60 border-neutral-800 hover:border-neutral-700 text-neutral-300'}`}>
-                <input
-                  type="checkbox"
-                  checked={!!purgeOptions.clearDailyPayments}
-                  onChange={(e) => setPurgeOptions(prev => ({ ...prev, clearDailyPayments: e.target.checked }))}
-                  className="mt-1 rounded border-neutral-700 text-red-600 focus:ring-red-500 accent-red-600 cursor-pointer"
-                />
-                <div className="space-y-1 w-full">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-bold font-mono uppercase text-white">Clear Daily Fee Payments</span>
-                    <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold bg-neutral-800 text-amber-300 rounded">
-                      {payments.length} records
-                    </span>
-                  </div>
-                  <p className="text-[10px] text-neutral-400 leading-tight">
-                    Clears fee transactions & receipts. Registered pupils stay intact.
-                  </p>
-                </div>
-              </label>
-
-              {/* 2. Reset Attendance Logs */}
-              <label className={`p-3 rounded border cursor-pointer transition-all flex items-start gap-3 ${purgeOptions.resetAttendanceLogs ? 'bg-red-950/40 border-red-600/80 text-white' : 'bg-neutral-950/60 border-neutral-800 hover:border-neutral-700 text-neutral-300'}`}>
-                <input
-                  type="checkbox"
-                  checked={!!purgeOptions.resetAttendanceLogs}
-                  onChange={(e) => setPurgeOptions(prev => ({ ...prev, resetAttendanceLogs: e.target.checked }))}
-                  className="mt-1 rounded border-neutral-700 text-red-600 focus:ring-red-500 accent-red-600 cursor-pointer"
-                />
-                <div className="space-y-1 w-full">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-bold font-mono uppercase text-white">Reset Attendance Logs</span>
-                    <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold bg-neutral-800 text-amber-300 rounded">
-                      {payments.filter(p => p.isAbsent || p.amount === 0).length} logs
-                    </span>
-                  </div>
-                  <p className="text-[10px] text-neutral-400 leading-tight">
-                    Clears absent marks and zero-pay check-in entries from registers.
-                  </p>
-                </div>
-              </label>
-
-              {/* 3. Remove All Exam Records */}
-              <label className={`p-3 rounded border cursor-pointer transition-all flex items-start gap-3 ${purgeOptions.removeExamRecords ? 'bg-red-950/40 border-red-600/80 text-white' : 'bg-neutral-950/60 border-neutral-800 hover:border-neutral-700 text-neutral-300'}`}>
-                <input
-                  type="checkbox"
-                  checked={!!purgeOptions.removeExamRecords}
-                  onChange={(e) => setPurgeOptions(prev => ({ ...prev, removeExamRecords: e.target.checked }))}
-                  className="mt-1 rounded border-neutral-700 text-red-600 focus:ring-red-500 accent-red-600 cursor-pointer"
-                />
-                <div className="space-y-1 w-full">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-bold font-mono uppercase text-white">Remove Exam Records</span>
-                    <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold bg-neutral-800 text-amber-300 rounded">
-                      {(examsPayments?.length || 0) + (examsExpenses?.length || 0)} entries
-                    </span>
-                  </div>
-                  <p className="text-[10px] text-neutral-400 leading-tight">
-                    Removes exam fee receipts, assessment payments, and exam expenses.
-                  </p>
-                </div>
-              </label>
-
-              {/* 4. Clear Operational Expenses */}
-              <label className={`p-3 rounded border cursor-pointer transition-all flex items-start gap-3 ${purgeOptions.clearExpenses ? 'bg-red-950/40 border-red-600/80 text-white' : 'bg-neutral-950/60 border-neutral-800 hover:border-neutral-700 text-neutral-300'}`}>
-                <input
-                  type="checkbox"
-                  checked={!!purgeOptions.clearExpenses}
-                  onChange={(e) => setPurgeOptions(prev => ({ ...prev, clearExpenses: e.target.checked }))}
-                  className="mt-1 rounded border-neutral-700 text-red-600 focus:ring-red-500 accent-red-600 cursor-pointer"
-                />
-                <div className="space-y-1 w-full">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-bold font-mono uppercase text-white">Clear Operational Expenses</span>
-                    <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold bg-neutral-800 text-amber-300 rounded">
-                      {expenses.length} records
-                    </span>
-                  </div>
-                  <p className="text-[10px] text-neutral-400 leading-tight">
-                    Clears purchasing logs and operational school expense history.
-                  </p>
-                </div>
-              </label>
-
-              {/* 5. Clear Journal & Ledger Entries */}
-              <label className={`p-3 rounded border cursor-pointer transition-all flex items-start gap-3 ${purgeOptions.clearJournalEntries ? 'bg-red-950/40 border-red-600/80 text-white' : 'bg-neutral-950/60 border-neutral-800 hover:border-neutral-700 text-neutral-300'}`}>
-                <input
-                  type="checkbox"
-                  checked={!!purgeOptions.clearJournalEntries}
-                  onChange={(e) => setPurgeOptions(prev => ({ ...prev, clearJournalEntries: e.target.checked }))}
-                  className="mt-1 rounded border-neutral-700 text-red-600 focus:ring-red-500 accent-red-600 cursor-pointer"
-                />
-                <div className="space-y-1 w-full">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-bold font-mono uppercase text-white">Clear Journal & Ledger Entries</span>
-                    <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold bg-neutral-800 text-amber-300 rounded">
-                      {journalEntries?.length || 0} entries
-                    </span>
-                  </div>
-                  <p className="text-[10px] text-neutral-400 leading-tight">
-                    Clears double-entry journal logs and auto-booked ledger records.
-                  </p>
-                </div>
-              </label>
-
-              {/* 6. Purge Demo / Simulation Data */}
-              <label className={`p-3 rounded border cursor-pointer transition-all flex items-start gap-3 ${purgeOptions.purgeDemoRoster ? 'bg-red-950/40 border-red-600/80 text-white' : 'bg-neutral-950/60 border-neutral-800 hover:border-neutral-700 text-neutral-300'}`}>
-                <input
-                  type="checkbox"
-                  checked={!!purgeOptions.purgeDemoRoster}
-                  onChange={(e) => setPurgeOptions(prev => ({ ...prev, purgeDemoRoster: e.target.checked }))}
-                  className="mt-1 rounded border-neutral-700 text-red-600 focus:ring-red-500 accent-red-600 cursor-pointer"
-                />
-                <div className="space-y-1 w-full">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-bold font-mono uppercase text-emerald-400">Purge Demo Roster Data</span>
-                    <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-800 rounded">
-                      Safe
-                    </span>
-                  </div>
-                  <p className="text-[10px] text-neutral-400 leading-tight">
-                    Removes legacy simulation student IDs (s1..s27) if present.
-                  </p>
-                </div>
-              </label>
+            <div className="flex flex-col sm:flex-row gap-2 shrink-0 font-mono">
+              <button
+                type="button"
+                onClick={() => setShowReconciliationModal(true)}
+                className="px-4 py-2.5 bg-amber-400 hover:bg-amber-300 text-black text-xs font-black uppercase tracking-wider transition-all cursor-pointer shadow-md rounded-sm flex items-center gap-1.5 border-2 border-amber-500"
+              >
+                <ShieldAlert size={14} className="stroke-[2.5]" />
+                <span>🔍 Open Reconciliation Center</span>
+              </button>
             </div>
+          </div>
 
-            {/* Action Execute Bar */}
-            <div className="pt-2 border-t border-neutral-800 flex flex-col sm:flex-row items-center justify-between gap-3 font-mono">
-              <div className="text-[11px] text-neutral-400">
-                {Object.values(purgeOptions).some(Boolean) ? (
-                  <span className="text-amber-400 font-bold flex items-center gap-1">
-                    <AlertTriangle className="w-3.5 h-3.5" />
-                    Ready to purge selected categories. Real registered pupils remain 100% protected.
-                  </span>
-                ) : (
-                  <span className="text-neutral-500 italic">
-                    Select one or more checkboxes above to activate the administrative purge.
-                  </span>
-                )}
-              </div>
+          {/* Clean Out-of-Term, Post-Term & Duplicate Payments Banner */}
+          <div className="p-4 bg-rose-950/40 border-2 border-rose-800/80 rounded flex flex-col md:flex-row items-center justify-between gap-4 font-mono">
+            <div className="space-y-1">
+              <span className="text-[9px] font-bold text-rose-400 uppercase tracking-wider font-mono">Ledger Boundary & Duplicate Cleanup</span>
+              <h5 className="text-sm font-bold uppercase text-white font-mono flex items-center gap-2">
+                <Trash2 size={15} className="text-rose-400" />
+                <span>Clean Post-Term (Beyond Term End Date) & Duplicate Payment Records</span>
+              </h5>
+              <p className="text-[11px] text-neutral-300 leading-relaxed">
+                Scans all class payment logs to detect and permanently remove duplicate payment records on the same day, public holiday entries, and post-term entries logged beyond the term end date (e.g. after July 29, 2026).
+              </p>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2 shrink-0 font-mono">
+              <button
+                type="button"
+                onClick={() => {
+                  setDeleteConfirmDetails({
+                    title: "PURGE POST-TERM & DUPLICATE LOGS",
+                    subtitle: "Removes out-of-term payments and repeated same-day entries.",
+                    affectedCountMessage: "Scans class registers and purges invalid dates and repeated entries.",
+                    whatWillBeDeleted: [
+                      "Payment entries recorded on dates beyond official term end dates",
+                      "Duplicate payment submissions recorded for the same pupil on the same date"
+                    ],
+                    whatWillBePreserved: [
+                      "Primary valid daily fee payment records logged within active term dates",
+                      "Exams fee payment entries & expense logs",
+                      "Registered pupil profiles"
+                    ],
+                    verificationText: "PURGE",
+                    confirmButtonText: "CONFIRM PURGE POST-TERM & DUPLICATES",
+                    onConfirm: () => {
+                      const res = purgeClassOutOfTermAndDuplicates();
+                      setDeleteConfirmDetails(null);
+                      showToast(res.message);
+                    },
+                    onCancel: () => setDeleteConfirmDetails(null)
+                  });
+                }}
+                className="px-4 py-2.5 bg-rose-700 hover:bg-rose-600 text-white text-xs font-black uppercase tracking-wider transition-all cursor-pointer shadow-md rounded-sm flex items-center gap-1.5"
+              >
+                <span>🧹 Purge Post-Term & Duplicates</span>
+              </button>
+            </div>
+          </div>
 
-              <div>
-                {showAdminPurgeConfirm ? (
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setShowAdminPurgeConfirm(false)}
-                      className="px-3 py-2 text-xs font-bold uppercase text-neutral-400 hover:text-white border border-neutral-800 bg-neutral-950 cursor-pointer"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const res = administrativePurge(purgeOptions);
-                        setShowAdminPurgeConfirm(false);
-                        setPurgeOptions({
-                          clearDailyPayments: false,
-                          resetAttendanceLogs: false,
-                          removeExamRecords: false,
-                          clearExpenses: false,
-                          clearJournalEntries: false,
-                          purgeDemoRoster: false,
-                        });
-                        showToast(res.message);
-                      }}
-                      className="px-4 py-2 text-xs font-black uppercase text-white bg-red-600 hover:bg-red-500 border border-red-500 transition-colors shadow-lg animate-pulse cursor-pointer"
-                    >
-                      Confirm Execution
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    disabled={!Object.values(purgeOptions).some(Boolean)}
-                    onClick={() => setShowAdminPurgeConfirm(true)}
-                    className="px-5 py-2.5 text-xs font-black uppercase text-white bg-red-900/80 hover:bg-red-700 border border-red-600 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-all shadow-md flex items-center gap-2"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                    Execute Administrative Purge
-                  </button>
-                )}
-              </div>
+          {/* Delete Specific Class Fee Records (e.g. B5 Week 1 to Final Week) */}
+          <div className="p-4 bg-red-950/60 border-2 border-red-500/90 rounded flex flex-col md:flex-row items-center justify-between gap-4 font-mono">
+            <div className="space-y-1">
+              <span className="text-[9px] font-bold text-red-400 uppercase tracking-wider font-mono flex items-center gap-1">
+                <Trash2 size={12} /> Target Class Administrative Wipe Tool
+              </span>
+              <h5 className="text-sm font-bold uppercase text-white font-mono flex items-center gap-2">
+                <Trash2 size={15} className="text-red-400" />
+                <span>Delete Entire Class Fee Records (e.g. B5 Week 1 to Final Week)</span>
+              </h5>
+              <p className="text-[11px] text-neutral-300 leading-relaxed">
+                Wipe fee payment records for a specific class cohort (e.g. B5) across the full term, specific weeks, or custom date ranges while pupil profiles, student registers, and other classes remain 100% intact. An automatic snapshot backup is created before deletion.
+              </p>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2 shrink-0 font-mono">
+              <button
+                type="button"
+                onClick={() => setShowClearClassFeesModal(true)}
+                className="px-4 py-2.5 bg-red-600 hover:bg-red-500 text-white text-xs font-black uppercase tracking-wider transition-all cursor-pointer shadow-md rounded-sm flex items-center gap-1.5 border border-red-400"
+              >
+                <Trash2 size={14} className="stroke-[2.5]" />
+                <span>🗑️ Delete Class Fee Records</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Purge All Daily Payments Only Banner */}
+          <div className="p-4 bg-red-950/50 border-2 border-red-700/80 rounded flex flex-col md:flex-row items-center justify-between gap-4 font-mono">
+            <div className="space-y-1">
+              <span className="text-[9px] font-bold text-red-400 uppercase tracking-wider font-mono">Daily Fee Ledger Wipe</span>
+              <h5 className="text-sm font-bold uppercase text-white font-mono flex items-center gap-2">
+                <Trash2 size={15} className="text-red-400" />
+                <span>Purge All Daily Fee Payments (All Classes)</span>
+              </h5>
+              <p className="text-[11px] text-neutral-300 leading-relaxed">
+                Deletes all daily fee payment logs across all class registers. <strong className="text-emerald-400">Exams fee payments and expense records remain untouched and completely safe.</strong>
+              </p>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2 shrink-0 font-mono">
+              <button
+                type="button"
+                onClick={() => {
+                  setDeleteConfirmDetails({
+                    title: "PURGE ALL DAILY FEE PAYMENTS",
+                    subtitle: "Wipes all daily fee check-in logs across all class registers.",
+                    affectedCountMessage: `Action will delete all ${payments.length} daily fee payment entries currently stored in the database.`,
+                    whatWillBeDeleted: [
+                      `All ${payments.length} daily fee payment records across all class registers`,
+                      "All daily check-in marks, absences, and custom daily fee adjustments"
+                    ],
+                    whatWillBePreserved: [
+                      "Exams fee payment records & terminal exam balances",
+                      "School expense logs & budget targets",
+                      `All ${students.length} registered pupil profiles & class assignments`,
+                      "Staff & user login accounts",
+                      "Term configuration settings"
+                    ],
+                    verificationText: "DELETE",
+                    confirmButtonText: "YES, PURGE ALL DAILY PAYMENTS NOW",
+                    onConfirm: () => {
+                      clearAllPayments();
+                      setDeleteConfirmDetails(null);
+                      showToast("✅ Successfully purged all daily fee payments for all classes!");
+                    },
+                    onCancel: () => setDeleteConfirmDetails(null)
+                  });
+                }}
+                className="px-4 py-2.5 bg-red-800 hover:bg-red-700 text-white text-xs font-black uppercase tracking-wider transition-all cursor-pointer shadow-md rounded-sm flex items-center gap-1.5"
+              >
+                <span>🗑️ Purge Daily Payments Only</span>
+              </button>
             </div>
           </div>
         </div>
@@ -1851,8 +1635,26 @@ Esi Baah,B1,Female,Akwasi Baah,0240007788,Primary,0`;
             <button
               type="button"
               onClick={() => {
-                resetData();
-                showToast('✅ Successfully restored all registered pupils and ledger data!');
+                setDeleteConfirmDetails({
+                  title: "RESTORE SYSTEM LEDGER DATA",
+                  subtitle: "Reloads default clean student roster and initializes registers.",
+                  affectedCountMessage: "Resets transient unsaved local changes and restores registered roster.",
+                  whatWillBeDeleted: [
+                    "Transient unsaved local session adjustments"
+                  ],
+                  whatWillBePreserved: [
+                    "System database backup snapshots automatically saved prior to execution",
+                    "User accounts & staff setup"
+                  ],
+                  verificationText: "RESTORE",
+                  confirmButtonText: "CONFIRM DATA RESTORE NOW",
+                  onConfirm: () => {
+                    resetData();
+                    setDeleteConfirmDetails(null);
+                    showToast('✅ Successfully restored all registered pupils and ledger data!');
+                  },
+                  onCancel: () => setDeleteConfirmDetails(null)
+                });
               }}
               className="w-full md:w-auto py-3.5 px-6 text-xs font-black bg-amber-400 hover:bg-amber-300 text-black border-2 border-amber-400 uppercase tracking-widest cursor-pointer transition-all font-mono shadow-md flex items-center justify-center gap-2"
             >
@@ -1967,6 +1769,21 @@ Esi Baah,B1,Female,Akwasi Baah,0240007788,Primary,0`;
           </div>
         </div>
       </div>
+
+      {/* Render DeleteConfirmationModal */}
+      <DeleteConfirmationModal details={deleteConfirmDetails} />
+
+      {/* Duplicate Payment Audit & Hard-Copy Reconciliation Modal */}
+      <DuplicateReconciliationModal
+        isOpen={showReconciliationModal}
+        onClose={() => setShowReconciliationModal(false)}
+      />
+
+      {/* Delete Entire Class Fees Modal */}
+      <ClearClassFeesModal
+        isOpen={showClearClassFeesModal}
+        onClose={() => setShowClearClassFeesModal(false)}
+      />
     </div>
   );
 };

@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useApp, calculateStudentFinancialState } from '../context/AppContext';
+import { getTermGapBreaks } from '../utils/termUtils';
 import { motion } from 'motion/react';
 import { 
   X, 
@@ -373,6 +374,34 @@ export function AcademicHistoryDrawer({ isOpen, onClose }: AcademicHistoryDrawer
                 );
               })}
             </div>
+
+            {/* Calendar Vacation Breaks Between Terms */}
+            {(() => {
+              const termGaps = getTermGapBreaks(terms);
+              if (termGaps.length === 0) return null;
+              return (
+                <div className="space-y-2 pt-2">
+                  <h4 className="text-[10px] font-black uppercase tracking-widest font-mono text-amber-400">
+                    🌴 Calendar Vacation Breaks Between Terms (GHC 0.00 Fee)
+                  </h4>
+                  <div className="space-y-1.5 font-mono text-[10px]">
+                    {termGaps.map((gap, i) => (
+                      <div key={i} className="bg-amber-950/20 border border-amber-500/30 p-2.5 flex justify-between items-center text-amber-300">
+                        <div>
+                          <div className="font-bold">{gap.label}</div>
+                          <div className="text-[9px] text-neutral-400">
+                            {gap.startDate} &rarr; {gap.endDate} ({gap.calendarDaysCount} Calendar Days &bull; {gap.weekdaysCount} Weekdays)
+                          </div>
+                        </div>
+                        <span className="text-[8px] bg-amber-400 text-black font-black uppercase px-1.5 py-0.5 rounded shrink-0">
+                          VACATION
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </div>
 

@@ -67,6 +67,7 @@ export interface PaymentRecord {
   momoStatus?: 'pending' | 'successful' | 'failed' | 'refunded';
   momoProvider?: string;
   momoPhoneNumber?: string;
+  termId?: string;
 }
 
 export type UserRole = 'Administrator' | 'Teacher' | 'Accountant' | 'Headmaster';
@@ -84,6 +85,16 @@ export interface TeacherEthicsEvaluation {
   evaluatedBy?: string;
   evaluatedDate?: string;
   evaluationNotes?: string;
+}
+
+export interface StaffPermissions {
+  canRecordPayments?: boolean;
+  canEditPayments?: boolean;
+  canDeletePayments?: boolean;
+  canManageStudents?: boolean;
+  canManageExams?: boolean;
+  canViewReports?: boolean;
+  canManageSettings?: boolean;
 }
 
 export interface UserAccount {
@@ -115,6 +126,7 @@ export interface UserAccount {
   managementSignatureUrl?: string; // Signatory officer digital signature
   personalAddress?: string; // Teacher/Staff personal address for contracts
   ethicsEvaluation?: TeacherEthicsEvaluation; // Professional ethics & salary promotion analysis
+  permissions?: StaffPermissions; // Toggleable granular staff permissions
   updatedAt?: string; // ISO string timestamp for LWW conflict resolution
 }
 
@@ -126,6 +138,7 @@ export interface Term {
   schoolDays: string[]; // Mon-Fri dates generated from startDate
   active: boolean;
   publicHolidays?: string[]; // Array of YYYY-MM-DD dates representing holidays
+  isCompleted?: boolean; // True when term is completed/gate is closed
   updatedAt?: string; // ISO string timestamp for LWW conflict resolution
 }
 
@@ -241,6 +254,10 @@ export interface SystemSettings {
   whatsappWebhookUrl?: string;
   whatsappWebhookToken?: string;
   theme?: 'dark' | 'daylight';
+  pupilIdFormat?: 'PREFIX_CLASS_NUM' | 'PREFIX_YEAR_CLASS_NUM' | 'PREFIX_YEAR_NUM' | 'PREFIX_NUM' | 'CLASS_NUM' | 'CUSTOM_NUM';
+  pupilIdPrefix?: string; // e.g. "SHC"
+  pupilIdPadding?: number; // e.g. 2, 3, or 4 (default 3)
+  pupilIdSeparator?: string; // e.g. "-" or "/"
 }
 
 export interface BudgetTarget {
@@ -351,6 +368,23 @@ export interface AuditLog {
   studentId?: string;
   studentName?: string;
   amount?: number;
+  snapshotData?: any;
+}
+
+export interface TrashItem {
+  id: string;
+  originalId: string;
+  itemType: 'payment' | 'student' | 'expense' | 'bulk_payments';
+  recordData: any;
+  deletedAt: string;
+  expiresAt: string;
+  deletedBy: string;
+  reason: string;
+  studentId?: string;
+  studentName?: string;
+  amount?: number;
+  itemCount?: number;
+  class?: string;
 }
 
 export interface JournalEntry {
@@ -382,6 +416,57 @@ export interface AdministrativePurgeResult {
   purgedDemoStudentsCount: number;
   message: string;
 }
+
+export interface DuplicatePaymentAuditItem {
+  id: string;
+  studentId: string;
+  studentName: string;
+  class: StudentClass;
+  date: string;
+  amount: number;
+  paymentMethod?: string;
+  notes?: string;
+  timestamp: string;
+  collectedBy: string;
+  verified: boolean;
+  isAbsent?: boolean;
+  duplicateType: 'exact_ghost' | 'redundant_zero' | 'legitimate_installment';
+}
+
+export interface DuplicatePaymentAuditGroup {
+  groupKey: string;
+  studentId: string;
+  studentName: string;
+  studentClass: StudentClass;
+  date: string;
+  records: DuplicatePaymentAuditItem[];
+  hasExactGhost: boolean;
+  hasRedundantZero: boolean;
+  hasLegitimateInstallment: boolean;
+  totalAmount: number;
+}
+
+export interface DeleteClassFeesOptions {
+  targetClass: StudentClass | 'ALL';
+  scope: 'full_term' | 'specific_weeks' | 'custom_range' | 'all_time';
+  selectedWeeks?: number[];
+  startDate?: string;
+  endDate?: string;
+  feeCategory?: 'daily_only' | 'exams_only' | 'both';
+  studentIds?: string[];
+}
+
+export interface DeleteClassFeesResult {
+  success: boolean;
+  deletedDailyPaymentsCount: number;
+  deletedExamsPaymentsCount: number;
+  totalAmountCleared: number;
+  affectedStudentsCount: number;
+  targetClass: string;
+  dateSummary: string;
+  message: string;
+}
+
 
 
 

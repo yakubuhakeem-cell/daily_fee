@@ -5,12 +5,13 @@
 
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
-import { useApp, getStudentB9ExpiryDate, getDiscountedTermFee } from '../context/AppContext';
-import { StudentClass, Student, UserRole, SchoolCategory, TeacherEthicsEvaluation } from '../types';
-import { Plus, UserPlus, Trash2, Edit2, ShieldAlert, Check, X, ToggleLeft, ToggleRight, Database, Server, RefreshCw, Copy, Share2, Users, BellRing, MessageSquareCode, UserCheck, Camera, Upload, Download, Search, QrCode, Printer, Contact, Award, DollarSign, Info, MessageSquare, Smartphone, Sliders, Bot, FileText, FileSignature, CalendarDays, ChevronDown, ChevronRight, Scale, LayoutGrid, List, Sparkles, KeyRound, Percent, TrendingUp, Coins, BadgePercent, ArrowUpRight, CheckCircle, AlertTriangle } from 'lucide-react';
+import { useApp, getStudentB9ExpiryDate, getDiscountedTermFee, isTermPayer } from '../context/AppContext';
+import { StudentClass, Student, UserRole, SchoolCategory, TeacherEthicsEvaluation, StaffPermissions, UserAccount } from '../types';
+import { Plus, UserPlus, Trash2, Edit2, ShieldAlert, Check, X, ToggleLeft, ToggleRight, Database, Server, RefreshCw, Copy, Share2, Users, BellRing, MessageSquareCode, UserCheck, Camera, Upload, Download, Search, QrCode, Printer, Contact, Award, DollarSign, Info, MessageSquare, Smartphone, Sliders, Bot, FileText, FileSignature, CalendarDays, ChevronDown, ChevronRight, Scale, LayoutGrid, List, Sparkles, KeyRound, Percent, TrendingUp, Coins, BadgePercent, ArrowUpRight, CheckCircle, AlertTriangle, CopyCheck, HeartHandshake, UserX } from 'lucide-react';
 import { getClassCategory, generateRandomPassword } from '../initialData';
 import { getStudentPickupCode } from '../utils/pickupCode';
 import { PickupPassesModal } from './PickupPassesModal';
+import { AdmissionFormModal } from './AdmissionFormModal';
 import { ExpendituresTab } from './ExpendituresTab';
 import { LedgerTab } from './LedgerTab';
 import { WhatsAppLogsTab } from './WhatsAppLogsTab';
@@ -19,11 +20,14 @@ import { SettingsPanel } from './SettingsPanel';
 import { IdCardsGeneratorTab } from './IdCardsGeneratorTab';
 import { AiAssistantTab } from './AiAssistantTab';
 import { EnrollmentSummaryWidget } from './EnrollmentSummaryWidget';
-import { AuditTrailTab } from './AuditTrailTab';
 import { SchoolLogo } from './SchoolLogo';
 import { PerformanceTab } from './PerformanceTab';
 import { DatabaseTab } from './DatabaseTab';
 import { ImageCropperModal } from './ImageCropperModal';
+import { EditStudentModal } from './EditStudentModal';
+import { EditStaffModal } from './EditStaffModal';
+import { TeacherSalaryIncrementModal } from './TeacherSalaryIncrementModal';
+import { AbsentPupilsFloatingInquiryModal } from './AbsentPupilsFloatingInquiryModal';
 
 interface SignaturePadProps {
   title: string;
@@ -194,8 +198,10 @@ export const AdminPanel: React.FC = React.memo(() => {
     currentDate,
     activeTerm,
     payments,
+    examsPayments = [],
     adjustPayment,
     resetData,
+    mergeStudents,
     purgeDeactivatedStudents,
     promoteAllStudents,
     promotionBackups,
@@ -230,7 +236,7 @@ export const AdminPanel: React.FC = React.memo(() => {
     return () => clearInterval(timer);
   }, []);
 
-  const [activeTab, setActiveTab] = useState<'students' | 'mfa' | 'gates' | 'database' | 'expenditures' | 'performance' | 'whatsapp' | 'settings' | 'idcards' | 'ai_assistant' | 'audit'>('students');
+  const [activeTab, setActiveTab] = useState<'students' | 'mfa' | 'gates' | 'database' | 'expenditures' | 'performance' | 'whatsapp' | 'settings' | 'idcards' | 'ai_assistant'>('students');
   const [studentFilter, setStudentFilter] = useState<'all' | 'active' | 'inactive'>('all');
   const [studentViewStyle, setStudentViewStyle] = useState<'list' | 'album'>('list');
   const [searchQuery, setSearchQuery] = useState('');
@@ -241,9 +247,81 @@ export const AdminPanel: React.FC = React.memo(() => {
   });
   const [expandedStudentIds, setExpandedStudentIds] = useState<Record<string, boolean>>({});
   const [showPickupPassesModal, setShowPickupPassesModal] = useState(false);
+  const [showAdmissionFormModal, setShowAdmissionFormModal] = useState(false);
+  const [admissionFormStudent, setAdmissionFormStudent] = useState<Student | null>(null);
+  const [showDuplicateAuditModal, setShowDuplicateAuditModal] = useState(false);
+  const [studentToEditModal, setStudentToEditModal] = useState<Student | null>(null);
+  const [staffToEditModal, setStaffToEditModal] = useState<UserAccount | null>(null);
+
+  // Group duplicate student records by matching normalized Name and Class
+  const duplicateStudentGroups = useMemo(() => {
+    const groups = new Map<string, Student[]>();
+    students.forEach(s => {
+      const normName = (s.name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+      const normClass = (s.class || '').trim().toLowerCase();
+      if (!normName || !normClass) return;
+      const key = `${normName}||${normClass}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(s);
+    });
+
+    const duplicates: { key: string; name: string; className: StudentClass; candidates: Student[] }[] = [];
+    groups.forEach((list, key) => {
+      if (list.length > 1) {
+        duplicates.push({
+          key,
+          name: list[0].name,
+          className: list[0].class,
+          candidates: list
+        });
+      }
+    });
+    return duplicates;
+  }, [students]);
+
+  const handleAuditDuplicatesClick = () => {
+    if (currentUser?.role !== 'Administrator') {
+      alert('Access Denied: Only Administrators are permitted to audit and merge duplicate pupil records.');
+      return;
+    }
+    if (duplicateStudentGroups.length === 0) {
+      showToast('✨ No duplicate student records detected! All pupil records are unique across classes.');
+    } else {
+      setShowDuplicateAuditModal(true);
+    }
+  };
+
+  const handleMergeAllDuplicatesAuto = () => {
+    if (currentUser?.role !== 'Administrator') return;
+    if (duplicateStudentGroups.length === 0) return;
+
+    if (!confirm(`Are you sure you want to automatically merge all ${duplicateStudentGroups.length} duplicate pupil groups?\n\nFor each group, payment and exam fee histories will be safely reassigned to the primary pupil record, and redundant duplicates removed.`)) {
+      return;
+    }
+
+    let mergedGroupsCount = 0;
+    let totalDuplicatesRemoved = 0;
+
+    duplicateStudentGroups.forEach(group => {
+      const primary = group.candidates[0]; // First candidate as primary
+      for (let i = 1; i < group.candidates.length; i++) {
+        const dupCandidate = group.candidates[i];
+        const res = mergeStudents(primary.id, dupCandidate.id);
+        if (res.success) {
+          totalDuplicatesRemoved++;
+        }
+      }
+      mergedGroupsCount++;
+    });
+
+    showToast(`⚡ Successfully merged ${mergedGroupsCount} duplicate groups! Removed ${totalDuplicatesRemoved} redundant pupil records and preserved all financial check-ins.`);
+    setShowDuplicateAuditModal(false);
+  };
 
   // Percentage Wage / Salary Adjustment Modal states
   const [showSalaryAdjustModal, setShowSalaryAdjustModal] = useState(false);
+  const [showTeacherSalaryIncrementModal, setShowTeacherSalaryIncrementModal] = useState(false);
+  const [showAbsenteeEnquiryModal, setShowAbsenteeEnquiryModal] = useState(false);
   const [adjustTargetRole, setAdjustTargetRole] = useState<string>('All');
   const [adjustPercentage, setAdjustPercentage] = useState<number>(10);
   const [adjustMode, setAdjustMode] = useState<'increase' | 'decrease'>('increase');
@@ -1974,9 +2052,9 @@ export const AdminPanel: React.FC = React.memo(() => {
         } else if (query === 'unmarked' || query === 'pending' || query === 'not checked' || query === 'not marked' || query === 'unpaid' || query === 'not paid') {
           matchesStatus = isUnmarked;
         } else if (query === 'term' || query === 'term payer' || query === 'term payers') {
-          matchesStatus = st.paymentType === 'Term';
+          matchesStatus = isTermPayer(st);
         } else if (query === 'daily' || query === 'daily payer' || query === 'daily payers') {
-          matchesStatus = st.paymentType === 'Daily';
+          matchesStatus = !isTermPayer(st);
         }
 
         // Pickup Security Code match
@@ -2147,6 +2225,11 @@ export const AdminPanel: React.FC = React.memo(() => {
     );
     return students.filter(s => s.active && !paidStudentIds.has(s.id));
   }, [students, payments, currentDate]);
+
+  // Find all students marked absent today for welfare enquiry
+  const todayAbsentRecords = useMemo(() => {
+    return (payments || []).filter(p => p.date === currentDate && p.isAbsent === true);
+  }, [payments, currentDate]);
 
   const [showUnassignedDetails, setShowUnassignedDetails] = useState(false);
   const [showMissingDetails, setShowMissingDetails] = useState(false);
@@ -2538,6 +2621,15 @@ export const AdminPanel: React.FC = React.memo(() => {
   const [adminRegRenewalOption, setAdminRegRenewalOption] = useState<'Automatic' | 'Manual Review' | 'Fixed Term' | 'Non-Renewable'>('Automatic');
   const [adminRegRenewalPeriod, setAdminRegRenewalPeriod] = useState('1 Year');
   const [adminRegPersonalAddress, setAdminRegPersonalAddress] = useState('');
+  const [adminRegPermissions, setAdminRegPermissions] = useState<StaffPermissions>({
+    canRecordPayments: true,
+    canEditPayments: false,
+    canDeletePayments: false,
+    canManageStudents: false,
+    canManageExams: true,
+    canViewReports: false,
+    canManageSettings: false
+  });
   const [editStaffObj, setEditStaffObj] = useState<any | null>(null);
 
   const teacherStats = useMemo(() => {
@@ -2610,7 +2702,8 @@ export const AdminPanel: React.FC = React.memo(() => {
       adminRegContractEndDate || undefined,
       adminRegRenewalOption || undefined,
       adminRegRenewalPeriod || undefined,
-      adminRegPersonalAddress.trim() || undefined
+      adminRegPersonalAddress.trim() || undefined,
+      adminRegPermissions
     );
 
     if (result.success) {
@@ -2630,6 +2723,15 @@ export const AdminPanel: React.FC = React.memo(() => {
       setAdminRegRenewalOption('Automatic');
       setAdminRegRenewalPeriod('1 Year');
       setAdminRegPersonalAddress('');
+      setAdminRegPermissions({
+        canRecordPayments: true,
+        canEditPayments: false,
+        canDeletePayments: false,
+        canManageStudents: false,
+        canManageExams: true,
+        canViewReports: false,
+        canManageSettings: false
+      });
       showToast('Staff register updated with new entry.');
     } else {
       showToast(result.error || 'Check administrator database permissions & connection.');
@@ -2665,7 +2767,9 @@ export const AdminPanel: React.FC = React.memo(() => {
       editStaffObj.renewalPeriod,
       undefined, // signatureUrl
       undefined, // managementSignatureUrl
-      editStaffObj.personalAddress || undefined
+      editStaffObj.personalAddress || undefined,
+      undefined, // ethicsEvaluation
+      editStaffObj.permissions
     );
 
     if (result.success) {
@@ -2804,21 +2908,7 @@ export const AdminPanel: React.FC = React.memo(() => {
   };
 
   const handleStartEdit = (student: Student) => {
-    setEditStudentObj({ ...student });
-  };
-
-  const handleSaveEdit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editStudentObj || !editStudentObj.name.trim()) return;
-
-    // Recalculate category based on selected class
-    const category = getClassCategory(editStudentObj.class);
-    updateStudent({
-      ...editStudentObj,
-      category
-    });
-    setEditStudentObj(null);
-    showToast('Catalog record updated.');
+    setStudentToEditModal(student);
   };
 
   const handleToggleStudentActive = (student: Student) => {
@@ -3505,20 +3595,6 @@ export const AdminPanel: React.FC = React.memo(() => {
           </button>
 
           <button
-            id="admin-tab-audit-btn"
-            onClick={() => setActiveTab('audit')}
-            title="Audit Logs: Real-time administrative log tracking database syncs, deletions, and operational events"
-            className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
-              activeTab === 'audit'
-                ? 'bg-amber-400 text-black'
-                : 'text-neutral-500 hover:text-white'
-            }`}
-          >
-            <FileText size={13} />
-            Audit Logs
-          </button>
-
-          <button
             onClick={() => setActiveTab('settings')}
             title="System Settings: Configure term dates, school name, currency formats, and fee parameters"
             className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
@@ -3560,7 +3636,7 @@ export const AdminPanel: React.FC = React.memo(() => {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {/* Card 1: Missing Daily Registrations */}
               <div className={`p-4 border-2 ${missingRegistrations.length > 0 ? "bg-red-950/10 border-red-900/60" : "bg-neutral-950 border-neutral-850"} flex flex-col justify-between space-y-4`}>
                 <div className="space-y-1">
@@ -3614,7 +3690,43 @@ export const AdminPanel: React.FC = React.memo(() => {
                 )}
               </div>
 
-              {/* Card 2: Unassigned Pupils */}
+              {/* Card 2: Absent Pupils & Welfare Enquiries */}
+              <div className={`p-4 border-2 ${todayAbsentRecords.length > 0 ? "bg-amber-950/20 border-amber-500/70" : "bg-neutral-950 border-neutral-850"} flex flex-col justify-between space-y-4`}>
+                <div className="space-y-1">
+                  <span className="text-[9px] text-neutral-500 font-mono font-black uppercase tracking-widest block">Pupil Absence Welfare</span>
+                  <div className="flex items-baseline gap-2">
+                    <span className={`text-2xl font-black font-mono ${todayAbsentRecords.length > 0 ? 'text-amber-400 animate-pulse' : 'text-emerald-400'}`}>
+                      {todayAbsentRecords.length}
+                    </span>
+                    <span className="text-xs text-neutral-400 font-bold">Marked absent today</span>
+                  </div>
+                  <p className="text-[10px] text-neutral-400 leading-relaxed font-semibold">
+                    {todayAbsentRecords.length > 0
+                      ? "Pupils are marked absent from class. Check with parents via 1-click WhatsApp/Call to enquire on their health and reason."
+                      : "Zero pupil absences recorded today. Full class attendance recorded."}
+                  </p>
+                </div>
+
+                <div className="pt-2 flex flex-col gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      playFeedbackSound('click');
+                      setShowAbsenteeEnquiryModal(true);
+                    }}
+                    className={`w-full text-center py-2 font-mono text-[10px] font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                      todayAbsentRecords.length > 0
+                        ? 'bg-amber-400 hover:bg-amber-300 text-black border border-amber-400 shadow-md'
+                        : 'bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border border-neutral-750'
+                    }`}
+                  >
+                    <HeartHandshake size={13} />
+                    <span>{todayAbsentRecords.length > 0 ? `Enquire on ${todayAbsentRecords.length} Absentee${todayAbsentRecords.length > 1 ? 's' : ''}` : 'Open Absentee Care Desk'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Card 3: Unassigned Pupils */}
               <div className={`p-4 border-2 ${unassignedPupils.length > 0 ? "bg-red-950/10 border-red-900/60" : "bg-neutral-950 border-neutral-850"} flex flex-col justify-between space-y-4`}>
                 <div className="space-y-1">
                   <span className="text-[9px] text-neutral-500 font-mono font-black uppercase tracking-widest block">Class Gate Placement</span>
@@ -3751,9 +3863,8 @@ export const AdminPanel: React.FC = React.memo(() => {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Column 1: Forms & CSV Imports */}
           <div className="space-y-6 col-span-1">
-            {/* Add / Edit student card */}
+            {/* Add student card */}
             <div className="bg-neutral-900 border-4 border-neutral-800 p-8 h-fit space-y-6">
-            {!editStudentObj ? (
               <form onSubmit={handleAddStudentSubmit} className="space-y-5">
                 <div className="flex items-center justify-between gap-2 pb-3 border-b-2 border-neutral-800">
                   <div className="flex items-center gap-3">
@@ -4011,300 +4122,6 @@ export const AdminPanel: React.FC = React.memo(() => {
                   </button>
                 </div>
               </form>
-            ) : (
-              <form onSubmit={handleSaveEdit} className="space-y-5">
-                <div className="flex items-center justify-between pb-3 border-b-2 border-neutral-800">
-                  <div className="flex items-center gap-3">
-                    <Edit2 size={18} className="text-amber-400" />
-                    <h3 className="text-sm font-black uppercase tracking-widest text-white">Modify Pupil File</h3>
-                  </div>
-                  <button 
-                    type="button" 
-                    onClick={() => setEditStudentObj(null)}
-                    className="text-xs font-black text-neutral-500 hover:text-white uppercase tracking-widest"
-                  >
-                    Cancel
-                  </button>
-                </div>
-
-                <div className="space-y-4">
-                  {/* Active / Inactive Status Switch */}
-                  <div>
-                    <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
-                      Enrollment Status / Active Switch
-                    </label>
-                    <div className="flex items-center justify-between p-3 bg-neutral-950 border-2 border-neutral-800 rounded-xs">
-                      <div className="flex flex-col">
-                        <span className={`text-xs font-black uppercase tracking-tight ${editStudentObj.active ? 'text-emerald-400' : 'text-rose-500'}`}>
-                          {editStudentObj.active ? '● Active Student' : '○ Withdrawn / Inactive'}
-                        </span>
-                        <span className="text-[8px] font-mono text-neutral-500 uppercase mt-0.5">
-                          {editStudentObj.active ? 'Active on daily registers, receives billing/alerts.' : 'Excluded from lists & billing. Records are preserved.'}
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setEditStudentObj({ ...editStudentObj, active: !editStudentObj.active })}
-                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                          editStudentObj.active ? 'bg-emerald-500' : 'bg-neutral-800'
-                        }`}
-                      >
-                        <span
-                          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition duration-200 ease-in-out ${
-                            editStudentObj.active ? 'translate-x-5' : 'translate-x-0'
-                          }`}
-                        />
-                      </button>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
-                      Pupil Full Name (English Ledger)
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={editStudentObj.name}
-                      onChange={(e) => setEditStudentObj({ ...editStudentObj, name: e.target.value })}
-                      className="w-full bg-neutral-950 border-2 border-neutral-800 py-3 px-4 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
-                        Target Class
-                      </label>
-                      <select
-                        value={editStudentObj.class}
-                        onChange={(e) => setEditStudentObj({ ...editStudentObj, class: e.target.value as StudentClass })}
-                        className="w-full bg-neutral-950 border-2 border-neutral-800 py-3 px-4 text-xs font-mono font-bold text-white focus:outline-none"
-                      >
-                        {classes.map(cls => (
-                          <option key={cls} value={cls}>{cls}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
-                        Roll ID (Constant)
-                      </label>
-                      <div className="bg-neutral-950 border-2 border-neutral-850 py-3 px-4 text-xs text-neutral-400 font-extrabold font-mono uppercase tracking-wider">
-                        {editStudentObj.rollNumber}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
-                      Pupil Gender
-                    </label>
-                    <div className="flex gap-3">
-                      {(['Male', 'Female'] as const).map((g) => (
-                        <button
-                          key={g}
-                          type="button"
-                          onClick={() => setEditStudentObj({ ...editStudentObj, gender: g })}
-                          className={`flex-1 py-3 px-4 text-xs font-mono font-black uppercase tracking-widest border-2 transition-all cursor-pointer ${
-                            (editStudentObj.gender || 'Male') === g
-                              ? 'bg-amber-400 text-black border-amber-400 font-black'
-                              : 'bg-neutral-950 text-neutral-400 border-neutral-800 hover:text-white hover:border-neutral-700'
-                          }`}
-                        >
-                          {g === 'Male' ? '👦 Male' : '👧 Female'}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
-                      Guardian Phone Number
-                    </label>
-                    <input
-                      type="text"
-                      value={editStudentObj.guardianPhone || ''}
-                      onChange={(e) => setEditStudentObj({ ...editStudentObj, guardianPhone: e.target.value.replace(/\D/g, '') })}
-                      className="w-full bg-neutral-950 border-2 border-neutral-800 py-3 px-4 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400"
-                    />
-                  </div>
-
-                   <div>
-                    <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
-                      Pupil Payment Scheme
-                    </label>
-                    <div className="flex gap-3 text-center">
-                      {(['Daily', 'Term'] as const).map((t) => (
-                        <button
-                          key={t}
-                          type="button"
-                          onClick={() => setEditStudentObj({ ...editStudentObj, paymentType: t })}
-                          className={`flex-1 py-3 px-4 text-xs font-mono font-black uppercase tracking-widest border-2 transition-all cursor-pointer ${
-                            (editStudentObj.paymentType || 'Daily') === t
-                              ? 'bg-amber-400 text-black border-amber-400 font-black'
-                              : 'bg-neutral-950 text-neutral-400 border-neutral-800 hover:text-white hover:border-neutral-700'
-                          }`}
-                        >
-                          {t === 'Daily' ? '📅 Daily Payer' : '🎓 Term Payer'}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
-                      Pupil's First Day / Start Date
-                    </label>
-                    <input
-                      type="date"
-                      value={editStudentObj.enrollmentDate || ''}
-                      onChange={(e) => setEditStudentObj({ ...editStudentObj, enrollmentDate: e.target.value || undefined })}
-                      className="w-full bg-neutral-950 border-2 border-neutral-800 py-3 px-4 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 font-mono"
-                    />
-                    <p className="text-[9px] font-mono text-neutral-550 mt-1 uppercase tracking-wide">
-                      Select date if new child to ignore previous dates as debt. Leave blank if old student to calculate full term debt.
-                    </p>
-                  </div>
-
-                  {(editStudentObj.paymentType || 'Daily') === 'Term' ? (
-                    <div>
-                      <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
-                        Flat Term Fee Amount (GHC)
-                      </label>
-                      <input
-                        type="number"
-                        min="1"
-                        required
-                        value={editStudentObj.termFee !== undefined ? editStudentObj.termFee : 350}
-                        onChange={(e) => setEditStudentObj({ ...editStudentObj, termFee: Math.max(1, parseFloat(e.target.value) || 0) })}
-                        className="w-full bg-neutral-950 border-2 border-neutral-800 py-3 px-4 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-700 font-mono"
-                        placeholder="e.g. 350.00"
-                      />
-                      <p className="text-[9px] font-mono text-neutral-550 mt-1 uppercase tracking-wide">
-                        Paying a customized static flat charge of <strong className="text-amber-500">GHC {(editStudentObj.termFee !== undefined ? editStudentObj.termFee : 350).toFixed(2)}</strong> for the entire term (exempt from daily debt).
-                      </p>
-
-                      <div className="mt-4">
-                        <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
-                          Pre-adoption Outstanding Legacy Debt (GHC)
-                        </label>
-                        <input
-                          type="number"
-                          min="0"
-                          value={editStudentObj.legacyDebt !== undefined ? editStudentObj.legacyDebt : 0}
-                          onChange={(e) => setEditStudentObj({ ...editStudentObj, legacyDebt: Math.max(0, parseFloat(e.target.value) || 0) })}
-                          className="w-full bg-neutral-950 border-2 border-neutral-800 py-3 px-4 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-700 font-mono"
-                          placeholder="e.g. 150.00"
-                        />
-                        <p className="text-[9px] font-mono text-neutral-550 mt-1 uppercase tracking-wide">
-                          Manually enter any pre-adoption outstanding debt (e.g. <strong className="text-red-400">GHC {(editStudentObj.legacyDebt || 0).toFixed(2)}</strong>) to be integrated into this pupil's ledger and outstanding balance.
-                        </p>
-                      </div>
-                    </div>
-                  ) : (
-                    <div>
-                      <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
-                        Daily Check-In Discount (GHC) - Dynamic Group Rate
-                      </label>
-                      <div className="flex gap-2">
-                        <input
-                          type="number"
-                          min="0"
-                          max="5"
-                          step="0.5"
-                          value={editStudentObj.discount || 0}
-                          onChange={(e) => setEditStudentObj({ ...editStudentObj, discount: Math.max(0, Math.min(5, parseFloat(e.target.value) || 0)) })}
-                          className="w-1/2 bg-neutral-950 border-2 border-neutral-800 py-3 px-4 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400"
-                        />
-                        <div className="flex-1 flex gap-1 font-mono">
-                          {[0, 2.50, 5].map((val) => (
-                            <button
-                              key={val}
-                              type="button"
-                              onClick={() => setEditStudentObj({ ...editStudentObj, discount: val })}
-                              className={`flex-1 text-[9px] font-mono font-black border transition-all ${
-                                (editStudentObj.discount || 0) === val
-                                  ? 'bg-amber-400 text-black border-amber-400'
-                                  : 'bg-neutral-950 text-neutral-500 border-neutral-800 hover:text-white hover:bg-neutral-850'
-                              }`}
-                            >
-                              {val === 0 ? 'None' : val === 5 ? '100% Free' : `GHC ${val.toFixed(2)}`}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                      <p className="text-[9px] font-mono text-neutral-500 mt-1 uppercase tracking-wide">
-                        Standard fee is GHC 5.00. Effective daily rate: <strong className="text-amber-500">GHC {(5.00 - (editStudentObj.discount || 0)).toFixed(2)}</strong>
-                      </p>
-                    </div>
-                  )}
-
-                  <div>
-                    <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
-                      Student Passport Photo / Picture
-                    </label>
-                    {editStudentObj.photoUrl ? (
-                      <div className="relative w-full aspect-video sm:aspect-[4/3] bg-neutral-950 border-2 border-dashed border-amber-400 p-4 flex flex-col items-center justify-center gap-3">
-                        <img 
-                          src={editStudentObj.photoUrl} 
-                          alt="Student passport preview" 
-                          className="w-16 h-16 rounded-full object-cover border-2 border-amber-400"
-                          referrerPolicy="no-referrer"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setEditStudentObj({ ...editStudentObj, photoUrl: undefined })}
-                          className="text-[10px] font-mono font-black text-red-500 hover:text-red-400 uppercase tracking-wider bg-neutral-900 border border-neutral-800 px-3 py-1.5 transition-colors cursor-pointer"
-                        >
-                          Remove Photo
-                        </button>
-                      </div>
-                    ) : (
-                      <label className="flex flex-col items-center justify-center w-full min-h-[96px] bg-neutral-950 border-2 border-dashed border-neutral-800 hover:border-neutral-600 p-4 cursor-pointer transition-all">
-                        <Upload size={18} className="text-neutral-500 mb-1.5" />
-                        <span className="text-[10px] font-mono font-bold text-neutral-400 uppercase tracking-wider text-center">Upload Photo/Passport</span>
-                        <span className="text-[8px] font-mono text-neutral-600 uppercase mt-0.5">JPEG / PNG up to 2MB</span>
-                        <input 
-                          type="file" 
-                          accept="image/*" 
-                          onChange={(e) => handlePhotoUpload(e, true)} 
-                          className="hidden" 
-                        />
-                      </label>
-                    )}
-                  </div>
-                </div>
-
-                <div className="flex flex-col gap-2.5">
-                  <div className="flex gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setEditStudentObj(null)}
-                      className="w-1/3 text-xs bg-neutral-950 border-2 border-neutral-800 hover:border-neutral-700 text-neutral-400 py-3 font-black uppercase tracking-widest transition-colors"
-                    >
-                      Quit
-                    </button>
-                    <button
-                      type="submit"
-                      className="w-2/3 text-xs bg-white hover:bg-amber-400 text-black py-3 font-black uppercase tracking-widest transition-colors cursor-pointer"
-                    >
-                      Save Changes
-                    </button>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => setSelectedIdCardStudent(editStudentObj)}
-                    className="w-full h-11 flex items-center justify-center gap-2 text-xs bg-neutral-950 hover:bg-neutral-850 text-amber-400 font-mono font-black border-2 border-neutral-800 hover:border-amber-400 uppercase tracking-widest transition-all cursor-pointer"
-                  >
-                    <Printer size={14} />
-                    <span>Print ID Card</span>
-                  </button>
-                </div>
-              </form>
-            )}
             </div>
 
             {/* CSV Bulk Import Card */}
@@ -4590,6 +4407,33 @@ export const AdminPanel: React.FC = React.memo(() => {
                   >
                     <KeyRound size={11} className="stroke-[3]" />
                     <span>Weekly Pickup Passes</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAdmissionFormStudent(null);
+                      setShowAdmissionFormModal(true);
+                    }}
+                    className="mt-1 px-3 py-1 text-[9px] font-mono font-black uppercase tracking-widest cursor-pointer transition-all flex items-center gap-1.5 border-2 border-sky-500 bg-sky-500/10 hover:bg-sky-400 hover:text-black hover:border-sky-400 text-sky-400 shadow-[2px_2px_0px_0px_rgba(14,165,233,0.15)]"
+                    title="Print official pupil admission & enrollment forms or blank forms for prospective parents"
+                  >
+                    <FileSignature size={11} className="stroke-[3]" />
+                    <span>Admission Forms</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleAuditDuplicatesClick}
+                    className={`mt-1 px-3 py-1 text-[9px] font-mono font-black uppercase tracking-widest cursor-pointer transition-all flex items-center gap-1.5 border-2 ${
+                      duplicateStudentGroups.length > 0
+                        ? 'border-rose-500 bg-rose-500/10 hover:bg-rose-500 hover:text-white text-rose-400 shadow-[2px_2px_0px_0px_rgba(244,63,94,0.2)] animate-pulse'
+                        : 'border-amber-500 bg-amber-500/10 hover:bg-amber-400 hover:text-black hover:border-amber-400 text-amber-400 shadow-[2px_2px_0px_0px_rgba(245,158,11,0.15)]'
+                    }`}
+                    title="Scan and audit for duplicate student records with matching Name and Class"
+                  >
+                    <CopyCheck size={11} className="stroke-[3]" />
+                    <span>Audit Duplicates {duplicateStudentGroups.length > 0 ? `(${duplicateStudentGroups.length} Group${duplicateStudentGroups.length > 1 ? 's' : ''})` : ''}</span>
                   </button>
                 </div>
               </div>
@@ -4909,7 +4753,7 @@ export const AdminPanel: React.FC = React.memo(() => {
                           </div>
 
                           {/* Interactive button bar */}
-                          <div className="mt-3 pt-2 border-t border-neutral-850/50 grid grid-cols-4 gap-1">
+                          <div className="mt-3 pt-2 border-t border-neutral-850/50 grid grid-cols-5 gap-1">
                             <button
                               type="button"
                               onClick={() => setHistoryModalStudent(st)}
@@ -4917,6 +4761,17 @@ export const AdminPanel: React.FC = React.memo(() => {
                               className="p-1.5 border border-neutral-800 hover:border-amber-400 hover:text-amber-400 bg-neutral-950 text-neutral-400 transition-colors cursor-pointer flex items-center justify-center rounded-xs"
                             >
                               <FileText size={10} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setAdmissionFormStudent(st);
+                                setShowAdmissionFormModal(true);
+                              }}
+                              title="Print Official Admission & Enrollment Form"
+                              className="p-1.5 border border-neutral-800 hover:border-sky-400 hover:text-sky-400 bg-neutral-950 text-neutral-400 transition-colors cursor-pointer flex items-center justify-center rounded-xs"
+                            >
+                              <FileSignature size={10} />
                             </button>
                             <button
                               type="button"
@@ -5086,7 +4941,7 @@ export const AdminPanel: React.FC = React.memo(() => {
                                       <div className="pt-2 max-w-md w-full sm:w-[320px] md:w-[360px]">
                                         <div className="flex items-center justify-between text-[9px] font-mono uppercase tracking-wider mb-1">
                                           <span className="text-neutral-500 font-black">
-                                            {st.paymentType === 'Term' ? 'Term Fee Scheme' : 'Daily Gate Scheme'}
+                                            {isTermPayer(st) ? 'Term Fee Scheme' : 'Daily Gate Scheme'}
                                           </span>
                                           <span className={`font-black ${percentDone >= 100 ? 'text-emerald-400' : percentDone > 50 ? 'text-amber-400' : 'text-rose-400'}`}>
                                             GHC {totalPaid.toFixed(2)} / GHC {totalTarget.toFixed(2)} ({percentDone.toFixed(0)}%)
@@ -5119,6 +4974,21 @@ export const AdminPanel: React.FC = React.memo(() => {
                                   </div>
 
                                   <div className="flex items-center gap-2 self-end md:self-center">
+                                    {/* Admission Form trigger */}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setAdmissionFormStudent(st);
+                                        setShowAdmissionFormModal(true);
+                                      }}
+                                      title="Print Official Admission & Enrollment Form"
+                                      className="p-2 border-2 border-neutral-800 hover:border-sky-400 hover:text-sky-400 bg-neutral-950 text-neutral-400 transition-colors cursor-pointer flex items-center justify-center gap-1 font-mono text-[9px] font-black uppercase tracking-wider"
+                                    >
+                                      <FileSignature size={13} className="stroke-[2.5]" />
+                                      <span className="hidden sm:inline">Admission Form</span>
+                                    </button>
+
                                     {/* ID Card trigger */}
                                     <button
                                       type="button"
@@ -5543,13 +5413,18 @@ export const AdminPanel: React.FC = React.memo(() => {
                       </div>
                     )}
 
-                    <div className="bg-neutral-950/80 p-5 border-2 border-neutral-800 rounded space-y-4">
-                      <div className="flex items-center gap-2 pb-2 border-b border-neutral-850">
-                        <span className="text-xs font-black uppercase tracking-widest text-amber-400 font-mono">💵 Financial & Momo Payout Profile</span>
+                    <div className="bg-neutral-950 p-5 sm:p-6 border-2 border-amber-500/40 rounded-lg space-y-4 shadow-lg">
+                      <div className="flex items-center justify-between pb-2.5 border-b border-neutral-800">
+                        <span className="text-xs font-black uppercase tracking-widest text-amber-400 font-mono flex items-center gap-2">
+                          💵 Financial & Momo Payout Profile
+                        </span>
+                        <span className="text-[10px] font-mono font-bold text-amber-300/80 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/30">
+                          Payroll & Mobile Money Setup
+                        </span>
                       </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        <div className="space-y-1.5">
-                          <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest font-mono">
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-5">
+                        <div className="space-y-2">
+                          <label className="block text-xs font-black text-amber-300 uppercase tracking-wider font-mono">
                             Monthly Stipend/Salary (GHC)
                           </label>
                           <input
@@ -5558,7 +5433,7 @@ export const AdminPanel: React.FC = React.memo(() => {
                             value={editStaffObj.stipendSalary || ''}
                             onChange={(e) => setEditStaffObj({ ...editStaffObj, stipendSalary: e.target.value })}
                             placeholder="e.g. 1500.00"
-                            className="w-full bg-neutral-900 border-2 border-neutral-800 py-2 px-3 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600"
+                            className="w-full bg-neutral-900 border-2 border-neutral-700 py-3 px-4 text-sm font-mono font-bold text-white focus:outline-none focus:border-amber-400 focus:bg-neutral-950 focus:ring-2 focus:ring-amber-500/20 rounded placeholder:text-neutral-500 transition-all"
                           />
 
                           {/* Percentage Quick Adjust Shortcuts */}
@@ -5599,8 +5474,8 @@ export const AdminPanel: React.FC = React.memo(() => {
                             </div>
                           </div>
                         </div>
-                        <div>
-                          <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                        <div className="space-y-2">
+                          <label className="block text-xs font-black text-amber-300 uppercase tracking-wider font-mono">
                             Momo Registered No.
                           </label>
                           <input
@@ -5608,11 +5483,11 @@ export const AdminPanel: React.FC = React.memo(() => {
                             value={editStaffObj.momoNumber || ''}
                             onChange={(e) => setEditStaffObj({ ...editStaffObj, momoNumber: e.target.value })}
                             placeholder="e.g. 0541234567"
-                            className="w-full bg-neutral-900 border-2 border-neutral-800 py-2.5 px-3.5 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600"
+                            className="w-full bg-neutral-900 border-2 border-neutral-700 py-3 px-4 text-sm font-mono font-bold text-white focus:outline-none focus:border-amber-400 focus:bg-neutral-950 focus:ring-2 focus:ring-amber-500/20 rounded placeholder:text-neutral-500 transition-all"
                           />
                         </div>
-                        <div>
-                          <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                        <div className="space-y-2">
+                          <label className="block text-xs font-black text-amber-300 uppercase tracking-wider font-mono">
                             Registered Momo Name
                           </label>
                           <input
@@ -5620,9 +5495,63 @@ export const AdminPanel: React.FC = React.memo(() => {
                             value={editStaffObj.momoName || ''}
                             onChange={(e) => setEditStaffObj({ ...editStaffObj, momoName: e.target.value })}
                             placeholder="e.g. Mary Appiah"
-                            className="w-full bg-neutral-900 border-2 border-neutral-800 py-2.5 px-3.5 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600"
+                            className="w-full bg-neutral-900 border-2 border-neutral-700 py-3 px-4 text-sm font-mono font-bold text-white focus:outline-none focus:border-amber-400 focus:bg-neutral-950 focus:ring-2 focus:ring-amber-500/20 rounded placeholder:text-neutral-500 transition-all"
                           />
                         </div>
+                      </div>
+                    </div>
+
+                    {/* Granular Staff Permissions Section */}
+                    <div className="bg-neutral-950/80 p-5 border-2 border-neutral-800 rounded space-y-3 font-mono">
+                      <div className="flex items-center justify-between pb-2 border-b border-neutral-850">
+                        <span className="text-xs font-black uppercase tracking-widest text-amber-400 font-mono flex items-center gap-2">
+                          <ShieldAlert size={15} /> Granular Access Permissions
+                        </span>
+                        <span className="text-[10px] text-neutral-500 uppercase">Interactive Checkboxes</span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                        {[
+                          { key: 'canRecordPayments', label: '💳 Record Fee Payments', desc: 'Allow recording daily & term payments' },
+                          { key: 'canEditPayments', label: '✏️ Modify Payment Logs', desc: 'Allow editing or updating payment entries' },
+                          { key: 'canDeletePayments', label: '🗑️ Delete Payment Records', desc: 'Allow purging payment records' },
+                          { key: 'canManageStudents', label: '🎓 Manage Pupil Roster', desc: 'Allow adding, editing or deleting pupils' },
+                          { key: 'canManageExams', label: '📝 Manage Exam System', desc: 'Allow recording exam marks & fees' },
+                          { key: 'canViewReports', label: '📊 View Reports & Audit', desc: 'Allow viewing financial reports & audits' },
+                          { key: 'canManageSettings', label: '⚙️ System & Term Settings', desc: 'Allow modifying school terms & settings' }
+                        ].map(item => {
+                          const currentPerms: StaffPermissions = editStaffObj.permissions || {
+                            canRecordPayments: true,
+                            canEditPayments: editStaffObj.role === 'Administrator' || editStaffObj.role === 'Headmaster' || editStaffObj.role === 'Accountant',
+                            canDeletePayments: editStaffObj.role === 'Administrator' || editStaffObj.role === 'Headmaster',
+                            canManageStudents: editStaffObj.role !== 'Teacher',
+                            canManageExams: true,
+                            canViewReports: editStaffObj.role !== 'Teacher',
+                            canManageSettings: editStaffObj.role === 'Administrator' || editStaffObj.role === 'Headmaster'
+                          };
+                          const isChecked = !!currentPerms[item.key as keyof StaffPermissions];
+                          return (
+                            <label key={item.key} className={`p-2.5 rounded border flex items-start gap-2.5 cursor-pointer transition-all ${isChecked ? 'bg-amber-950/20 border-amber-600/60 text-white' : 'bg-neutral-900/40 border-neutral-800 text-neutral-400 hover:border-neutral-700'}`}>
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={(e) => {
+                                  setEditStaffObj({
+                                    ...editStaffObj,
+                                    permissions: {
+                                      ...currentPerms,
+                                      [item.key]: e.target.checked
+                                    }
+                                  });
+                                }}
+                                className="w-4 h-4 mt-0.5 accent-amber-400 cursor-pointer shrink-0"
+                              />
+                              <div>
+                                <span className="font-bold text-xs block text-white">{item.label}</span>
+                                <span className="text-[10px] text-neutral-400 block">{item.desc}</span>
+                              </div>
+                            </label>
+                          );
+                        })}
                       </div>
                     </div>
 
@@ -5899,13 +5828,18 @@ export const AdminPanel: React.FC = React.memo(() => {
                       </div>
                     )}
 
-                    <div className="bg-neutral-950/80 p-5 border-2 border-neutral-800 rounded space-y-4">
-                      <div className="flex items-center gap-2 pb-2 border-b border-neutral-850">
-                        <span className="text-xs font-black uppercase tracking-widest text-amber-400 font-mono">💵 Financial & Momo Payout Profile</span>
+                    <div className="bg-neutral-950 p-5 sm:p-6 border-2 border-amber-500/40 rounded-lg space-y-4 shadow-lg">
+                      <div className="flex items-center justify-between pb-2.5 border-b border-neutral-800">
+                        <span className="text-xs font-black uppercase tracking-widest text-amber-400 font-mono flex items-center gap-2">
+                          💵 Financial & Momo Payout Profile
+                        </span>
+                        <span className="text-[10px] font-mono font-bold text-amber-300/80 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/30">
+                          Payroll & Mobile Money Setup
+                        </span>
                       </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        <div>
-                          <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-5">
+                        <div className="space-y-2">
+                          <label className="block text-xs font-black text-amber-300 uppercase tracking-wider font-mono">
                             Monthly Stipend/Salary (GHC)
                           </label>
                           <input
@@ -5914,11 +5848,11 @@ export const AdminPanel: React.FC = React.memo(() => {
                             value={adminRegStipendSalary}
                             onChange={(e) => setAdminRegStipendSalary(e.target.value)}
                             placeholder="e.g. 1500.00"
-                            className="w-full bg-neutral-900 border-2 border-neutral-800 py-2.5 px-3.5 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600"
+                            className="w-full bg-neutral-900 border-2 border-neutral-700 py-3 px-4 text-sm font-mono font-bold text-white focus:outline-none focus:border-amber-400 focus:bg-neutral-950 focus:ring-2 focus:ring-amber-500/20 rounded placeholder:text-neutral-500 transition-all"
                           />
                         </div>
-                        <div>
-                          <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                        <div className="space-y-2">
+                          <label className="block text-xs font-black text-amber-300 uppercase tracking-wider font-mono">
                             Momo Registered No.
                           </label>
                           <input
@@ -5926,11 +5860,11 @@ export const AdminPanel: React.FC = React.memo(() => {
                             value={adminRegMomoNumber}
                             onChange={(e) => setAdminRegMomoNumber(e.target.value)}
                             placeholder="e.g. 0541234567"
-                            className="w-full bg-neutral-900 border-2 border-neutral-800 py-2.5 px-3.5 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600"
+                            className="w-full bg-neutral-900 border-2 border-neutral-700 py-3 px-4 text-sm font-mono font-bold text-white focus:outline-none focus:border-amber-400 focus:bg-neutral-950 focus:ring-2 focus:ring-amber-500/20 rounded placeholder:text-neutral-500 transition-all"
                           />
                         </div>
-                        <div>
-                          <label className="block text-[10px] font-black text-neutral-400 uppercase tracking-widest mb-1.5 font-mono">
+                        <div className="space-y-2">
+                          <label className="block text-xs font-black text-amber-300 uppercase tracking-wider font-mono">
                             Registered Momo Name
                           </label>
                           <input
@@ -5938,9 +5872,51 @@ export const AdminPanel: React.FC = React.memo(() => {
                             value={adminRegMomoName}
                             onChange={(e) => setAdminRegMomoName(e.target.value)}
                             placeholder="e.g. Mary Appiah"
-                            className="w-full bg-neutral-900 border-2 border-neutral-800 py-2.5 px-3.5 text-xs font-mono font-bold text-white focus:outline-none focus:border-amber-400 placeholder:text-neutral-600"
+                            className="w-full bg-neutral-900 border-2 border-neutral-700 py-3 px-4 text-sm font-mono font-bold text-white focus:outline-none focus:border-amber-400 focus:bg-neutral-950 focus:ring-2 focus:ring-amber-500/20 rounded placeholder:text-neutral-500 transition-all"
                           />
                         </div>
+                      </div>
+                    </div>
+
+                    {/* Granular Access Permissions Section */}
+                    <div className="bg-neutral-950/80 p-5 border-2 border-neutral-800 rounded space-y-3 font-mono">
+                      <div className="flex items-center justify-between pb-2 border-b border-neutral-850">
+                        <span className="text-xs font-black uppercase tracking-widest text-amber-400 font-mono flex items-center gap-2">
+                          <ShieldAlert size={15} /> Granular Access Permissions
+                        </span>
+                        <span className="text-[10px] text-neutral-500 uppercase">Interactive Checkboxes</span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                        {[
+                          { key: 'canRecordPayments', label: '💳 Record Fee Payments', desc: 'Allow recording daily & term payments' },
+                          { key: 'canEditPayments', label: '✏️ Modify Payment Logs', desc: 'Allow editing or updating payment entries' },
+                          { key: 'canDeletePayments', label: '🗑️ Delete Payment Records', desc: 'Allow purging payment records' },
+                          { key: 'canManageStudents', label: '🎓 Manage Pupil Roster', desc: 'Allow adding, editing or deleting pupils' },
+                          { key: 'canManageExams', label: '📝 Manage Exam System', desc: 'Allow recording exam marks & fees' },
+                          { key: 'canViewReports', label: '📊 View Reports & Audit', desc: 'Allow viewing financial reports & audits' },
+                          { key: 'canManageSettings', label: '⚙️ System & Term Settings', desc: 'Allow modifying school terms & settings' }
+                        ].map(item => {
+                          const isChecked = !!(adminRegPermissions as any)[item.key];
+                          return (
+                            <label key={item.key} className={`p-2.5 rounded border flex items-start gap-2.5 cursor-pointer transition-all ${isChecked ? 'bg-amber-950/20 border-amber-600/60 text-white' : 'bg-neutral-900/40 border-neutral-800 text-neutral-400 hover:border-neutral-700'}`}>
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={(e) => {
+                                  setAdminRegPermissions({
+                                    ...adminRegPermissions,
+                                    [item.key]: e.target.checked
+                                  });
+                                }}
+                                className="w-4 h-4 mt-0.5 accent-amber-400 cursor-pointer shrink-0"
+                              />
+                              <div>
+                                <span className="font-bold text-xs block text-white">{item.label}</span>
+                                <span className="text-[10px] text-neutral-400 block">{item.desc}</span>
+                              </div>
+                            </label>
+                          );
+                        })}
                       </div>
                     </div>
 
@@ -6096,19 +6072,31 @@ export const AdminPanel: React.FC = React.memo(() => {
                 </p>
               </div>
 
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedStaffIdsForAdjust(users.map(u => u.id));
-                  setSalaryAdjustSuccessMsg(null);
-                  setShowSalaryAdjustModal(true);
-                }}
-                className="px-3.5 py-2 bg-amber-500 hover:bg-amber-400 text-black text-[11px] font-mono font-black uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer rounded-sm shadow transition-colors shrink-0"
-                title="Adjust worker & teacher salaries by percentage for increments, promotions, or inflation adjustments"
-              >
-                <Percent size={15} className="stroke-[2.5]" />
-                <span>Adjust Wages (%) / Promotions</span>
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowTeacherSalaryIncrementModal(true)}
+                  className="px-3.5 py-2 bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 text-black text-[11px] font-mono font-black uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer rounded-sm shadow-md transition-all shrink-0"
+                  title="Comprehensive Teacher & Worker Salary Increment Summary, Individual % Variations, Monthly/Term Outflow Projections & Printable Document"
+                >
+                  <TrendingUp size={15} className="stroke-[2.5]" />
+                  <span>Salary Increment Summary</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedStaffIdsForAdjust(users.map(u => u.id));
+                    setSalaryAdjustSuccessMsg(null);
+                    setShowSalaryAdjustModal(true);
+                  }}
+                  className="px-3 py-2 bg-neutral-950 hover:bg-neutral-850 text-neutral-300 hover:text-white border border-neutral-800 text-[11px] font-mono font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer rounded-sm transition-colors shrink-0"
+                  title="Quick percentage wage adjuster for worker promotions"
+                >
+                  <Percent size={14} className="text-amber-400" />
+                  <span>Quick % Adjuster</span>
+                </button>
+              </div>
             </div>
 
             <div className="divide-y-2 divide-neutral-850 border-2 border-neutral-80 w-full overflow-hidden bg-neutral-950">
@@ -6176,6 +6164,20 @@ export const AdminPanel: React.FC = React.memo(() => {
                           )}
                         </div>
                       )}
+
+                      {/* Granular Permission Badges */}
+                      {u.permissions && (
+                        <div className="mt-2 flex flex-wrap gap-1.5 items-center">
+                          <span className="text-[9px] font-mono text-neutral-500 font-bold uppercase tracking-wider">Access Rights:</span>
+                          {u.permissions.canRecordPayments && <span className="text-[9px] bg-emerald-950/60 border border-emerald-800/80 text-emerald-300 px-1.5 py-0.5 rounded font-mono font-bold">💳 Payments</span>}
+                          {u.permissions.canEditPayments && <span className="text-[9px] bg-blue-950/60 border border-blue-800/80 text-blue-300 px-1.5 py-0.5 rounded font-mono font-bold">✏️ Edit Logs</span>}
+                          {u.permissions.canDeletePayments && <span className="text-[9px] bg-red-950/60 border border-red-800/80 text-red-300 px-1.5 py-0.5 rounded font-mono font-bold">🗑️ Delete</span>}
+                          {u.permissions.canManageStudents && <span className="text-[9px] bg-amber-950/60 border border-amber-800/80 text-amber-300 px-1.5 py-0.5 rounded font-mono font-bold">🎓 Pupils</span>}
+                          {u.permissions.canManageExams && <span className="text-[9px] bg-purple-950/60 border border-purple-800/80 text-purple-300 px-1.5 py-0.5 rounded font-mono font-bold">📝 Exams</span>}
+                          {u.permissions.canViewReports && <span className="text-[9px] bg-cyan-950/60 border border-cyan-800/80 text-cyan-300 px-1.5 py-0.5 rounded font-mono font-bold">📊 Reports</span>}
+                          {u.permissions.canManageSettings && <span className="text-[9px] bg-indigo-950/60 border border-indigo-800/80 text-indigo-300 px-1.5 py-0.5 rounded font-mono font-bold">⚙️ Settings</span>}
+                        </div>
+                      )}
                     </div>
 
                     <div className="flex flex-wrap items-center gap-4">
@@ -6191,7 +6193,7 @@ export const AdminPanel: React.FC = React.memo(() => {
 
                       {/* Edit */}
                       <button
-                        onClick={() => setEditStaffObj({ ...u })}
+                        onClick={() => setStaffToEditModal(u)}
                         title={`Edit ${u.name}'s profile`}
                         className="p-2 border-2 border-neutral-800 hover:border-neutral-600 bg-neutral-950 text-neutral-400 hover:text-white transition-colors cursor-pointer"
                       >
@@ -6426,8 +6428,6 @@ export const AdminPanel: React.FC = React.memo(() => {
         <LedgerTab />
       ) : activeTab === 'ai_assistant' ? (
         <AiAssistantTab />
-      ) : activeTab === 'audit' ? (
-        <AuditTrailTab />
       ) : (
         <ExpendituresTab />
       )}
@@ -6930,9 +6930,18 @@ export const AdminPanel: React.FC = React.memo(() => {
       {/* Interactive Student Portfolio Ledger and Registration History Modal */}
       {historyModalStudent && (() => {
         const studentPayments = payments.filter(p => p.studentId === historyModalStudent.id);
-        const totalPaidThisTerm = studentPayments.reduce((sum, p) => sum + p.amount, 0);
-        const totalRegisteredDays = studentPayments.filter(p => !p.isAbsent).length;
+        const totalPaidThisTerm = studentPayments.filter(p => !p.isAbsent && p.verified !== false && p.amount > 0).reduce((sum, p) => sum + p.amount, 0);
         const totalAbsentDays = studentPayments.filter(p => p.isAbsent).length;
+        
+        const termDaysList = activeTerm ? activeTerm.schoolDays.filter(d => {
+          if (d > currentDate) return false;
+          if ((activeTerm.publicHolidays || []).includes(d)) return false;
+          const afterEnrollment = historyModalStudent.enrollmentDate ? d >= historyModalStudent.enrollmentDate : true;
+          return afterEnrollment;
+        }) : [];
+
+        const nonAbsentRecordsCount = studentPayments.filter(p => !p.isAbsent).length;
+        const totalRegisteredDays = Math.max(nonAbsentRecordsCount, Math.max(0, termDaysList.length - totalAbsentDays));
 
         return (
           <div className="fixed inset-0 z-50 bg-neutral-950/90 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
@@ -9221,7 +9230,7 @@ export const AdminPanel: React.FC = React.memo(() => {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-fade-in animate-duration-200 overflow-y-auto">
           <div className="bg-neutral-950 border-4 border-amber-500 max-w-5xl w-full p-6 space-y-6 shadow-[10px_10px_0px_0px_rgba(245,158,11,0.25)] relative my-8">
             {/* Header */}
-            <div className="flex items-center justify-between border-b-2 border-neutral-850 pb-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b-2 border-neutral-850 pb-4 gap-3">
               <div className="flex items-center gap-3">
                 <div className="p-2.5 bg-amber-500/10 border border-amber-500/30 rounded">
                   <Percent className="text-amber-400" size={24} />
@@ -9238,13 +9247,29 @@ export const AdminPanel: React.FC = React.memo(() => {
                   </p>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => setShowSalaryAdjustModal(false)}
-                className="p-1.5 text-neutral-400 hover:text-white border border-neutral-800 hover:border-neutral-600 transition-colors cursor-pointer rounded"
-              >
-                <X size={18} />
-              </button>
+              
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSalaryAdjustModal(false);
+                    setShowTeacherSalaryIncrementModal(true);
+                  }}
+                  className="px-3 py-1.5 bg-neutral-900 hover:bg-neutral-800 border border-amber-500/40 text-amber-400 hover:text-amber-300 text-xs font-mono font-bold uppercase rounded flex items-center gap-1.5 transition-colors cursor-pointer"
+                  title="Open full interactive and printable salary increment summary sheet"
+                >
+                  <TrendingUp size={14} />
+                  <span>Full Printable Summary</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowSalaryAdjustModal(false)}
+                  className="p-1.5 text-neutral-400 hover:text-white border border-neutral-800 hover:border-neutral-600 transition-colors cursor-pointer rounded"
+                >
+                  <X size={18} />
+                </button>
+              </div>
             </div>
 
             {/* Success Toast Banner */}
@@ -9576,14 +9601,20 @@ export const AdminPanel: React.FC = React.memo(() => {
         </div>
       )}
 
+      {/* Teacher & Staff Salary Increment Summary & Term Outflow Projection Modal */}
+      <TeacherSalaryIncrementModal
+        isOpen={showTeacherSalaryIncrementModal}
+        onClose={() => setShowTeacherSalaryIncrementModal(false)}
+      />
+
       {/* Staff Appointment & Renewal System Modal */}
       {appointmentModalUser && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-fade-in animate-duration-200 overflow-y-auto">
-          <div className="bg-neutral-950 border-4 border-amber-500 max-w-5xl w-full p-6 space-y-6 shadow-[10px_10px_0px_0px_rgba(245,158,11,0.25)] relative my-8">
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/85 backdrop-blur-md p-3 sm:p-6 py-6 sm:py-10 animate-fade-in animate-duration-200 overflow-y-auto">
+          <div className="bg-neutral-950 border-4 border-amber-500 max-w-5xl w-full p-4 sm:p-6 space-y-4 shadow-[10px_10px_0px_0px_rgba(245,158,11,0.25)] relative my-0 sm:my-2 max-h-[92vh] sm:max-h-[88vh] flex flex-col">
             {/* Header */}
-            <div className="flex items-center justify-between border-b-2 border-neutral-850 pb-4">
+            <div className="flex items-center justify-between border-b-2 border-neutral-850 pb-3 shrink-0">
               <div className="flex items-center gap-3">
-                <FileSignature className="text-amber-500" size={24} />
+                <FileSignature className="text-amber-500 shrink-0" size={24} />
                 <div>
                   <h3 className="text-sm font-black uppercase tracking-wider text-amber-400 font-mono">Staff Appointment & Renewal System</h3>
                   <p className="text-xs text-neutral-400 font-sans mt-0.5">
@@ -9593,14 +9624,14 @@ export const AdminPanel: React.FC = React.memo(() => {
               </div>
               <button
                 onClick={() => setAppointmentModalUser(null)}
-                className="p-1 text-neutral-400 hover:text-white border border-neutral-800 hover:border-neutral-600 transition-colors cursor-pointer"
+                className="p-1 text-neutral-400 hover:text-white border border-neutral-800 hover:border-neutral-600 transition-colors cursor-pointer shrink-0"
               >
                 <X size={18} />
               </button>
             </div>
 
             {/* Tabs */}
-            <div className="flex border-b border-neutral-800">
+            <div className="flex border-b border-neutral-800 shrink-0">
               <button
                 onClick={() => setIsRenewalTab(false)}
                 className={`flex-1 py-2.5 px-4 font-mono text-xs font-black uppercase tracking-wider border-b-2 transition-all flex items-center justify-center gap-2 cursor-pointer ${
@@ -9625,12 +9656,13 @@ export const AdminPanel: React.FC = React.memo(() => {
               </button>
             </div>
 
-            {/* Content Tabs */}
-            {!isRenewalTab ? (
-              /* Tab 1: Letter of Appointment */
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                {/* Form Inputs (Left) */}
-                <div className="lg:col-span-5 space-y-4 max-h-[580px] overflow-y-auto pr-2">
+            {/* Content Tabs Body Container */}
+            <div className="flex-1 overflow-y-auto pr-1">
+              {!isRenewalTab ? (
+                /* Tab 1: Letter of Appointment */
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                  {/* Form Inputs (Left) */}
+                  <div className="lg:col-span-5 space-y-4 max-h-[calc(80vh-160px)] overflow-y-auto pr-2">
                   <div className="bg-neutral-900/40 p-4 border border-neutral-850 space-y-4">
                     <span className="text-[10px] font-mono font-black text-amber-500 uppercase tracking-widest block border-b border-neutral-800 pb-1.5">Employment Details</span>
                     
@@ -9895,7 +9927,7 @@ export const AdminPanel: React.FC = React.memo(() => {
               /* Tab 2: Contract Renewal & Extensions */
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                 {/* Contract Extensions Planner Form (Left) */}
-                <div className="lg:col-span-5 space-y-4">
+                <div className="lg:col-span-5 space-y-4 max-h-[calc(80vh-160px)] overflow-y-auto pr-2">
                   <div className="bg-neutral-900/40 p-4 border border-neutral-850 space-y-3">
                     <span className="text-[10px] font-mono font-black text-amber-500 uppercase tracking-widest block border-b border-neutral-800 pb-1.5">Current Contract Registration</span>
                     
@@ -10439,6 +10471,185 @@ export const AdminPanel: React.FC = React.memo(() => {
                 </div>
               </div>
             )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Duplicate Pupil Records Audit & Merge Modal */}
+      {showDuplicateAuditModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-neutral-950 border-4 border-amber-500 max-w-4xl w-full p-6 space-y-5 shadow-2xl rounded-lg max-h-[90vh] flex flex-col justify-between">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between pb-4 border-b-2 border-neutral-850">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="px-2.5 py-0.5 bg-amber-500 text-black font-mono text-[9px] font-black uppercase tracking-widest rounded-sm">
+                    AUDIT DUPLICATES
+                  </span>
+                  <span className="text-[10px] font-mono font-bold text-rose-400 uppercase tracking-wider">
+                    {duplicateStudentGroups.length} Duplicate Group(s) Identified
+                  </span>
+                </div>
+                <h3 className="text-base font-black text-white font-mono uppercase tracking-tight flex items-center gap-2">
+                  <CopyCheck size={18} className="text-amber-400" />
+                  Audit & Resolve Duplicate Pupil Records
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowDuplicateAuditModal(false)}
+                className="p-1.5 bg-neutral-900 hover:bg-neutral-800 text-neutral-400 hover:text-white border border-neutral-800 transition-colors cursor-pointer rounded-sm"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Modal Banner / Description */}
+            <div className="bg-neutral-900 border-2 border-neutral-800 p-4 space-y-3 font-mono text-xs">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                <p className="text-neutral-300 leading-relaxed">
+                  The system detected pupil profiles with matching <strong>Name and Class</strong>.
+                  You can review each candidate pair below to combine payment/attendance histories or remove redundant records.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleMergeAllDuplicatesAuto}
+                  className="px-4 py-2.5 bg-amber-400 hover:bg-amber-300 text-black border border-amber-400 font-mono text-[10px] font-black uppercase tracking-wider flex items-center gap-2 shrink-0 cursor-pointer shadow-lg transition-all font-bold"
+                >
+                  <Sparkles size={13} />
+                  <span>Merge All Automatically ({duplicateStudentGroups.length} Groups)</span>
+                </button>
+              </div>
+            </div>
+
+            {/* List of Duplicate Groups */}
+            <div className="overflow-y-auto space-y-4 pr-1 flex-1 font-mono">
+              {duplicateStudentGroups.map((group, groupIdx) => {
+                return (
+                  <div key={group.key} className="bg-neutral-900 border-2 border-rose-900/60 p-4 space-y-3 rounded">
+                    <div className="flex justify-between items-center pb-2 border-b border-neutral-800">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-black text-white uppercase tracking-wider">
+                          Group #{groupIdx + 1}: <span className="text-amber-400">{group.name}</span>
+                        </span>
+                        <span className="px-2 py-0.5 bg-purple-950 border border-purple-800 text-purple-300 text-[10px] font-bold rounded-sm uppercase">
+                          Class: {group.className}
+                        </span>
+                      </div>
+                      <span className="text-[10px] font-bold text-rose-400 uppercase tracking-wider">
+                        {group.candidates.length} Candidate Profiles
+                      </span>
+                    </div>
+
+                    {/* Candidate Comparison Grid */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                      {group.candidates.map((cand, candIdx) => {
+                        const candPaymentsCount = payments.filter(p => p.studentId === cand.id).length;
+                        const candExamsCount = examsPayments.filter(ep => ep.studentId === cand.id).length;
+                        const isPrimaryCandidate = candIdx === 0;
+
+                        return (
+                          <div 
+                            key={cand.id}
+                            className={`p-3.5 border-2 space-y-2.5 relative ${
+                              isPrimaryCandidate 
+                                ? 'bg-neutral-950 border-amber-500/80' 
+                                : 'bg-neutral-950/80 border-neutral-800'
+                            }`}
+                          >
+                            <div className="flex justify-between items-start">
+                              <div className="space-y-0.5">
+                                <span className="text-[9px] font-black uppercase tracking-widest text-neutral-500 block">
+                                  {isPrimaryCandidate ? '⭐ Candidate A (Primary / Older)' : `Candidate ${String.fromCharCode(65 + candIdx)} (Secondary)`}
+                                </span>
+                                <h5 className="font-extrabold text-white text-xs">{cand.name}</h5>
+                                <span className="text-[10px] text-neutral-400 block font-mono">ID: {cand.id}</span>
+                              </div>
+                              <span className={`px-2 py-0.5 text-[9px] font-black uppercase tracking-wider border ${
+                                cand.active !== false 
+                                  ? 'bg-emerald-950 text-emerald-400 border-emerald-800' 
+                                  : 'bg-rose-950 text-rose-300 border-rose-800'
+                              }`}>
+                                {cand.active !== false ? 'Active' : 'Deactivated'}
+                              </span>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2 text-[10px] bg-neutral-900 p-2 border border-neutral-850">
+                              <div>
+                                <span className="text-neutral-500 block font-bold">Roll Number:</span>
+                                <span className="text-white font-black">{cand.rollNumber || 'N/A'}</span>
+                              </div>
+                              <div>
+                                <span className="text-neutral-500 block font-bold">Daily Payments:</span>
+                                <span className="text-emerald-400 font-black">{candPaymentsCount} records</span>
+                              </div>
+                              <div>
+                                <span className="text-neutral-500 block font-bold">Exam Payments:</span>
+                                <span className="text-purple-300 font-black">{candExamsCount} records</span>
+                              </div>
+                              <div>
+                                <span className="text-neutral-500 block font-bold">Guardian Contact:</span>
+                                <span className="text-amber-300 font-bold">{cand.guardianPhone || cand.parentPhone || 'N/A'}</span>
+                              </div>
+                            </div>
+
+                            {/* Candidate Specific Action Buttons */}
+                            <div className="pt-2 flex flex-wrap gap-2 border-t border-neutral-850">
+                              {!isPrimaryCandidate ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const res = mergeStudents(group.candidates[0].id, cand.id);
+                                      if (res.success) {
+                                        showToast(res.message);
+                                      }
+                                    }}
+                                    className="px-2.5 py-1.5 bg-amber-400 hover:bg-amber-300 text-black text-[9.5px] font-black uppercase tracking-wider border border-amber-400 cursor-pointer transition-all flex items-center gap-1 font-bold"
+                                  >
+                                    <Sparkles size={11} />
+                                    <span>Merge into Candidate A</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (confirm(`Are you sure you want to permanently delete duplicate student profile "${cand.name}" (${cand.id})?`)) {
+                                        deleteStudent(cand.id);
+                                        showToast(`Deleted duplicate pupil profile "${cand.name}".`);
+                                      }
+                                    }}
+                                    className="px-2.5 py-1.5 bg-rose-950 hover:bg-rose-900 border border-rose-800 text-rose-300 text-[9.5px] font-black uppercase tracking-wider cursor-pointer transition-all flex items-center gap-1 font-bold"
+                                  >
+                                    <Trash2 size={11} />
+                                    <span>Delete Candidate</span>
+                                  </button>
+                                </>
+                              ) : (
+                                <span className="text-[10px] text-amber-400/90 font-bold italic flex items-center gap-1 py-1">
+                                  <Info size={11} /> Primary target record for merged transactions
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="pt-3 border-t border-neutral-850 flex justify-end font-mono">
+              <button
+                type="button"
+                onClick={() => setShowDuplicateAuditModal(false)}
+                className="px-5 py-2.5 bg-neutral-900 hover:bg-neutral-800 text-white text-xs font-black uppercase tracking-wider border border-neutral-800 cursor-pointer font-bold"
+              >
+                Close Audit Dialog
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -10449,6 +10660,36 @@ export const AdminPanel: React.FC = React.memo(() => {
         onClose={() => setShowPickupPassesModal(false)}
         students={students}
         systemSettings={systemSettings}
+      />
+
+      {/* Official Pupil Admission & Enrollment Form Modal */}
+      <AdmissionFormModal
+        isOpen={showAdmissionFormModal}
+        onClose={() => {
+          setShowAdmissionFormModal(false);
+          setAdmissionFormStudent(null);
+        }}
+        initialStudent={admissionFormStudent}
+      />
+
+      {/* Edit Student Modal Popup */}
+      <EditStudentModal
+        student={studentToEditModal}
+        isOpen={!!studentToEditModal}
+        onClose={() => setStudentToEditModal(null)}
+      />
+
+      {/* Edit Staff Modal Popup */}
+      <EditStaffModal
+        staff={staffToEditModal}
+        isOpen={!!staffToEditModal}
+        onClose={() => setStaffToEditModal(null)}
+      />
+
+      {/* Absent Pupils Floating & Modal Welfare Enquiry Desk */}
+      <AbsentPupilsFloatingInquiryModal
+        isOpen={showAbsenteeEnquiryModal}
+        onClose={() => setShowAbsenteeEnquiryModal(false)}
       />
     </div>
   );

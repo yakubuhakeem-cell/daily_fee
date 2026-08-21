@@ -8,6 +8,7 @@ import QRCode from 'qrcode';
 import { useApp, getStudentB9ExpiryDate } from '../context/AppContext';
 import { SchoolLogo } from './SchoolLogo';
 import { Student, StudentClass, UserAccount, UserRole } from '../types';
+import { formatPupilId } from '../utils/pupilIdUtils';
 import { 
   Camera, 
   Upload, 
@@ -674,7 +675,7 @@ export const IdCardsGeneratorTab: React.FC = () => {
 
     const labelLine3 = isPupil ? "REG-ID" : "Employee ID";
     const valLine3 = isPupil 
-      ? ((targetEntity as Student).rollNumber || 'SHC-' + targetEntity.id.substring(0, 5).toUpperCase())
+      ? ((targetEntity as Student).rollNumber || formatPupilId(targetEntity as Student, systemSettings))
       : ((targetEntity as any).employeeId || 'EMP-' + targetEntity.id.substring(targetEntity.id.indexOf('_') + 1).slice(0, 6).toUpperCase());
 
     const qrLabel = isPupil ? "GATE PASS" : "STAFF ACCESS";
@@ -2340,7 +2341,7 @@ export const IdCardsGeneratorTab: React.FC = () => {
 
           const labelLine3 = isPupil ? "REG-ID" : "Employee ID";
           const valLine3 = isPupil 
-            ? ((targetEntity as Student).rollNumber || 'SHC-' + targetEntity.id.substring(0, 5).toUpperCase())
+            ? ((targetEntity as Student).rollNumber || formatPupilId(targetEntity as Student, systemSettings))
             : ((targetEntity as any).employeeId || 'EMP-' + targetEntity.id.substring(targetEntity.id.indexOf('_') + 1).slice(0, 6).toUpperCase());
 
           const qrLabel = isPupil ? "Gate Pass" : "Staff Access";

@@ -16,6 +16,7 @@ const ReportPanel = React.lazy(() => import('./components/ReportPanel').then(mod
 const TermPayersTab = React.lazy(() => import('./components/TermPayersTab').then(module => ({ default: module.TermPayersTab })));
 const BudgetPlanTab = React.lazy(() => import('./components/BudgetPlanTab').then(module => ({ default: module.BudgetPlanTab })));
 const ExamsDashboardTab = React.lazy(() => import('./components/ExamsDashboardTab').then(module => ({ default: module.ExamsDashboardTab })));
+const TermsSummaryTab = React.lazy(() => import('./components/TermsSummaryTab').then(module => ({ default: module.TermsSummaryTab })));
 import { PayslipVerificationModal } from './components/PayslipVerificationModal';
 import { db } from './lib/firebase';
 import { StudentClass } from './types';
@@ -24,9 +25,11 @@ import { InstallGuideModal } from './components/InstallGuideModal';
 import { AcademicHistoryDrawer } from './components/AcademicHistoryDrawer';
 import { SystemCapacityWarningModal, SystemCapacityBanner } from './components/SystemCapacityWarningModal';
 import { ChangePasswordModal } from './components/ChangePasswordModal';
+import { BackupNoticeModal } from './components/BackupNoticeModal';
 import { 
   Fingerprint, 
   LayoutDashboard, 
+  BarChart3,
   FolderEdit, 
   Receipt, 
   LogOut, 
@@ -101,7 +104,7 @@ function NavigationWrapper() {
   const totalAdminAlerts = unassignedCount + missingRegCount;
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'register' | 'admin' | 'reports' | 'termPayers' | 'budgetPlan'>('register');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'register' | 'admin' | 'reports' | 'termPayers' | 'budgetPlan' | 'exams' | 'termsSummary'>('dashboard');
   const [showSyncConfirm, setShowSyncConfirm] = useState(false);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
   const [syncErrorMessage, setSyncErrorMessage] = useState('');
@@ -536,7 +539,7 @@ function NavigationWrapper() {
     const role = currentUser.role;
     if (role === 'Administrator' || role === 'Headmaster') return true;
     if (role === 'Accountant') {
-      return ['dashboard', 'register', 'reports', 'termPayers', 'budgetPlan', 'exams'].includes(tab);
+      return ['dashboard', 'register', 'reports', 'termPayers', 'budgetPlan', 'exams', 'termsSummary'].includes(tab);
     }
     if (role === 'Teacher') {
       return ['register'].includes(tab);
@@ -548,6 +551,7 @@ function NavigationWrapper() {
   const tabs = [
     { id: 'register', label: 'Check-In GHC 5', icon: Receipt },
     { id: 'termPayers', label: 'Term Payers Status', icon: CreditCard },
+    { id: 'termsSummary', label: 'Terms Summary Dashboard', icon: BarChart3 },
     { id: 'dashboard', label: 'Cash Flow Trends & Stats', icon: LayoutDashboard },
     { id: 'exams', label: 'Exams Dashboard', icon: GraduationCap },
     { id: 'reports', label: 'Audits & Exports', icon: FolderEdit },
@@ -566,6 +570,8 @@ function NavigationWrapper() {
         return <ClassRegister />;
       case 'termPayers':
         return <TermPayersTab />;
+      case 'termsSummary':
+        return <TermsSummaryTab />;
       case 'budgetPlan':
         return <BudgetPlanTab />;
       case 'exams':
@@ -585,7 +591,7 @@ function NavigationWrapper() {
       <header className="bg-neutral-900 shrink-0 border-b-4 border-neutral-800">
         <div className="px-8 py-4 flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <SchoolLogo size={44} />
+            <SchoolLogo size={42} className="shrink-0" />
             <div className="bg-amber-400 text-black font-black p-1 text-xl px-3 leading-none tracking-tighter uppercase font-mono">
               {systemSettings?.systemName || 'FEETRACK'}
             </div>
@@ -968,6 +974,7 @@ function NavigationWrapper() {
                 const tabTooltip = 
                   tab.id === 'register' ? 'Daily Check-In: Record daily GHC 5.00 pupil check-ins, attendance, and QR code scans' :
                   tab.id === 'termPayers' ? 'Term Payers Status: Monitor lump-sum term fee payments, balances, and payment types' :
+                  tab.id === 'termsSummary' ? 'Terms Summary: Compare multi-term financial performance, live income, and total expenses' :
                   tab.id === 'dashboard' ? 'Cash Flow Feed: View real-time fee collection stats, revenue trends, and activity feeds' :
                   tab.id === 'reports' ? 'Audits & Exports: Generate financial reports, term ledgers, fee receipts, and Excel/PDF exports' :
                   tab.id === 'budgetPlan' ? 'Target Budgets & Plans: Configure school revenue targets, budget projections, and expense plans' :
@@ -990,6 +997,8 @@ function NavigationWrapper() {
                         ? 'Daily Check-In' 
                         : tab.id === 'termPayers' 
                         ? 'Term Payers Status' 
+                        : tab.id === 'termsSummary'
+                        ? 'Terms Summary'
                         : tab.id === 'dashboard' 
                         ? 'Cash Flow Feed' 
                         : tab.id === 'reports' 
@@ -998,7 +1007,7 @@ function NavigationWrapper() {
                         ? 'Target Budgets & Plans'
                         : tab.id === 'exams'
                         ? 'Exams Ledger'
-                        : 'Staff & Pupils'}
+                        : 'Staff & Pupil Registry'}
                     </span>
                     {tab.id === 'admin' && totalAdminAlerts > 0 && (
                       <span 
@@ -1081,7 +1090,9 @@ function NavigationWrapper() {
                   const activeOverflowTab = overflowTabs.find(tab => tab.id === activeTab);
                   const isOverflowActive = !!activeOverflowTab;
                   const labelToUse = isOverflowActive 
-                    ? (activeTab === 'dashboard' 
+                    ? (activeTab === 'termsSummary'
+                        ? 'Terms'
+                        : activeTab === 'dashboard' 
                         ? 'Trends' 
                         : activeTab === 'reports' 
                         ? 'Audits' 
@@ -1148,7 +1159,9 @@ function NavigationWrapper() {
                                     <span className="flex items-center gap-1.5">
                                       <TabIcon size={12} className={active ? 'text-amber-400' : 'text-neutral-500'} />
                                       <span>
-                                        {tab.id === 'dashboard' 
+                                        {tab.id === 'termsSummary'
+                                          ? 'Terms Summary'
+                                          : tab.id === 'dashboard' 
                                           ? 'Cash Flow Feed' 
                                           : tab.id === 'reports' 
                                           ? 'Audits & Exports' 
@@ -1234,8 +1247,12 @@ function NavigationWrapper() {
                           ? 'DAILY CHECK-IN' 
                           : tab.id === 'termPayers' 
                           ? 'TERM PAYERS STATUS' 
+                          : tab.id === 'termsSummary'
+                          ? 'TERMS SUMMARY DASHBOARD'
                           : tab.id === 'dashboard' 
                           ? 'CASH FLOW FEED' 
+                          : tab.id === 'exams'
+                          ? 'EXAMS DASHBOARD'
                           : tab.id === 'reports' 
                           ? 'AUDITS & EXPORTS' 
                           : tab.id === 'budgetPlan'
@@ -1929,6 +1946,9 @@ function NavigationWrapper() {
         isOpen={isChangePasswordOpen}
         onClose={() => setIsChangePasswordOpen(false)}
       />
+
+      {/* PROACTIVE 30-MINUTE DATABASE BACKUP NOTICE MODAL */}
+      <BackupNoticeModal />
     </div>
   );
 }

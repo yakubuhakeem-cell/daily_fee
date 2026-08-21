@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useMemo } from "react";
-import { useApp, calculateStudentFinancialState } from "../context/AppContext";
+import { useApp, calculateStudentFinancialState, isTermPayer } from "../context/AppContext";
 import { SchoolCategory, StudentClass } from "../types";
 import {
   TrendingUp,
@@ -39,6 +39,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { VoiceSearchButton } from "./VoiceSearchButton";
+import { SchoolLogo } from "./SchoolLogo";
 import { TermAttendanceHeatmap } from "./TermAttendanceHeatmap";
 import {
   ResponsiveContainer,
@@ -163,7 +164,6 @@ export const Dashboard: React.FC = React.memo(() => {
   const [activeLayout, setActiveLayout] = useState<
     | "bento"
     | "class-perf"
-    | "alerts-desk"
     | "weekly-aggregate"
     | "absence-heatmap"
     | "arrears-performance"
@@ -1973,7 +1973,46 @@ ${activeClasses.length > 0 ? `\nTop Performing Classrooms:\n` + activeClasses.sl
         animate="show"
         className="space-y-6 font-sans no-print"
       >
-      {/* Date & Layout Control Header */}
+        {/* Main Dashboard Fee Tracker Brand Banner */}
+        <motion.div
+          variants={itemVariants}
+          className="bg-neutral-900 border-4 border-amber-500/40 p-5 flex flex-col md:flex-row items-center justify-between gap-4 shadow-xl relative overflow-hidden"
+        >
+          <div className="flex items-center gap-4 z-10">
+            <div className="relative group shrink-0">
+              <SchoolLogo size={70} className="border-2 border-amber-400 shadow-lg" />
+              <div className="absolute -bottom-1 -right-1 bg-amber-400 text-black text-[9px] font-black font-mono px-1.5 py-0.5 rounded uppercase shadow">
+                HAMAN
+              </div>
+            </div>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="text-xl md:text-2xl font-black text-white tracking-tight uppercase font-mono flex items-center gap-2">
+                  FEE TRACKER
+                </h1>
+                <span className="bg-emerald-950 text-emerald-400 border border-emerald-800 text-[9px] font-black font-mono px-2 py-0.5 rounded uppercase tracking-wider">
+                  Stay Accurate • Gain Control
+                </span>
+              </div>
+              <p className="text-xs text-neutral-400 font-medium mt-1">
+                Main Dashboard Financial Operations Ledger & Real-Time Collections System
+              </p>
+            </div>
+          </div>
+          
+          <div className="flex items-center gap-3 shrink-0 z-10">
+            <div className="text-right hidden sm:block">
+              <div className="text-[10px] font-mono font-black text-amber-400 uppercase tracking-widest">
+                SAAKO HOLY CHILD ACADEMY
+              </div>
+              <div className="text-[9px] font-mono text-neutral-400 uppercase tracking-wider">
+                System Operations Hub
+              </div>
+            </div>
+          </div>
+        </motion.div>
+
+        {/* Date & Layout Control Header */}
       <motion.div
         variants={itemVariants}
         className="bg-neutral-900 border-4 border-neutral-800 p-6 flex flex-col xl:flex-row justify-between items-stretch xl:items-center gap-6"
@@ -2103,22 +2142,6 @@ ${activeClasses.length > 0 ? `\nTop Performing Classrooms:\n` + activeClasses.sl
             }`}
           >
             <Coins size={14} /> Weekly Collections
-          </button>
-          <button
-            onClick={() => setActiveLayout("alerts-desk")}
-            className={`px-4 py-2 text-[10px] font-black uppercase tracking-widest transition-all cursor-pointer flex items-center gap-2 ${
-              activeLayout === "alerts-desk"
-                ? "bg-white text-black font-black"
-                : "text-neutral-400 hover:text-white hover:bg-neutral-900/40"
-            }`}
-          >
-            <AlertTriangle
-              size={14}
-              className={
-                pendingAlerts.length > 0 ? "text-amber-450 animate-bounce" : ""
-              }
-            />{" "}
-            Alerts Deck ({pendingAlerts.length})
           </button>
           <button
             onClick={() => setActiveLayout("absence-heatmap")}
@@ -4070,448 +4093,7 @@ ${activeClasses.length > 0 ? `\nTop Performing Classrooms:\n` + activeClasses.sl
           </motion.div>
         )}
 
-        {/* Perspective Tab 3: Detailed Alerts desk for high-priority uncollected payments - TARGETED */}
-        {activeLayout === "alerts-desk" && (
-          <motion.div
-            key="alerts-desk-layout"
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -15 }}
-            transition={{ duration: 0.2 }}
-            className="bg-neutral-900 border-4 border-neutral-800 p-8 space-y-6"
-          >
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-4 border-b-2 border-neutral-800">
-              <div>
-                <h3 className="text-2xl font-black uppercase italic text-white tracking-tight flex items-center gap-3">
-                  <span className="w-3 h-3 bg-red-500 animate-ping" /> Guardian Alerts Dispatcher Console
-                </h3>
-                <p className="text-xs text-neutral-400 font-bold mt-1">Manage, notify, or dial parents of unverified pupil entries</p>
-              </div>
 
-              {/* Incremental alert list search */}
-              <div className="relative w-full md:w-80">
-                <Search className="absolute left-3.5 top-3.5 text-neutral-500" size={14} />
-                <input
-                  type="text"
-                  placeholder="Query pupil name or grade level..."
-                  value={alertSearch}
-                  onChange={(e) => setAlertSearch(e.target.value)}
-                  className="w-full bg-neutral-950 border-2 border-neutral-800 py-3 pl-10 pr-4 text-xs font-mono outline-none text-white focus:border-amber-400 placeholder:text-neutral-700 font-bold"
-                />
-              </div>
-            </div>
-
-            {alertsWithArrears.length > 0 && (() => {
-              const sampleAlert = alertsWithArrears.find(a => selectedAlertIds.includes(a.studentId)) || alertsWithArrears[0];
-              let previewMessage = '';
-              if (sampleAlert) {
-                previewMessage = bulkMessageTemplate
-                  .replace(/{studentName}/g, sampleAlert.studentName)
-                  .replace(/{className}/g, sampleAlert.class)
-                  .replace(/{currentDate}/g, currentDate)
-                  .replace(/{arrearsAmount}/g, sampleAlert.arrears.toFixed(2))
-                  .replace(/{paymentType}/g, sampleAlert.paymentType === 'Term' ? 'Term-based' : sampleAlert.paymentType === 'Daily' ? 'Daily GHC 5' : sampleAlert.paymentType);
-              }
-
-              return (
-                <div className="space-y-6">
-                  {/* Bulk Notifications Dispatcher Hub */}
-                  <div className="space-y-4 text-left">
-                    <div className="border-b-2 border-neutral-800 pb-2">
-                      <h4 className="text-sm font-black text-amber-400 font-mono uppercase tracking-widest flex items-center gap-2">
-                        <span>■</span> BULK NOTIFICATIONS DISPATCHER HUB
-                      </h4>
-                    </div>
-
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 bg-neutral-950/60 border-2 border-neutral-850 p-6">
-                      {/* Left col: Template customizers */}
-                      <div className="space-y-4">
-                        <div className="flex items-center gap-2">
-                          <MessageSquare className="text-amber-400" size={16} />
-                          <h4 className="text-xs font-black text-neutral-300 font-mono uppercase tracking-widest">Notification content template</h4>
-                        </div>
-                        
-                        <textarea
-                          value={bulkMessageTemplate}
-                          onChange={(e) => setBulkMessageTemplate(e.target.value)}
-                          className="w-full h-44 bg-neutral-950 border border-neutral-800 p-4 font-mono text-[11px] leading-relaxed select-text outline-none text-neutral-200 focus:border-amber-400 focus:ring-1 focus:ring-amber-400"
-                          placeholder="Type default template message..."
-                        />
-                        
-                        <div className="grid grid-cols-2 gap-2 text-[9px] font-mono text-neutral-500 font-bold bg-neutral-900/50 p-3 border border-neutral-850">
-                          <div><span className="text-amber-400">{`{studentName}`}</span>: Ward full name</div>
-                          <div><span className="text-amber-400">{`{className}`}</span>: Active grade/class</div>
-                          <div><span className="text-amber-400">{`{arrearsAmount}`}</span>: Outstanding sum</div>
-                          <div><span className="text-amber-400">{`{paymentType}`}</span>: Ledger billing code</div>
-                          <div className="col-span-2 pt-1.5 border-t border-neutral-850 text-neutral-505 font-normal">
-                            * Placeholders are auto-populated for each recipient dynamically.
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Right col: Group selections & controls */}
-                      <div className="space-y-4 flex flex-col justify-between">
-                        <div className="space-y-3">
-                          <div className="flex justify-between items-center">
-                            <h4 className="text-xs font-black text-neutral-300 font-mono uppercase tracking-widest">Active Dispatcher Panel</h4>
-                            <span className="text-[10px] font-mono font-black text-neutral-450 uppercase tracking-widest bg-neutral-900 border border-neutral-800 px-2.5 py-1">
-                              {selectedAlertIds.length} matching selected
-                            </span>
-                          </div>
-
-                          {/* Dynamic Channel Selector */}
-                          <div className="flex justify-between items-center bg-neutral-900/60 p-1 border border-neutral-800 rounded-sm">
-                            <span className="text-[10px] uppercase font-bold text-neutral-400 pl-2">Channel:</span>
-                            <div className="flex gap-1">
-                              <button
-                                type="button"
-                                onClick={() => setActiveChannel('whatsapp')}
-                                className={`text-[9.5px] font-mono font-black uppercase tracking-wider py-1.5 px-3 rounded-none transition-all cursor-pointer ${
-                                  activeChannel === 'whatsapp'
-                                    ? 'bg-emerald-500 text-black'
-                                    : 'bg-transparent text-neutral-450 hover:text-white'
-                                }`}
-                              >
-                                WhatsApp
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setActiveChannel('sms')}
-                                className={`text-[9.5px] font-mono font-black uppercase tracking-wider py-1.5 px-3 rounded-none transition-all cursor-pointer ${
-                                  activeChannel === 'sms'
-                                    ? 'bg-amber-500 text-black'
-                                    : 'bg-transparent text-neutral-450 hover:text-white'
-                                }`}
-                              >
-                                SMS Gateway
-                              </button>
-                            </div>
-                          </div>
-
-                          <div className="flex flex-wrap gap-2">
-                            <button
-                              onClick={handleSelectAllArrears}
-                              className="text-[9px] font-mono font-black uppercase tracking-wider py-2 px-3 bg-red-950/20 border border-red-900/60 hover:border-red-500 text-red-400 transition-all cursor-pointer"
-                              title="Select all unverified checking students that have outstanding arrears > 0"
-                            >
-                              Select All With Arrears
-                            </button>
-                            <button
-                              onClick={handleSelectAll}
-                              className="text-[9px] font-mono font-bold uppercase tracking-wider py-2 px-3 bg-neutral-900 border border-neutral-800 hover:border-neutral-600 hover:text-white text-neutral-400 transition-all cursor-pointer"
-                            >
-                              Select All Candidates
-                            </button>
-                            <button
-                              onClick={handleSelectNone}
-                              className="text-[9px] font-mono font-bold uppercase tracking-wider py-2 px-3 bg-neutral-900 border border-neutral-800 hover:border-neutral-750 hover:text-neutral-305 text-neutral-500 transition-all cursor-pointer"
-                            >
-                              Deselect All
-                            </button>
-                          </div>
-
-                          {previewMessage && (
-                            <div className="bg-neutral-900 p-4 border border-neutral-850 rounded-sm space-y-1.5">
-                              <div className="text-[9px] font-mono font-black uppercase text-neutral-550 flex items-center gap-1">
-                                <span className={`w-1.5 h-1.5 rounded-full ${activeChannel === 'whatsapp' ? 'bg-emerald-500' : 'bg-amber-500'}`} />
-                                <span>Simulated {activeChannel === 'whatsapp' ? 'WhatsApp' : 'SMS'} Sample Preview ({sampleAlert?.studentName})</span>
-                              </div>
-                              <div className="text-[10.5px] leading-relaxed text-neutral-450 font-mono whitespace-pre-wrap select-text max-h-32 overflow-y-auto pr-1">
-                                {previewMessage}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-
-                        <button
-                          onClick={handleLaunchBulkAlerts}
-                          disabled={isBulkSending || selectedAlertIds.length === 0}
-                          className={`w-full text-center text-xs font-mono font-black uppercase tracking-widest py-3 border-2 transition-all cursor-pointer flex items-center justify-center gap-2 ${
-                            isBulkSending
-                              ? 'bg-neutral-900 border-neutral-800 text-neutral-600 cursor-not-allowed'
-                              : selectedAlertIds.length === 0
-                                ? 'bg-neutral-950 border-neutral-850 text-neutral-650 cursor-not-allowed'
-                                : activeChannel === 'whatsapp'
-                                  ? 'bg-emerald-500 hover:bg-emerald-450 border-emerald-500 text-black font-black active:scale-[0.99] shadow-lg shadow-emerald-950/20'
-                                  : 'bg-amber-500 hover:bg-amber-450 border-amber-500 text-black font-black active:scale-[0.99] shadow-lg shadow-amber-950/20'
-                          }`}
-                        >
-                          {isBulkSending ? (
-                            <span className="animate-pulse">DISPATCHING BULK {activeChannel === 'whatsapp' ? 'WHATSAPP' : 'SMS'} PIPELINE...</span>
-                          ) : (
-                            <>
-                              {activeChannel === 'whatsapp' ? (
-                                <MessageSquare size={13} className="shrink-0 stroke-[2.5]" />
-                              ) : (
-                                <Smartphone size={13} className="shrink-0 stroke-[2.5]" />
-                              )}
-                              <span>Dispatch Template {activeChannel === 'whatsapp' ? 'WhatsApp' : 'SMS'} ({selectedAlertIds.length} selected)</span>
-                            </>
-                          )}
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Live Broadcast Progress Bar Console */}
-                    {bulkSendResults && (
-                      <div className="bg-neutral-950 border-2 border-neutral-850 p-5 font-mono space-y-3">
-                        <div className="flex justify-between items-center border-b border-neutral-850 pb-2">
-                          <div className="text-xs font-black text-amber-400 flex items-center gap-2">
-                            <span className="w-2 h-2 bg-red-500 rounded-full animate-ping" />
-                            <span>LIVE BROADCAST PIPELINE STREAM ({bulkSendResults.current}/{bulkSendResults.total})</span>
-                          </div>
-                          <span className="text-[10px] text-neutral-400 font-bold">{Math.round((bulkSendResults.current / bulkSendResults.total) * 100)}%</span>
-                        </div>
-
-                        {/* Elegant Progress bar container */}
-                        <div className="w-full bg-neutral-900 h-2.5 border border-neutral-800 rounded-sm">
-                          <div 
-                            className="bg-emerald-500 h-full transition-all duration-350"
-                            style={{ width: `${(bulkSendResults.current / bulkSendResults.total) * 100}%` }}
-                          />
-                        </div>
-
-                        {/* Scrollable logger console window */}
-                        <div className="bg-neutral-950/80 border border-neutral-850 p-3.5 h-36 overflow-y-auto text-[10.5px] leading-relaxed text-neutral-300 space-y-1 select-text scrollbar-thin text-left font-mono">
-                          {bulkSendResults.logs.map((log, index) => (
-                            <div key={index} className="flex gap-2">
-                              <span className={`font-bold uppercase tracking-wider shrink-0 select-none ${
-                                log.status === 'success' ? 'text-emerald-400' : log.status === 'error' ? 'text-red-500 font-black' : 'text-amber-400 animate-pulse'
-                              }`}>
-                                [{log.status === 'success' ? '✔ DELIVERED' : log.status === 'error' ? '✖ SKIPPED' : '♦ RUNNING'}]
-                              </span>
-                              <span className="font-bold text-neutral-200">{log.studentName}:</span>
-                              <span className="text-neutral-400">{log.message}</span>
-                            </div>
-                          ))}
-                        </div>
-
-                        <div className="flex gap-2 justify-end">
-                          <button
-                            onClick={() => setBulkSendResults(null)}
-                            disabled={isBulkSending}
-                            className="text-[9px] uppercase tracking-wider px-3 py-1.5 bg-neutral-900 border border-neutral-850 hover:bg-neutral-855 text-neutral-450 hover:text-white font-bold transition disabled:opacity-40"
-                          >
-                            Clear Stream Logs & Close Console
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Candidates Search Result Cards Header */}
-                  <div className="border-b border-neutral-800 pb-2">
-                    <h4 className="text-xs font-black text-neutral-400 font-mono uppercase tracking-widest text-left">
-                      GATE CHECK-IN CANDIDATE PROFILES ({alertsWithArrears.length})
-                    </h4>
-                  </div>
-                </div>
-              );
-            })()}
-
-            {alertsWithArrears.length === 0 ? (
-              <div className="py-20 text-center bg-neutral-950 border-2 border-neutral-850 space-y-3">
-                <Check className="mx-auto text-amber-400" size={36} />
-                <h4 className="text-lg font-black uppercase tracking-wider text-white">Workspace Cleared</h4>
-                <p className="text-xs font-bold text-neutral-500 uppercase tracking-widest">No unverified pupils lack ledger keys today.</p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {alertsWithArrears.map((st) => {
-                  const isSelected = selectedAlertIds.includes(st.studentId);
-                  return (
-                    <motion.div 
-                      key={st.studentId} 
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.15 }}
-                      className={`bg-neutral-950 border-2 p-6 flex flex-col justify-between gap-5 transition-all duration-200 ${
-                        isSelected
-                          ? 'border-emerald-500 bg-neutral-950 shadow-md shadow-emerald-950/20'
-                          : 'border-neutral-855 hover:border-neutral-700'
-                      }`}
-                    >
-                      <div className="flex justify-between items-start gap-2">
-                        <div className="space-y-1.5 text-left">
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <span className="text-[10px] font-black bg-red-950 border border-red-800 text-red-400 px-2 py-0.5 uppercase tracking-widest font-mono">
-                              {st.class} Checkpoint
-                            </span>
-                            {st.arrears > 0 ? (
-                              <span className="text-[9px] font-black bg-red-500/10 border border-red-500/30 text-red-400 px-2 py-0.5 uppercase tracking-widest font-mono">
-                                Arrears: GHC {st.arrears.toFixed(2)}
-                              </span>
-                            ) : (st.paymentType === 'Scholar' ? (
-                              <span className="text-[9px] font-black bg-slate-900 border border-slate-850 text-slate-400 px-2 py-0.5 uppercase tracking-widest font-mono">
-                                Scholar
-                              </span>
-                            ) : (
-                              <span className="text-[9px] font-black bg-neutral-900 border border-neutral-800 text-neutral-400 px-2 py-0.5 uppercase tracking-widest font-mono">
-                                No Debt
-                              </span>
-                            ))}
-                          </div>
-                          <h4 className="text-lg font-black text-white uppercase tracking-tight leading-none pt-2">{st.studentName}</h4>
-                        </div>
-                        
-                        {/* Selector check box in top right */}
-                        <button
-                          type="button"
-                          onClick={() => handleToggleSelectAlertObj(st.studentId)}
-                          className={`p-1 flex items-center justify-center cursor-pointer border-2 transition-all rounded-sm shrink-0 ${
-                            isSelected
-                              ? 'bg-emerald-500 border-emerald-500 text-black'
-                              : 'bg-neutral-900 hover:bg-neutral-850 border-neutral-800 text-transparent hover:border-neutral-650'
-                          }`}
-                          title={isSelected ? "Deselect student" : "Select student for draft"}
-                        >
-                          <Check size={12} className="stroke-[3]" />
-                        </button>
-                      </div>
-
-                      <div className="bg-neutral-900 border border-neutral-855 p-3.5 space-y-2 text-xs font-mono text-left">
-                        <div className="flex justify-between font-bold">
-                          <span className="text-neutral-500 uppercase">Primary Category:</span>
-                          <span className="text-white uppercase font-bold">{st.category}</span>
-                        </div>
-                        <div className="flex justify-between font-bold">
-                          <span className="text-neutral-500 uppercase">Registered Contact:</span>
-                          <span className="text-amber-400 select-all font-mono font-black">{st.guardianPhone}</span>
-                        </div>
-                        <div className="flex justify-between font-bold">
-                          <span className="text-neutral-500 uppercase font-mono">Billing Scheme:</span>
-                          <span className="text-white uppercase font-black">
-                            {st.paymentType === 'Term' ? 'Term-based Scheme' : st.paymentType === 'Scholar' ? 'Scholar' : 'Daily GHC 5 Fee'}
-                          </span>
-                        </div>
-                        <div className="flex justify-between font-bold text-red-100">
-                          <span className="text-red-500 uppercase font-mono">Calculated Debt:</span>
-                          <span className={`font-black ${st.arrears > 0 ? 'text-red-400 font-extrabold animate-pulse' : 'text-neutral-400'}`}>
-                            GHC {st.arrears.toFixed(2)}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-3 gap-1.5 mt-auto">
-                        <button
-                          onClick={() => handleDialGuardian(st.studentId, st.guardianPhone)}
-                          disabled={notifiedStudents[st.studentId] || sendingWhatsApp[st.studentId] || sendingSms[st.studentId]}
-                          className={`text-center text-[9px] font-black uppercase tracking-wider py-3 px-1 border-2 transition-all cursor-pointer flex items-center justify-center gap-1 ${
-                            notifiedStudents[st.studentId]
-                              ? 'bg-amber-400 border-amber-400 text-black font-black'
-                              : 'bg-neutral-950 border-neutral-800 hover:border-neutral-600 hover:bg-neutral-900/50 text-white'
-                          }`}
-                        >
-                          {notifiedStudents[st.studentId] ? (
-                            <span className="animate-pulse">DIALING...</span>
-                          ) : (
-                            <>
-                              <PhoneCall size={10} className="shrink-0" />
-                              <span>Dial</span>
-                            </>
-                          )}
-                        </button>
-
-                        <button
-                          onClick={() => {
-                            // Run single alert with the custom template format
-                            const formattedMessage = bulkMessageTemplate
-                              .replace(/{studentName}/g, st.studentName)
-                              .replace(/{className}/g, st.class)
-                              .replace(/{currentDate}/g, currentDate)
-                              .replace(/{arrearsAmount}/g, st.arrears.toFixed(2))
-                              .replace(/{paymentType}/g, st.paymentType === 'Term' ? 'Term-based' : st.paymentType === 'Daily' ? 'Daily GHC 5' : st.paymentType);
-                            
-                            setSendingWhatsApp(prev => ({ ...prev, [st.studentId]: true }));
-                            (async () => {
-                              try {
-                                if (sendautomatedWhatsApp) {
-                                  await sendautomatedWhatsApp(st.guardianPhone, formattedMessage, st.studentId, st.studentName, 'compliance-alert');
-                                }
-                                setWhatsappSuccess(prev => ({ ...prev, [st.studentId]: true }));
-                                showToast(`Simulated WhatsApp alert dispatched successfully to ${st.studentName}'s guardian!`);
-                                setTimeout(() => {
-                                  setWhatsappSuccess(prev => ({ ...prev, [st.studentId]: false }));
-                                }, 3000);
-                              } catch (e) {
-                                showToast("Error dispatching simulated WhatsApp request.");
-                              } finally {
-                                setSendingWhatsApp(prev => ({ ...prev, [st.studentId]: false }));
-                              }
-                            })();
-                          }}
-                          disabled={notifiedStudents[st.studentId] || sendingWhatsApp[st.studentId] || sendingSms[st.studentId]}
-                          className={`text-center text-[9px] font-black uppercase tracking-wider py-3 px-1 border-2 transition-all cursor-pointer flex items-center justify-center gap-1 ${
-                            whatsappSuccess[st.studentId]
-                              ? 'bg-emerald-500 border-emerald-500 text-black font-extrabold'
-                              : 'bg-neutral-950 hover:bg-emerald-950/20 border-emerald-800/80 hover:border-emerald-500 text-emerald-400'
-                          }`}
-                          title="Simulate WhatsApp delivery message safely to guardian"
-                        >
-                          {sendingWhatsApp[st.studentId] ? (
-                            <span className="animate-pulse">SENDING...</span>
-                          ) : whatsappSuccess[st.studentId] ? (
-                            <>
-                              <Check size={10} className="shrink-0 stroke-[3]" />
-                              <span>Sent OK</span>
-                            </>
-                          ) : (
-                            <>
-                              <MessageSquare size={10} className="shrink-0" />
-                              <span>WhatsApp</span>
-                            </>
-                          )}
-                        </button>
-
-                        <button
-                          onClick={() => {
-                            const formattedMessage = bulkMessageTemplate
-                              .replace(/{studentName}/g, st.studentName)
-                              .replace(/{className}/g, st.class)
-                              .replace(/{currentDate}/g, currentDate)
-                              .replace(/{arrearsAmount}/g, st.arrears.toFixed(2))
-                              .replace(/{paymentType}/g, st.paymentType === 'Term' ? 'Term-based' : st.paymentType === 'Daily' ? 'Daily GHC 5' : st.paymentType);
-                            
-                            setSendingSms(prev => ({ ...prev, [st.studentId]: true }));
-                            setTimeout(() => {
-                              setSmsSuccess(prev => ({ ...prev, [st.studentId]: true }));
-                              showToast(`Simulated SMS receipt dispatched successfully to ${st.studentName}'s guardian!`);
-                              setSendingSms(prev => ({ ...prev, [st.studentId]: false }));
-                              setTimeout(() => {
-                                setSmsSuccess(prev => ({ ...prev, [st.studentId]: false }));
-                              }, 3000);
-                            }, 800);
-                          }}
-                          disabled={notifiedStudents[st.studentId] || sendingWhatsApp[st.studentId] || sendingSms[st.studentId]}
-                          className={`text-center text-[9px] font-black uppercase tracking-wider py-3 px-1 border-2 transition-all cursor-pointer flex items-center justify-center gap-1 ${
-                            smsSuccess[st.studentId]
-                              ? 'bg-amber-500 border-amber-500 text-black font-extrabold'
-                              : 'bg-neutral-950 hover:bg-amber-950/20 border-neutral-855 hover:border-amber-500 text-amber-400'
-                          }`}
-                          title="Simulate standard mobile network SMS delivery safely to guardian"
-                        >
-                          {sendingSms[st.studentId] ? (
-                            <span className="animate-pulse">SENDING...</span>
-                          ) : smsSuccess[st.studentId] ? (
-                            <>
-                              <Check size={10} className="shrink-0 stroke-[3]" />
-                              <span>Sent OK</span>
-                            </>
-                          ) : (
-                            <>
-                              <Smartphone size={10} className="shrink-0" />
-                              <span>SMS</span>
-                            </>
-                          )}
-                        </button>
-                      </div>
-                    </motion.div>
-                  );
-                })}
-              </div>
-            )}
-          </motion.div>
-        )}
 
         {/* Perspective Tab 4: Weekly Collections Aggregate Matrix */}
         {activeLayout === "weekly-aggregate" && (

@@ -4,20 +4,28 @@
  */
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { useApp, PendingAlert, calculateStudentFinancialState } from '../context/AppContext';
+import { useApp, PendingAlert, calculateStudentFinancialState, getStudentBaselineTermFee, isTermPayer } from '../context/AppContext';
 import { StudentClass, Student, SchoolCategory, PaymentRecord } from '../types';
-import { Check, X, Search, Landmark, BellRing, ChevronRight, ChevronLeft, CheckSquare, Users, MessageSquareCode, CalendarDays, CalendarPlus, CalendarX, Plus, ChevronDown, ChevronUp, Trash2, Coins, History, Printer, Camera, Upload, Copy, Pencil, QrCode, AlertCircle, User, UserCheck, UserX, Phone, DollarSign, Award, ShieldAlert, CheckCircle2, TrendingUp, Info, Download, MessageSquare, RefreshCw, Layers, Smartphone, Send, Link, Settings, Mic, Receipt, Lock, KeyRound, Sparkles, Zap, FileText } from 'lucide-react';
+import { Check, X, Search, Landmark, BellRing, ChevronRight, ChevronLeft, CheckSquare, Users, MessageSquareCode, CalendarDays, CalendarPlus, CalendarX, Plus, ChevronDown, ChevronUp, Trash2, Coins, History, Printer, Camera, Upload, Copy, Pencil, QrCode, AlertCircle, User, UserCheck, UserX, Phone, DollarSign, Award, ShieldAlert, CheckCircle2, TrendingUp, Info, Download, MessageSquare, RefreshCw, Layers, Smartphone, Send, Link, Settings, Mic, Receipt, Lock, KeyRound, Sparkles, Zap, FileText, Scissors, Utensils } from 'lucide-react';
 import { motion } from 'motion/react';
 import { Html5Qrcode } from 'html5-qrcode';
 import { SchoolLogo } from './SchoolLogo';
 import { VoiceSearchButton } from './VoiceSearchButton';
 import ExpressFeeModal from './ExpressFeeModal';
+import { CanteenBookletModal } from './CanteenBookletModal';
 import { findBestMatchingStudent } from '../utils/fuzzyNameMatcher';
 import { getStudentPickupCode, getSchoolWeekInfo } from '../utils/pickupCode';
 import { PickupPassesModal } from './PickupPassesModal';
+import { AdmissionFormModal } from './AdmissionFormModal';
 import QRCode from 'qrcode';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { getTermGapBreaks, isDateInTermGap, isHolidayOrVacationDate } from '../utils/termUtils';
+import { DeleteConfirmationModal, DeleteConfirmDetails } from './DeleteConfirmationModal';
+import { EditStudentModal } from './EditStudentModal';
+import { DuplicateReconciliationModal } from './DuplicateReconciliationModal';
+import { ClearClassFeesModal } from './ClearClassFeesModal';
+import { formatPupilId } from '../utils/pupilIdUtils';
 
 export const ClassRegister: React.FC = React.memo(() => {
   const { 
@@ -38,6 +46,8 @@ export const ClassRegister: React.FC = React.memo(() => {
     deletePayment,
     purgeDuplicatePayments,
     purgeAdvancePayments,
+    purgeOutOfTermPayments,
+    purgeClassOutOfTermAndDuplicates,
     purgeRepeatedAndAdvancePayments,
     clearDailyPaymentsForClass,
     deleteStudentPayments,
@@ -46,6 +56,7 @@ export const ClassRegister: React.FC = React.memo(() => {
     viewingTermId,
     addTerm,
     editTerm,
+    completeTerm,
     setActiveTerm,
     deleteTerm,
     addPublicHoliday,
@@ -104,9 +115,12 @@ export const ClassRegister: React.FC = React.memo(() => {
   const [selectedRecordForReceipt, setSelectedRecordForReceipt] = useState<{ student: Student; payment: PaymentRecord } | null>(null);
   const [lastLoggedStudent, setLastLoggedStudent] = useState<Student | null>(null);
   const [showPrintHardcopyModal, setShowPrintHardcopyModal] = useState(false);
+  const [showCanteenModal, setShowCanteenModal] = useState(false);
   const [hardcopyMode, setHardcopyMode] = useState<'weekly' | 'daily'>('weekly');
   const weekInfo = useMemo(() => getSchoolWeekInfo(), []);
   const [showPickupPassesModal, setShowPickupPassesModal] = useState(false);
+  const [showAdmissionFormModal, setShowAdmissionFormModal] = useState(false);
+  const [admissionFormStudent, setAdmissionFormStudent] = useState<Student | null>(null);
   const [isExpressFeeOpen, setIsExpressFeeOpen] = useState(false);
 
   const [qrStudent, setQrStudent] = useState<Student | null>(null);
@@ -143,6 +157,9 @@ export const ClassRegister: React.FC = React.memo(() => {
     const start = startStr <= endStr ? startStr : endStr;
     const end = startStr <= endStr ? endStr : startStr;
 
+    const publicHolidays = activeTerm?.publicHolidays || [];
+    const checkIsHoliday = (d: string) => publicHolidays.includes(d) || isHolidayOrVacationDate(d, terms, activeTerm).isHoliday;
+
     let rangeDays = (activeTerm?.schoolDays ?? []).filter(d => d >= start && d <= end);
     if (rangeDays.length === 0) {
       const generated: string[] = [];
@@ -161,8 +178,11 @@ export const ClassRegister: React.FC = React.memo(() => {
       rangeDays = generated;
     }
 
+    // Exclude public holidays from bulk selection
+    rangeDays = rangeDays.filter(d => !checkIsHoliday(d));
+
     setSelectedBulkDates(rangeDays);
-    showToast(`Selected ${rangeDays.length} date(s) between ${start} and ${end}.`);
+    showToast(`Selected ${rangeDays.length} active school date(s) between ${start} and ${end} (Holidays excluded).`);
   };
 
   // Pupil-specific daily note state variables
@@ -242,6 +262,7 @@ export const ClassRegister: React.FC = React.memo(() => {
 
   // Photo capturing/uploading states
   const [selectedPhotoStudent, setSelectedPhotoStudent] = useState<Student | null>(null);
+  const [studentToEdit, setStudentToEdit] = useState<Student | null>(null);
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -508,6 +529,12 @@ export const ClassRegister: React.FC = React.memo(() => {
     const trimmedText = decodedText.trim();
     if (!trimmedText) return;
 
+    if (isHoliday) {
+      playBeep('error');
+      addQrFeedback(`🌴 Holiday Info: Registry locked! ${currentDate} is declared as a Public Holiday (${holidayMeta.label}). Registrations are disabled.`, 'error');
+      return;
+    }
+
     // Ignore additional scans if we are already displaying a custom amount prompt
     if (qrActivePromptStudent) {
       return;
@@ -544,7 +571,9 @@ export const ClassRegister: React.FC = React.memo(() => {
     // Match with student catalog
     const student = students.find(s => 
       s.id.toLowerCase() === cleanedText ||
-      s.rollNumber.toLowerCase() === cleanedText
+      s.rollNumber.toLowerCase() === cleanedText ||
+      (s.class === selectedClass && s.rollNumber.replace(/^0+/, '') === cleanedText.replace(/^0+/, '')) ||
+      (s.rollNumber.replace(/^0+/, '') === cleanedText.replace(/^0+/, ''))
     );
 
     if (!student) {
@@ -804,6 +833,11 @@ export const ClassRegister: React.FC = React.memo(() => {
   const handleQrCustomAmountSubmit = () => {
     if (!qrActivePromptStudent) return;
     
+    if (isHoliday) {
+      showToast("Class registry is locked. Date selected is a public holiday.");
+      return;
+    }
+
     const parsedAmount = parseFloat(qrCustomAmountInput.trim());
     if (isNaN(parsedAmount) || parsedAmount < 0) {
       showToast("Please enter a valid non-negative custom amount.");
@@ -1065,6 +1099,7 @@ export const ClassRegister: React.FC = React.memo(() => {
   const [showTermCreator, setShowTermCreator] = useState(false);
   const [editingTermId, setEditingTermId] = useState<string | null>(null);
   const [showHolidayManager, setShowHolidayManager] = useState(false);
+  const [showHolidayTooltip, setShowHolidayTooltip] = useState(false);
   const [holidayInputDate, setHolidayInputDate] = useState('');
   const [newTermName, setNewTermName] = useState('');
   const [newTermStartDate, setNewTermStartDate] = useState('2026-06-01');
@@ -1085,13 +1120,18 @@ export const ClassRegister: React.FC = React.memo(() => {
 
   // Transaction History modal states
   const [historyStudent, setHistoryStudent] = useState<Student | null>(null);
-  const [historyModalTab, setHistoryModalTab] = useState<'profile' | 'history' | 'ledger' | 'print' | 'momo'>('profile');
+  const [historyModalTab, setHistoryModalTab] = useState<'profile' | 'gallery' | 'history' | 'ledger' | 'print' | 'momo'>('profile');
   const [accountHistorySearch, setAccountHistorySearch] = useState('');
   const [accountHistoryFilter, setAccountHistoryFilter] = useState<'all' | 'payments' | 'attendance' | 'arrears'>('all');
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [editedName, setEditedName] = useState('');
   const [editedPhone, setEditedPhone] = useState('');
   const [editedPhotoUrl, setEditedPhotoUrl] = useState<string | null>(null);
+
+  // Photo gallery & identity verification states
+  const [zoomedPhotoUrl, setZoomedPhotoUrl] = useState<string | null>(null);
+  const [galleryClassSearch, setGalleryClassSearch] = useState('');
+  const [identityVerifiedMap, setIdentityVerifiedMap] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (historyStudent) {
@@ -1188,9 +1228,12 @@ export const ClassRegister: React.FC = React.memo(() => {
     momoTimersRef.current = [t1, t2, t3, t4];
   };
   const [paymentToDelete, setPaymentToDelete] = useState<{ id: string; label: string; studentName: string } | null>(null);
+  const [deleteConfirmDetails, setDeleteConfirmDetails] = useState<DeleteConfirmDetails | null>(null);
   const [showDeleteAllPaymentsConfirm, setShowDeleteAllPaymentsConfirm] = useState(false);
   const [showResetDailyConfirm, setShowResetDailyConfirm] = useState(false);
   const [showPurgeModal, setShowPurgeModal] = useState(false);
+  const [showReconciliationModal, setShowReconciliationModal] = useState(false);
+  const [showClearClassFeesModal, setShowClearClassFeesModal] = useState(false);
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
   const [whatsAppShareModal, setWhatsAppShareModal] = useState<{
     type: 'profile' | 'invoice' | 'receipt' | 'arrears_warning' | 'check_in';
@@ -1207,9 +1250,24 @@ export const ClassRegister: React.FC = React.memo(() => {
     setSelectedStudentIds([]);
   }, [selectedClass, currentDate]);
 
-  const isHoliday = useMemo(() => {
-    return !!activeTerm?.publicHolidays?.includes(currentDate);
-  }, [activeTerm, currentDate]);
+  const holidayMeta = useMemo(() => {
+    const isDirectHoliday = !!activeTerm?.publicHolidays?.includes(currentDate);
+    const holInfo = isHolidayOrVacationDate(currentDate, terms, activeTerm);
+    const isHol = isDirectHoliday || holInfo.isHoliday;
+    const isVacation = holInfo.type === 'vacation_break' || holInfo.type === 'out_of_term';
+    const label = isDirectHoliday
+      ? 'Official Public Holiday'
+      : holInfo.label || (isVacation ? 'Vacation Break' : 'Public Holiday');
+    return {
+      isHoliday: isHol,
+      isDirectHoliday,
+      isVacation,
+      label,
+      type: holInfo.type || (isDirectHoliday ? 'public_holiday' : undefined)
+    };
+  }, [activeTerm, terms, currentDate]);
+
+  const isHoliday = holidayMeta.isHoliday;
 
   // Manual payment state for individual student row inline input
   const [manualAmountStudentId, setManualAmountStudentId] = useState<string | null>(null);
@@ -1351,21 +1409,51 @@ export const ClassRegister: React.FC = React.memo(() => {
 
   // Executive Class Roster Ledger Summary calculations
   const classSummaryData = useMemo(() => {
+    // 1. Gather active term public holidays
+    const publicHolidaysList = Array.from(new Set(activeTerm?.publicHolidays || []));
+    const publicHolidaysSet = new Set(publicHolidaysList);
+
+    // 2. Total elapsed calendar/term school dates recorded or scheduled up to currentDate
+    const activeSchoolDays = activeTerm ? activeTerm.schoolDays.filter(d => d <= currentDate) : [];
+    const classRecordedDates = Array.from(new Set(
+      payments
+        .filter(p => p.class === selectedClass && p.date <= currentDate && !p.id.endsWith('_debt'))
+        .map(p => p.date)
+    ));
+    
+    // Combined list of all elapsed school days for this class up to currentDate
+    const allElapsedSchoolDays = Array.from(new Set([...activeSchoolDays, ...classRecordedDates])).sort();
+
     return classStudents.map(student => {
       const debtInfo = studentDebtMap.get(student.id);
       const studentPayments = payments.filter(p => p.studentId === student.id);
       
-      const presentsCount = studentPayments.filter(p => !p.isAbsent && p.date <= currentDate).length;
-      const absentsCount = studentPayments.filter(p => p.isAbsent && p.date <= currentDate).length;
+      // All elapsed school days after pupil's enrollment
+      const pupilAllDays = allElapsedSchoolDays.filter(d => {
+        return student.enrollmentDate ? d >= student.enrollmentDate : true;
+      });
+      const allDaysCount = pupilAllDays.length;
+
+      // Public holidays occurring during pupil's active school days
+      const publicHolidaysCount = pupilAllDays.filter(d => publicHolidaysSet.has(d)).length;
+
+      // Teaching school days (All Days minus Public Holidays)
+      const teachingDaysCount = Math.max(0, allDaysCount - publicHolidaysCount);
+
+      // Absents recorded for this pupil on valid teaching days up to currentDate
+      const absentsCount = studentPayments.filter(p => p.isAbsent && p.date <= currentDate && !publicHolidaysSet.has(p.date)).length;
+
+      // Pupil Presents = All Days minus Absents and Public Holidays (teachingDaysCount - absentsCount)
+      const presentsCount = Math.max(0, Math.min(teachingDaysCount, allDaysCount - absentsCount - publicHolidaysCount));
       
-      const totalPaid = debtInfo?.totalPaid ?? studentPayments.filter(p => !p.isAbsent).reduce((sum, p) => sum + p.amount, 0);
+      const totalPaid = debtInfo?.totalPaid ?? studentPayments.filter(p => !p.isAbsent && p.verified !== false && p.amount > 0).reduce((sum, p) => sum + p.amount, 0);
       const totalDebt = debtInfo?.totalDebt ?? 0;
       const runningBalance = debtInfo?.runningBalance ?? 0;
       
       let statusText = 'CLEARED';
       let statusType: 'cleared' | 'debt' | 'surplus' | 'scholarship' | 'term' = 'cleared';
       
-      if (student.paymentType === 'Term') {
+      if (isTermPayer(student)) {
         if (totalDebt > 0) {
           statusText = `IN DEBT (${currencySymbol} ${totalDebt.toFixed(2)})`;
           statusType = 'debt';
@@ -1391,6 +1479,9 @@ export const ClassRegister: React.FC = React.memo(() => {
         student,
         rollNumber: student.rollNumber || 'N/A',
         name: student.name,
+        allDaysCount,
+        publicHolidaysCount,
+        teachingDaysCount,
         presentsCount,
         absentsCount,
         totalPaid,
@@ -1401,7 +1492,7 @@ export const ClassRegister: React.FC = React.memo(() => {
         isPaidToday: debtInfo?.isPaidToday || false
       };
     });
-  }, [classStudents, studentDebtMap, payments, currentDate, currencySymbol]);
+  }, [classStudents, studentDebtMap, payments, currentDate, currencySymbol, selectedClass, activeTerm]);
 
   const filteredClassSummary = useMemo(() => {
     return classSummaryData.filter(item => {
@@ -1432,7 +1523,20 @@ export const ClassRegister: React.FC = React.memo(() => {
   }, [classSummaryData]);
 
   const handleExportSummaryCSV = () => {
-    const headers = ['Roll Number', 'Student ID', 'Student Name', 'Payment Scheme', 'Presents Count', 'Absents Count', `Total Paid (${currencySymbol})`, `Current Debt (${currencySymbol})`, `Running Balance (${currencySymbol})`, 'Account Status'];
+    const headers = [
+      'Roll Number',
+      'Student ID',
+      'Student Name',
+      'Payment Scheme',
+      'Presents (All Days - Absents - Holidays)',
+      'Absents Count',
+      'Public Holidays Excluded',
+      'Total Elapsed Days',
+      `Total Paid (${currencySymbol})`,
+      `Current Debt (${currencySymbol})`,
+      `Running Balance (${currencySymbol})`,
+      'Account Status'
+    ];
     const rows = classSummaryData.map(item => [
       `"${item.rollNumber}"`,
       `"${item.student.id}"`,
@@ -1440,6 +1544,8 @@ export const ClassRegister: React.FC = React.memo(() => {
       `"${item.student.paymentType}"`,
       item.presentsCount,
       item.absentsCount,
+      item.publicHolidaysCount,
+      item.allDaysCount,
       item.totalPaid.toFixed(2),
       item.totalDebt.toFixed(2),
       item.runningBalance.toFixed(2),
@@ -1591,7 +1697,7 @@ export const ClassRegister: React.FC = React.memo(() => {
         return outstanding > 0;
       });
     } else if (statusFilter === 'term_payers') {
-      list = list.filter(s => s.paymentType === 'Term');
+      list = list.filter(s => isTermPayer(s));
     }
 
     if (searchQuery.trim()) {
@@ -1599,10 +1705,11 @@ export const ClassRegister: React.FC = React.memo(() => {
       const normalizedQuery = query.replace(/[-_ ]/g, '');
 
       list = list.filter(s => {
-        // Name & Roll matches
+        const rollClean = (s.rollNumber || '').toLowerCase();
         const matchesNameOrRoll = 
           s.name.toLowerCase().includes(query) ||
-          (s.rollNumber || '').toLowerCase().includes(query);
+          rollClean.includes(query) ||
+          (rollClean.replace(/^0+/, '') === query.replace(/^0+/, ''));
 
         // Class and Category matches
         const normalizedClass = s.class.toLowerCase().replace(/[-_ ]/g, '');
@@ -1627,9 +1734,9 @@ export const ClassRegister: React.FC = React.memo(() => {
         } else if (query === 'arrears' || query === 'debt' || query === 'owing' || query === 'outstanding' || query === 'unpaid' || query === 'not paid') {
           matchesStatus = hasArrears;
         } else if (query === 'term' || query === 'term payer' || query === 'term payers') {
-          matchesStatus = s.paymentType === 'Term';
+          matchesStatus = isTermPayer(s);
         } else if (query === 'daily' || query === 'daily payer' || query === 'daily payers') {
-          matchesStatus = s.paymentType === 'Daily';
+          matchesStatus = !isTermPayer(s);
         }
 
         // Pickup Code match
@@ -1789,7 +1896,7 @@ export const ClassRegister: React.FC = React.memo(() => {
 
   const collectionTotal = useMemo(() => {
     return payments
-      .filter(p => p.class === selectedClass && p.date === currentDate && !p.isAbsent)
+      .filter(p => p.class === selectedClass && p.date === currentDate && !p.isAbsent && p.verified !== false && p.amount > 0)
       .reduce((acc, p) => acc + p.amount, 0);
   }, [payments, selectedClass, currentDate]);
 
@@ -1866,12 +1973,12 @@ export const ClassRegister: React.FC = React.memo(() => {
 
   const globalCollectionTotal = useMemo(() => {
     return payments
-      .filter(p => p.date === currentDate && !p.isAbsent)
+      .filter(p => p.date === currentDate && !p.isAbsent && p.verified !== false && p.amount > 0)
       .reduce((acc, p) => acc + p.amount, 0);
   }, [payments, currentDate]);
 
   const globalPaidCount = useMemo(() => {
-    return payments.filter(p => p.date === currentDate && !p.isAbsent).length;
+    return payments.filter(p => p.date === currentDate && !p.isAbsent && p.verified !== false && p.amount > 0).length;
   }, [payments, currentDate]);
 
   // Group school days of activeTerm into weeks of Mon-Fri
@@ -1976,7 +2083,7 @@ export const ClassRegister: React.FC = React.memo(() => {
     if (!historyStudent) return { histArrears: 0, histSchoolOwes: 0 };
     const arrears = studentDebtMap.get(historyStudent.id)?.totalDebt || 0;
     const schoolOwes = payments
-      .filter(p => p.studentId === historyStudent.id && p.verified && p.date > currentDate)
+      .filter(p => p.studentId === historyStudent.id && p.verified !== false && !p.isAbsent && !p.id.endsWith('_debt') && p.date > currentDate && p.amount > 0)
       .reduce((sum, p) => sum + p.amount, 0);
     return { histArrears: arrears, histSchoolOwes: schoolOwes };
   }, [historyStudent, studentDebtMap, payments, currentDate]);
@@ -1989,7 +2096,7 @@ export const ClassRegister: React.FC = React.memo(() => {
     const pastSchoolDays = activeTerm.schoolDays.filter(d => d <= currentDate);
     
     return pastSchoolDays.map((dayStr) => {
-      const pRecord = payments.find(p => p.studentId === historyStudent.id && p.date === dayStr);
+      const pRecord = payments.find(p => p.studentId === historyStudent.id && p.date === dayStr && !p.id.endsWith('_debt'));
       
       const isHoliday = holidays.includes(dayStr);
       const isAbsent = pRecord?.isAbsent || false;
@@ -2576,7 +2683,7 @@ export const ClassRegister: React.FC = React.memo(() => {
     notes?: string
   ) => {
     const txId = `SHC-TX-${date.replace(/-/g, '')}-${paymentId.substring(0, 8).toUpperCase()}`;
-    const rollRef = student.rollNumber || 'SHC-' + student.id.substring(0, 5).toUpperCase();
+    const rollRef = student.rollNumber || formatPupilId(student, systemSettings);
     const amountStr = `GHC ${amount.toFixed(2)}`;
     const statusLabel = isAbsent ? "ABSENT (NO FEE)" : "PRESENT & CHECKED-IN";
     const auditor = collectedBy || 'Certified Gateway Auditor';
@@ -2911,7 +3018,7 @@ export const ClassRegister: React.FC = React.memo(() => {
     const phone = student.guardianPhone || '';
     const studentName = student.name;
     const studentId = student.id;
-    const rollNumber = student.rollNumber || 'SHC-' + student.id.substring(0, 5).toUpperCase();
+    const rollNumber = student.rollNumber || formatPupilId(student, systemSettings);
     const classGroup = `${student.class} (${student.category})`;
     
     if (type === 'profile') {
@@ -2922,7 +3029,7 @@ export const ClassRegister: React.FC = React.memo(() => {
       if (student.paymentType === 'Term') {
         const arrears = customOptions?.totalArrears !== undefined ? customOptions.totalArrears : 0;
         const totalPaid = customOptions?.totalPaid !== undefined ? customOptions.totalPaid : 0;
-        const termF = student.termFee || 350;
+        const termF = student.termFee || getStudentBaselineTermFee(student.class, systemSettings);
         const legacyD = student.legacyDebt || 0;
         financeSummary = `Scheme: Term Payer\n* Fixed Term Fee: GHC ${termF.toFixed(2)}${legacyD > 0 ? ` (+ GHC ${legacyD.toFixed(2)} legacy)` : ''}\n* Paid to Date: GHC ${totalPaid.toFixed(2)}\n* Outstanding Dues: GHC ${arrears.toFixed(2)}`;
       } else {
@@ -2951,7 +3058,7 @@ export const ClassRegister: React.FC = React.memo(() => {
 
       let invoiceDetails = '';
       if (isTerm) {
-        const termF = student.termFee || 350;
+        const termF = student.termFee || getStudentBaselineTermFee(student.class, systemSettings);
         const legacyD = student.legacyDebt || 0;
         invoiceDetails = `* FIXED TERM FEE: GHC ${termF.toFixed(2)}\n` +
                         (legacyD > 0 ? `* PREVIOUS LEGACY DEBT: GHC ${legacyD.toFixed(2)}\n` : '') +
@@ -3080,9 +3187,81 @@ export const ClassRegister: React.FC = React.memo(() => {
             <span className="text-white bg-amber-400/20 px-2 py-0.5 border border-amber-400/40 rounded-xs">{getFormattedDateWithDay(currentDate)}</span>
           </p>
           <div className="flex flex-wrap items-center gap-4">
-            <h2 className="text-3xl font-black text-white uppercase italic tracking-tight leading-none">
-              Daily Check-In GHC 5.00 Register
-            </h2>
+            <div className="flex items-center gap-3 flex-wrap">
+              <h2 className="text-3xl font-black text-white uppercase italic tracking-tight leading-none">
+                Daily Check-In GHC 5.00 Register
+              </h2>
+
+              {/* Small 'Holiday Info' tooltip badge whenever current day is a public holiday */}
+              {isHoliday && (
+                <div className="relative inline-flex items-center">
+                  <button
+                    type="button"
+                    onClick={() => setShowHolidayTooltip(prev => !prev)}
+                    onMouseEnter={() => setShowHolidayTooltip(true)}
+                    onMouseLeave={() => setShowHolidayTooltip(false)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1 bg-red-950/80 hover:bg-red-900 text-red-300 border-2 border-red-500/70 rounded-xs font-mono text-[11px] font-black uppercase tracking-wider transition-all shadow-md cursor-pointer animate-pulse"
+                    title="Click or hover for Holiday Info details & registration lock status"
+                    aria-label="Holiday Info"
+                  >
+                    <Landmark size={13} className="text-red-400 shrink-0" />
+                    <span>🌴 Holiday Info</span>
+                    <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-ping shrink-0" />
+                  </button>
+
+                  {/* Holiday Info Tooltip / Popover */}
+                  {showHolidayTooltip && (
+                    <div 
+                      className="absolute top-full left-0 mt-2 w-80 sm:w-96 bg-neutral-950 border-2 border-red-500/80 shadow-2xl p-4 z-50 rounded-xs text-left font-mono space-y-2.5 backdrop-blur-md"
+                      onMouseEnter={() => setShowHolidayTooltip(true)}
+                      onMouseLeave={() => setShowHolidayTooltip(false)}
+                    >
+                      <div className="flex items-center justify-between border-b border-red-500/30 pb-2">
+                        <div className="flex items-center gap-2 text-red-400">
+                          <Landmark size={15} className="shrink-0" />
+                          <span className="text-xs font-black uppercase tracking-wider">Holiday Info: Registry Locked</span>
+                        </div>
+                        <span className="text-[9px] bg-red-500/20 text-red-300 px-1.5 py-0.5 rounded font-bold uppercase">
+                          Gate Closed
+                        </span>
+                      </div>
+
+                      <div className="text-[11px] text-neutral-300 space-y-1.5 leading-relaxed">
+                        <p className="font-bold text-white flex items-center gap-1.5">
+                          <span>📅 Date:</span>
+                          <span className="text-amber-400 font-mono">{getFormattedDateWithDay(currentDate)}</span>
+                        </p>
+                        <p className="text-neutral-300">
+                          <strong className="text-red-400">Accidental Registration Guard:</strong> Today is marked as a public holiday ({holidayMeta.label}). Daily check-in registrations, payment logging, and absence recordings are disabled to prevent accidental charges or wrong arrears.
+                        </p>
+                        <div className="p-2 bg-red-950/40 border border-red-900/50 rounded-xs text-[10px] text-neutral-300 space-y-0.5">
+                          <p>• <strong>GHC 0.00 Due:</strong> Pupils are excused from daily check-in fees today.</p>
+                          <p>• <strong>No Debt / Arrears:</strong> No pupil is marked owing or penalized for missing school today.</p>
+                        </div>
+                      </div>
+
+                      {(currentUser?.role === 'Administrator' || currentUser?.role === 'Headmaster') && (
+                        <div className="pt-1.5 border-t border-neutral-800 flex items-center justify-between gap-2">
+                          <span className="text-[9px] text-neutral-500 uppercase">Need to collect fees today?</span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setShowHolidayTooltip(false);
+                              setShowHolidayManager(true);
+                            }}
+                            className="text-[9.5px] text-amber-400 hover:text-amber-300 font-bold uppercase underline cursor-pointer"
+                          >
+                            Manage Holidays ↗
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
             <div className="flex items-center gap-1.5 flex-wrap">
               <button
                 type="button"
@@ -3113,6 +3292,16 @@ export const ClassRegister: React.FC = React.memo(() => {
                   <div className="flex items-center gap-1.5 text-neutral-350 font-mono text-xs uppercase tracking-wider select-none">
                     <span>{currentDate}</span>
                   </div>
+                )}
+                {isHoliday && (
+                  <span 
+                    className="text-[9px] bg-red-500/20 text-red-300 border border-red-500/40 px-2 py-0.5 rounded font-mono font-black uppercase shrink-0 flex items-center gap-1 cursor-help"
+                    title={`Holiday Info: ${holidayMeta.label} - Registration is locked to prevent accidental entries.`}
+                    onClick={() => setShowHolidayTooltip(prev => !prev)}
+                  >
+                    <Landmark size={10} className="text-red-400" />
+                    <span>🌴 Holiday Info ({holidayMeta.label})</span>
+                  </span>
                 )}
               </div>
 
@@ -3347,12 +3536,28 @@ export const ClassRegister: React.FC = React.memo(() => {
                                 INACTIVE
                               </span>
                             )}
+                            {t.isCompleted && (
+                              <span className="px-1 text-[8px] leading-none py-0.5 font-mono font-black text-rose-400 bg-rose-500/10 border border-rose-400/25 rounded">
+                                GATE CLOSED
+                              </span>
+                            )}
                           </div>
                           <span className="block text-[9px] font-mono font-normal text-neutral-500 mt-1">
                             {t.daysCount} DAYS • START {t.startDate}
                           </span>
                         </button>
                         <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              completeTerm(t.id, !t.isCompleted);
+                              showToast(`Term "${t.name}" gate was ${!t.isCompleted ? 'closed & marked completed' : 'reopened'}.`);
+                            }}
+                            className={`p-1.5 transition-colors cursor-pointer rounded ${t.isCompleted ? 'text-rose-400 hover:bg-rose-500/10' : 'text-neutral-500 hover:text-emerald-400 hover:bg-emerald-500/10'}`}
+                            title={t.isCompleted ? "Reopen Term Gate" : "Complete & Close Term Gate"}
+                          >
+                            <span className="text-[10px] font-mono font-bold">{t.isCompleted ? '🔓' : '🔒'}</span>
+                          </button>
                           <button
                             type="button"
                             onClick={() => {
@@ -3394,6 +3599,39 @@ export const ClassRegister: React.FC = React.memo(() => {
                         </div>
                       </div>
                     ))}
+                    <div className="p-2 bg-neutral-900 flex justify-between items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDeleteConfirmDetails({
+                            title: "PURGE OUT-OF-TERM & POST-TERM LOGS",
+                            subtitle: "Scans and removes payment entries recorded outside active term dates.",
+                            affectedCountMessage: "Purges daily fee payment records logged outside official active term schedule boundaries.",
+                            whatWillBeDeleted: [
+                              "Payment records logged on dates beyond or outside official term start/end dates",
+                              "Out-of-bound fee check-in entries"
+                            ],
+                            whatWillBePreserved: [
+                              "Valid fee payments logged within active term start and end dates",
+                              "Exams fee payments & terminal balances",
+                              "Registered pupil profiles & class assignments"
+                            ],
+                            verificationText: "PURGE",
+                            confirmButtonText: "CONFIRM PURGE OUT-OF-TERM ENTRIES",
+                            onConfirm: () => {
+                              const res = purgeOutOfTermPayments();
+                              setDeleteConfirmDetails(null);
+                              showToast(res.message);
+                              setIsTermDropdownOpen(false);
+                            },
+                            onCancel: () => setDeleteConfirmDetails(null)
+                          });
+                        }}
+                        className="w-full text-center text-[10px] font-mono font-bold uppercase tracking-wider py-1.5 px-2 bg-rose-900/30 hover:bg-rose-900/50 text-rose-300 border border-rose-700/50 rounded transition-colors cursor-pointer"
+                      >
+                        🧹 Clean Post-Term / Out-of-Term Entries
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -3570,6 +3808,48 @@ export const ClassRegister: React.FC = React.memo(() => {
                 DECLARE AS HOLIDAY
               </button>
             </div>
+
+            {/* Automatic Term Vacation Breaks (Calendar Gaps) */}
+            {(() => {
+              const termGaps = getTermGapBreaks(terms);
+              return (
+                <div className="space-y-3 pt-3 border-t border-neutral-850">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] uppercase font-mono font-black text-amber-400 tracking-wider">
+                      🌴 AUTOMATIC TERM VACATION / HOLIDAY BREAKS (CALENDAR GAPS)
+                    </span>
+                    <span className="text-[8px] bg-amber-500/10 text-amber-300 border border-amber-500/30 px-2 py-0.5 font-mono font-bold uppercase rounded">
+                      PUPILS EXEMPT (GHC 0.00 DUE)
+                    </span>
+                  </div>
+                  <p className="text-[10px] font-mono text-neutral-400">
+                    The calendar automatically treats all gaps between created terms as official Vacation Breaks. Pupils are NOT expected to pay fees during vacation breaks.
+                  </p>
+                  {termGaps.length === 0 ? (
+                    <p className="text-[10px] text-neutral-500 font-mono italic">
+                      No gaps between terms detected yet. Create additional terms to see automatic vacation break intervals.
+                    </p>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      {termGaps.map((gap, idx) => (
+                        <div key={idx} className="bg-amber-950/20 border border-amber-500/30 p-3 space-y-1 font-mono">
+                          <div className="flex justify-between items-center text-amber-300 font-bold text-xs">
+                            <span>{gap.label}</span>
+                            <span className="text-[8px] bg-amber-400 text-black px-1.5 py-0.5 font-black uppercase rounded">VACATION</span>
+                          </div>
+                          <p className="text-[10px] text-neutral-300 font-semibold">
+                            {gap.startDate} &rarr; {gap.endDate}
+                          </p>
+                          <p className="text-[9px] text-neutral-500">
+                            {gap.calendarDaysCount} Calendar Days ({gap.weekdaysCount} Weekdays) &bull; Exempt from fees
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* List of holidays */}
             <div className="space-y-2 pt-2 border-t border-neutral-850">
@@ -4010,14 +4290,19 @@ export const ClassRegister: React.FC = React.memo(() => {
                             {!isPaid && (
                               <button
                                 type="button"
+                                disabled={isHoliday}
                                 onClick={() => {
+                                  if (isHoliday) {
+                                    showToast("Class registry is locked. Date selected is a public holiday.");
+                                    return;
+                                  }
                                   const effectiveRate = Math.max(0, baseDailyFee - (student.discount || 0));
                                   recordPayment(student.id, true, effectiveRate);
                                   showToast(`⚡ Collected ${currencySymbol} ${effectiveRate.toFixed(2)} for ${student.name}!`);
                                   playFeedbackSound?.('click');
                                 }}
-                                className="text-[9.5px] font-mono font-black bg-amber-400 hover:bg-amber-300 text-black px-2.5 py-1 uppercase tracking-wider rounded-xs cursor-pointer shadow-sm transition-all shrink-0"
-                                title={`Record payment instantly`}
+                                className="text-[9.5px] font-mono font-black bg-amber-400 hover:bg-amber-300 text-black px-2.5 py-1 uppercase tracking-wider rounded-xs cursor-pointer shadow-sm transition-all shrink-0 disabled:opacity-30 disabled:cursor-not-allowed"
+                                title={isHoliday ? "Holiday Info: Cannot record payment on a public holiday." : `Record payment instantly`}
                               >
                                 ⚡ Pay {currencySymbol} {Math.max(0, baseDailyFee - (student.discount || 0)).toFixed(2)}
                               </button>
@@ -4026,13 +4311,18 @@ export const ClassRegister: React.FC = React.memo(() => {
                             {!isAbsent && !isPaid && (
                               <button
                                 type="button"
+                                disabled={isHoliday}
                                 onClick={() => {
+                                  if (isHoliday) {
+                                    showToast("Class registry is locked. Date selected is a public holiday.");
+                                    return;
+                                  }
                                   recordAbsent(student.id);
                                   showToast(`Marked ${student.name} as ABSENT.`);
                                   playFeedbackSound?.('click');
                                 }}
-                                className="text-[9.5px] font-mono font-black bg-red-950 hover:bg-red-900 text-red-300 border border-red-800 px-2.5 py-1 uppercase tracking-wider rounded-xs cursor-pointer transition-all shrink-0"
-                                title="Mark pupil absent"
+                                className="text-[9.5px] font-mono font-black bg-red-950 hover:bg-red-900 text-red-300 border border-red-800 px-2.5 py-1 uppercase tracking-wider rounded-xs cursor-pointer transition-all shrink-0 disabled:opacity-30 disabled:cursor-not-allowed"
+                                title={isHoliday ? "Holiday Info: Cannot record absence on a public holiday." : "Mark pupil absent"}
                               >
                                 🚫 Absent
                               </button>
@@ -4085,6 +4375,20 @@ export const ClassRegister: React.FC = React.memo(() => {
               >
                 <KeyRound size={14} className="stroke-[3]" />
                 <span>Pickup Passes</span>
+              </button>
+
+              <button
+                id="admission-forms-trigger"
+                type="button"
+                onClick={() => {
+                  setAdmissionFormStudent(null);
+                  setShowAdmissionFormModal(true);
+                }}
+                className="bg-neutral-900 hover:bg-neutral-800 text-sky-400 border-2 border-neutral-800 hover:border-sky-400 py-3 px-4 text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-colors cursor-pointer shrink-0 flex-1 sm:flex-initial min-w-[130px]"
+                title="Print pupil admission & enrollment forms or blank forms for prospective parents"
+              >
+                <Printer size={14} className="stroke-[3]" />
+                <span>Admission Forms</span>
               </button>
 
               <button
@@ -4178,12 +4482,32 @@ export const ClassRegister: React.FC = React.memo(() => {
 
               <button
                 type="button"
+                onClick={() => setShowReconciliationModal(true)}
+                className="flex-grow sm:flex-grow-0 text-[10px] font-mono font-black bg-amber-400/10 border border-amber-400 hover:bg-amber-400 hover:text-black text-amber-300 py-2.5 px-3.5 transition-all flex items-center justify-center gap-1.5 uppercase tracking-wider cursor-pointer font-bold"
+                title="Inspect multi-payment dates, remove ghost duplicates, and preserve legitimate separate receipts matching teacher hard copies"
+              >
+                <ShieldAlert size={13} className="stroke-[2.5]" />
+                <span>Hard Copy Audit</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setShowPurgeModal(true)}
                 className="flex-grow sm:flex-grow-0 text-[10px] font-mono font-black bg-neutral-900 border border-neutral-800 hover:border-red-500 hover:text-red-400 text-neutral-300 py-2.5 px-3.5 transition-all flex items-center justify-center gap-1.5 uppercase tracking-wider cursor-pointer font-bold"
                 title="Detect and delete duplicate payments, repeated daily fees, and advance payment markers"
               >
                 <Trash2 size={13} className="stroke-[2.5] text-red-500" />
                 <span>Clean Duplicates & Advances</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowClearClassFeesModal(true)}
+                className="flex-grow sm:flex-grow-0 text-[10px] font-mono font-black bg-red-950/40 border-2 border-red-600/80 hover:bg-red-600 hover:text-white text-red-300 py-2.5 px-3.5 transition-all flex items-center justify-center gap-1.5 uppercase tracking-wider cursor-pointer font-bold shadow-md"
+                title={`Delete and clear ${selectedClass} fee records from Week 1 to final week or custom date range`}
+              >
+                <Trash2 size={13} className="stroke-[2.5] text-red-400" />
+                <span>Delete {selectedClass} Term Fees</span>
               </button>
 
               <button
@@ -4204,6 +4528,16 @@ export const ClassRegister: React.FC = React.memo(() => {
               >
                 <Printer size={13} className="stroke-[2.5]" />
                 <span>Hardcopy Checklist</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowCanteenModal(true)}
+                className="flex-grow sm:flex-grow-0 text-[10px] font-mono font-black bg-amber-400 hover:bg-amber-300 text-black py-2.5 px-3.5 transition-all flex items-center justify-center gap-1.5 uppercase tracking-wider cursor-pointer font-bold shadow-md"
+                title="Generate printable hardcopy feeding register booklet for Pre-school canteen rep"
+              >
+                <Utensils size={13} className="stroke-[2.5]" />
+                <span>Canteen Booklet</span>
               </button>
             </div>
           </div>
@@ -4605,30 +4939,35 @@ export const ClassRegister: React.FC = React.memo(() => {
               </div>
             )}
 
-            {isHoliday && activeTerm && (
-              <div className="bg-red-950/20 border-b border-red-500/30 p-6 text-center text-red-400 space-y-3 select-none font-mono">
-                <div className="flex items-center justify-center gap-2 text-red-500">
-                  <Landmark size={20} className="stroke-[2.5]" />
-                  <span className="text-sm font-black uppercase tracking-wider">OFFICIAL PUBLIC HOLIDAY DETECTED</span>
+            {isHoliday && (
+              <div className="bg-red-950/25 border-b-2 border-red-500/40 p-6 text-center text-red-400 space-y-3 select-none font-mono">
+                <div className="flex items-center justify-center gap-2.5 text-red-400">
+                  <span className="px-2.5 py-0.5 bg-red-500/20 text-red-300 border border-red-500/40 rounded-xs text-xs font-black uppercase tracking-wider flex items-center gap-1.5">
+                    <Landmark size={14} className="stroke-[2.5] text-red-400" />
+                    <span>🌴 Holiday Info Active</span>
+                  </span>
+                  <span className="text-xs font-black uppercase tracking-wider text-white">({holidayMeta.label})</span>
                 </div>
                 <p className="text-xs font-bold uppercase tracking-widest text-neutral-200">
-                  School is closed today for academic work & dynamic gateway controls are locked.
+                  School is closed today for academic work & dynamic gateway check-ins are locked.
                 </p>
-                <p className="text-[10px] uppercase text-neutral-400 tracking-wide leading-relaxed">
-                  * GATE SYSTEM OVERRIDE: Payment check-ins and absence logs are halted for this calendar block. No pupils are marked owing.
+                <p className="text-[10px] uppercase text-neutral-400 tracking-wide leading-relaxed max-w-2xl mx-auto">
+                  * Accidental Registration Guard: Payment check-ins, fee collections, and absence logs are halted for this calendar day. No pupils are marked owing or penalized.
                 </p>
-                <div className="pt-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      removePublicHoliday(activeTerm.id, currentDate);
-                      showToast(`Removed holiday status: marked ${currentDate} as a fee collection day.`);
-                    }}
-                    className="px-5 py-2.5 bg-amber-400 hover:bg-amber-300 text-black text-[10px] font-mono font-black uppercase tracking-widest transition-colors cursor-pointer inline-flex items-center gap-2"
-                  >
-                    <span>CONVERT TO FEE COLLECTION DAY</span>
-                  </button>
-                </div>
+                {activeTerm && holidayMeta.isDirectHoliday && (currentUser?.role === 'Administrator' || currentUser?.role === 'Headmaster') && (
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        removePublicHoliday(activeTerm.id, currentDate);
+                        showToast(`Removed holiday status: marked ${currentDate} as a fee collection day.`);
+                      }}
+                      className="px-5 py-2 bg-amber-400 hover:bg-amber-300 text-black text-[10px] font-mono font-black uppercase tracking-widest transition-colors cursor-pointer inline-flex items-center gap-2 rounded-xs shadow-sm"
+                    >
+                      <span>CONVERT TO FEE COLLECTION DAY</span>
+                    </button>
+                  </div>
+                )}
               </div>
             )}
             {/* COLUMN HEADERS FOR REGISTER TABLE/ROSTER */}
@@ -4991,6 +5330,18 @@ export const ClassRegister: React.FC = React.memo(() => {
                       <History size={16} />
                     </button>
 
+                    {/* Edit Pupil Profile & Financial Scheme */}
+                    <button
+                      type="button"
+                      onClick={() => setStudentToEdit(student)}
+                      title="Edit Pupil Profile, Gender, Payment Scheme & Ledger Details"
+                      className="p-2.5 text-neutral-400 hover:text-white border-2 border-neutral-800 hover:border-amber-400 bg-neutral-950 transition-colors cursor-pointer flex items-center justify-center gap-1.5 px-3"
+                      id={`btn-edit-student-${student.id}`}
+                    >
+                      <Pencil size={14} className="text-amber-400" />
+                      <span className="text-[10px] font-mono font-black uppercase tracking-widest text-neutral-300">EDIT</span>
+                    </button>
+
                     {/* SMS Alert */}
                     <button
                       onClick={() => triggerSmsAlert(student)}
@@ -5197,9 +5548,12 @@ export const ClassRegister: React.FC = React.memo(() => {
                         </button>
                       </div>
                     ) : isHoliday ? (
-                      <div className="flex items-center gap-2 px-6 py-2.5 bg-red-950/20 text-red-400 font-mono text-[10px] uppercase font-black tracking-widest border border-red-500/20 h-[42px] shrink-0 select-none">
-                        <Landmark size={14} className="text-red-500" />
-                        <span>CLOSED: HOLIDAY DETECTED</span>
+                      <div 
+                        className="flex items-center gap-2 px-4 py-2.5 bg-red-950/30 text-red-300 font-mono text-[10px] uppercase font-black tracking-wider border border-red-500/30 h-[42px] shrink-0 select-none cursor-help rounded-xs transition-colors hover:bg-red-950/50"
+                        title={`Holiday Info: Registry is closed for ${holidayMeta.label}. Gate registration, daily fees, and absence strikes are halted today.`}
+                      >
+                        <Landmark size={14} className="text-red-400 shrink-0" />
+                        <span>🌴 Holiday Info: Closed</span>
                       </div>
                     ) : (
                       <>
@@ -5418,7 +5772,7 @@ export const ClassRegister: React.FC = React.memo(() => {
                   </div>
 
                   <p className="text-xs font-mono text-neutral-400 mt-1">
-                    Complete student breakdown featuring roll IDs, attendance tallies (presents & absents), total payments, outstanding balance, and account clearance status.
+                    Complete student breakdown featuring roll IDs, attendance tallies (Presents = all elapsed days minus absents & public holidays), total payments, outstanding balance, and account clearance status.
                   </p>
 
                   {/* Slim Quick Metrics bar shown when folded */}
@@ -5600,7 +5954,9 @@ export const ClassRegister: React.FC = React.memo(() => {
                     <tr className="bg-neutral-950 text-neutral-400 border-b-2 border-neutral-800 text-[10px] uppercase font-black tracking-wider">
                       <th className="p-3.5 border-r border-neutral-800 w-20 text-center">Roll #</th>
                       <th className="p-3.5 border-r border-neutral-800 min-w-[200px]">Student Name & Details</th>
-                      <th className="p-3.5 border-r border-neutral-800 text-center w-28">Presents</th>
+                      <th className="p-3.5 border-r border-neutral-800 text-center w-28" title="Pupil Presents = All Elapsed Days - Absents - Public Holidays">
+                        Presents
+                      </th>
                       <th className="p-3.5 border-r border-neutral-800 text-center w-28">Absents</th>
                       <th className="p-3.5 border-r border-neutral-800 text-right w-32">Amount Paid</th>
                       <th className="p-3.5 border-r border-neutral-800 text-right w-36">Balance / Debt</th>
@@ -5657,7 +6013,10 @@ export const ClassRegister: React.FC = React.memo(() => {
 
                             {/* Presents Tally */}
                             <td className="p-3.5 border-r border-neutral-800/80 text-center font-bold">
-                              <span className="inline-flex items-center justify-center px-2 py-0.5 bg-emerald-950/60 text-emerald-400 border border-emerald-800/60 rounded-xs font-mono text-xs font-black">
+                              <span 
+                                className="inline-flex items-center justify-center px-2 py-0.5 bg-emerald-950/60 text-emerald-400 border border-emerald-800/60 rounded-xs font-mono text-xs font-black"
+                                title={`${item.allDaysCount} All Days - ${item.absentsCount} Absents - ${item.publicHolidaysCount} Public Holidays = ${item.presentsCount} Presents`}
+                              >
                                 {item.presentsCount} Days
                               </span>
                             </td>
@@ -6762,10 +7121,10 @@ export const ClassRegister: React.FC = React.memo(() => {
         const arrearsInfo = studentDebtMap.get(historyStudent.id);
         const unpaidDaysList = arrearsInfo?.pastUnpaidDays || [];
         const totalPaidAccumulated = payments
-          .filter(p => p.studentId === historyStudent.id && p.verified)
+          .filter(p => p.studentId === historyStudent.id && p.verified !== false && !p.isAbsent && p.amount > 0)
           .reduce((sum, p) => sum + p.amount, 0);
 
-        const termFee = historyStudent.termFee || 350;
+        const termFee = historyStudent.termFee || getStudentBaselineTermFee(historyStudent.class, systemSettings);
         const legacyDebt = historyStudent.legacyDebt || 0;
         const termTotalRequired = termFee + legacyDebt;
 
@@ -6779,7 +7138,7 @@ export const ClassRegister: React.FC = React.memo(() => {
           return d <= currentDate && !(activeTerm.publicHolidays || []).includes(d) && afterEnrollment;
         }) : [];
         const elapsedDays = elapsedDaysStr.length;
-        const clearedDays = payments.filter(p => p.studentId === historyStudent.id && p.date <= currentDate && !p.id.endsWith('_debt')).length;
+        const clearedDays = payments.filter(p => p.studentId === historyStudent.id && p.date <= currentDate && !p.id.endsWith('_debt') && !p.isAbsent && p.verified !== false && p.amount > 0).length;
 
         // Times present over total number of school days for that term
         const termSchoolDaysList = activeTerm ? activeTerm.schoolDays : [];
@@ -6834,6 +7193,19 @@ export const ClassRegister: React.FC = React.memo(() => {
                   >
                     <User size={14} className="shrink-0" />
                     <span>Pupil Overview</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setHistoryModalTab('gallery')}
+                    className={`flex-1 py-3 px-1 text-center uppercase tracking-wider font-extrabold border-b-2 flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                      historyModalTab === 'gallery'
+                        ? 'border-amber-400 text-amber-400 bg-neutral-950/50'
+                        : 'border-transparent text-neutral-500 hover:text-neutral-300'
+                    }`}
+                    id="tab-photo-gallery"
+                  >
+                    <Camera size={14} className="shrink-0 text-amber-400" />
+                    <span>Photo Gallery</span>
                   </button>
                   <button
                     type="button"
@@ -7022,6 +7394,16 @@ export const ClassRegister: React.FC = React.memo(() => {
 
                             <button
                               type="button"
+                              onClick={() => setHistoryModalTab('gallery')}
+                              className="w-full bg-neutral-900 hover:bg-neutral-850 text-amber-400 border border-amber-400/40 hover:border-amber-400 py-2.5 px-3 text-[9px] font-mono font-black uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                              title="Open Photo Verification Gallery"
+                            >
+                              <Camera size={12} />
+                              <span>Photo Verification Deck</span>
+                            </button>
+
+                            <button
+                              type="button"
                               onClick={() => {
                                 handleShareWhatsApp('profile', historyStudent, undefined, {
                                   unpaidDaysCount: unpaidDaysList.length,
@@ -7041,188 +7423,97 @@ export const ClassRegister: React.FC = React.memo(() => {
                             <button
                               type="button"
                               onClick={() => {
-                                setIsEditingProfile(!isEditingProfile);
+                                setStudentToEdit(historyStudent);
                               }}
-                              className={`w-full py-2.5 px-3 text-[9px] font-mono font-black uppercase tracking-wider flex items-center justify-center gap-1.5 border transition-all cursor-pointer ${
-                                isEditingProfile
-                                  ? 'bg-neutral-900 hover:bg-neutral-850 text-amber-400 border-neutral-800'
-                                  : 'bg-amber-500 hover:bg-amber-400 text-black border-amber-600'
-                              }`}
-                              title="Edit Pupil's Name, Contact, or Photo"
+                              className="w-full py-2.5 px-3 bg-amber-400 hover:bg-amber-300 text-black text-[9px] font-mono font-black uppercase tracking-wider flex items-center justify-center gap-1.5 border border-amber-500 transition-all cursor-pointer shadow-md"
+                              title="Edit Pupil's Name, Gender, Payment Status, Fee, Contact, or Photo"
+                              id="btn-edit-pupil-profile-modal"
                             >
-                              <Settings size={12} />
-                              <span>{isEditingProfile ? 'View Profile Info' : 'Edit Pupil Profile'}</span>
+                              <Settings size={12} className="stroke-[2.5]" />
+                              <span>Edit Full Pupil Profile</span>
                             </button>
                           </div>
                         </div>
 
                         {/* Column 2: Detailed Personal Records (8/12 width) */}
-                        {isEditingProfile ? (
-                          <div className="md:col-span-8 space-y-5">
-                            <div className="bg-neutral-950 p-6 border-2 border-neutral-800 space-y-5">
-                              <div className="flex items-center gap-2 border-b border-neutral-850 pb-3">
-                                <Settings className="text-amber-400 stroke-[2.5]" size={16} />
-                                <h4 className="text-xs font-black uppercase tracking-wider text-white font-mono">Edit Pupil Profile</h4>
+                        <div className="md:col-span-8 space-y-5">
+                          <div>
+                            <div className="flex items-center justify-between mb-2">
+                              <h4 className="text-[10px] font-mono uppercase font-black tracking-widest text-neutral-400">Student Credentials & Registration File</h4>
+                              <button
+                                type="button"
+                                onClick={() => setStudentToEdit(historyStudent)}
+                                className="text-[9px] font-mono font-bold text-amber-400 hover:text-amber-300 uppercase tracking-wider flex items-center gap-1 cursor-pointer"
+                              >
+                                <Pencil size={11} /> Quick Edit
+                              </button>
+                            </div>
+                            
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                              <div className="bg-neutral-950 p-3 border border-neutral-850">
+                                <span className="text-[9px] font-mono uppercase text-neutral-500 block font-bold">Cohorted Segment Grade</span>
+                                <span className="text-sm font-black text-white">{historyStudent.class} ({historyStudent.category})</span>
                               </div>
-
-                              <div className="space-y-4 font-sans">
-                                {/* Student Name */}
-                                <div className="space-y-1.5">
-                                  <label className="block text-[10px] font-black uppercase tracking-widest text-neutral-400 font-mono">
-                                    Full Pupil Name
-                                  </label>
-                                  <input
-                                    type="text"
-                                    value={editedName}
-                                    onChange={(e) => setEditedName(e.target.value)}
-                                    className="w-full bg-neutral-900 border border-neutral-850 focus:border-amber-400 p-3 text-xs font-mono font-bold text-white uppercase outline-none transition-colors"
-                                    placeholder="Enter student full name"
-                                  />
-                                </div>
-
-                                {/* Guardian Phone */}
-                                <div className="space-y-1.5">
-                                  <label className="block text-[10px] font-black uppercase tracking-widest text-neutral-400 font-mono">
-                                    Guardian Contact Phone
-                                  </label>
-                                  <input
-                                    type="text"
-                                    value={editedPhone}
-                                    onChange={(e) => setEditedPhone(e.target.value)}
-                                    className="w-full bg-neutral-900 border border-neutral-850 focus:border-amber-400 p-3 text-xs font-mono font-bold text-white outline-none transition-colors"
-                                    placeholder="Enter guardian phone number"
-                                  />
-                                </div>
-
-                                {/* Photo Uploader */}
-                                <div className="space-y-1.5">
-                                  <label className="block text-[10px] font-black uppercase tracking-widest text-neutral-400 font-mono">
-                                    Profile Photo File
-                                  </label>
-                                  <div className="flex items-center gap-4">
-                                    <div className="relative w-16 h-16 bg-neutral-900 border border-neutral-850 overflow-hidden shrink-0">
-                                      {editedPhotoUrl ? (
-                                        <img src={editedPhotoUrl} alt="Preview" className="w-full h-full object-cover" />
-                                      ) : (
-                                        <div className="w-full h-full flex items-center justify-center text-xs font-mono text-neutral-600 font-black">
-                                          NO PIC
-                                        </div>
-                                      )}
-                                    </div>
-                                    <div className="space-y-2 flex-1">
-                                      <label className="inline-block py-2 px-3.5 bg-neutral-900 hover:bg-neutral-850 text-[10px] text-neutral-300 font-mono font-black uppercase tracking-widest border border-neutral-800 hover:border-neutral-600 transition-colors cursor-pointer text-center">
-                                        Upload Image File
-                                        <input
-                                          type="file"
-                                          accept="image/*"
-                                          className="sr-only"
-                                          onChange={(e) => {
-                                            const file = e.target.files?.[0];
-                                            if (file) {
-                                              const reader = new FileReader();
-                                              reader.onload = (event) => {
-                                                const img = new Image();
-                                                img.onload = () => {
-                                                  const canvas = document.createElement('canvas');
-                                                  const size = Math.min(img.width, img.height);
-                                                  canvas.width = 200;
-                                                  canvas.height = 200;
-                                                  const ctx = canvas.getContext('2d');
-                                                  if (ctx) {
-                                                    const xOffset = (img.width - size) / 2;
-                                                    const yOffset = (img.height - size) / 2;
-                                                    ctx.drawImage(img, xOffset, yOffset, size, size, 0, 0, 200, 200);
-                                                    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-                                                    setEditedPhotoUrl(dataUrl);
-                                                  } else {
-                                                    setEditedPhotoUrl(event.target?.result as string);
-                                                  }
-                                                };
-                                                img.src = event.target?.result as string;
-                                              };
-                                              reader.readAsDataURL(file);
-                                            }
-                                          }}
-                                        />
-                                      </label>
-                                      <p className="text-[9px] font-mono text-neutral-500 font-bold uppercase leading-relaxed">
-                                        Formats: JPG, PNG, GIF. Max size 2MB. Replaces current photo instantly.
-                                      </p>
-                                    </div>
-                                  </div>
-                                </div>
+                              <div className="bg-neutral-950 p-3 border border-neutral-850">
+                                <span className="text-[9px] font-mono uppercase text-neutral-500 block font-bold">Pupil Gender</span>
+                                <span className="text-sm font-black text-amber-400 font-mono tracking-wide">
+                                  {historyStudent.gender === 'Female' ? '👧 Female' : '👦 Male'}
+                                </span>
                               </div>
-
-                              <div className="flex gap-2 pt-4 border-t border-neutral-850">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (!editedName.trim()) {
-                                      alert('Error: Pupil name cannot be empty.');
-                                      return;
-                                    }
-                                    const updatedStudent = {
-                                      ...historyStudent,
-                                      name: editedName.trim(),
-                                      guardianPhone: editedPhone.trim() || undefined,
-                                      photoUrl: editedPhotoUrl || undefined
-                                    };
-                                    updateStudent(updatedStudent);
-                                    setHistoryStudent(updatedStudent);
-                                    setIsEditingProfile(false);
-                                    showToast(`Profile changes saved successfully for ${editedName}!`);
-                                  }}
-                                  className="flex-1 py-2.5 bg-amber-400 hover:bg-amber-300 text-black text-[10px] font-mono font-black uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                                >
-                                  <CheckCircle2 size={13} />
-                                  Save Profile Changes
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setEditedName(historyStudent.name);
-                                    setEditedPhone(historyStudent.guardianPhone || '');
-                                    setEditedPhotoUrl(historyStudent.photoUrl || null);
-                                    setIsEditingProfile(false);
-                                  }}
-                                  className="py-2.5 px-4 bg-neutral-900 hover:bg-neutral-850 text-neutral-400 hover:text-white text-[10px] font-mono font-black uppercase tracking-wider border border-neutral-800 transition-colors cursor-pointer"
-                                >
-                                  Cancel
-                                </button>
+                              <div className="bg-neutral-950 p-3 border border-neutral-850">
+                                <span className="text-[9px] font-mono uppercase text-neutral-500 block font-bold">System ID / Roll Number</span>
+                                <span className="text-sm font-bold text-amber-400 font-mono tracking-wide">{historyStudent.rollNumber || formatPupilId(historyStudent, systemSettings)}</span>
+                              </div>
+                              <div className="bg-neutral-950 p-3 border border-neutral-850">
+                                <span className="text-[9px] font-mono uppercase text-neutral-500 block font-bold">Payment Scheme / Billing Status</span>
+                                <span className={`text-xs font-black uppercase font-mono px-2 py-0.5 rounded-xs inline-block mt-0.5 ${historyStudent.paymentType === 'Term' ? 'bg-amber-400/10 text-amber-400 border border-amber-400/30' : 'bg-sky-400/10 text-sky-400 border border-sky-400/30'}`}>
+                                  {historyStudent.paymentType === 'Term' ? '🎓 Fixed Term Scheme' : '☀️ Daily Check-in Scheme'}
+                                </span>
+                              </div>
+                              <div className="bg-neutral-950 p-3 border border-neutral-850">
+                                <span className="text-[9px] font-mono uppercase text-neutral-500 block font-bold">
+                                  {historyStudent.paymentType === 'Term' ? 'Fixed Term Tuition Fee' : 'Standard Single-Day Attendance Fee'}
+                                </span>
+                                <span className="text-sm font-black text-neutral-200 font-mono">
+                                  {historyStudent.paymentType === 'Term' 
+                                    ? `GHC ${(historyStudent.termFee !== undefined ? historyStudent.termFee : 350).toFixed(2)} / Term`
+                                    : 'GHC 5.00 / day'}
+                                </span>
+                              </div>
+                              <div className="bg-neutral-950 p-3 border border-neutral-850">
+                                <span className="text-[9px] font-mono uppercase text-neutral-500 block font-bold">
+                                  {historyStudent.paymentType === 'Term' ? 'Legacy / Carried Debt' : 'Daily Discount / Scholarship'}
+                                </span>
+                                {historyStudent.paymentType === 'Term' ? (
+                                  <span className="text-sm font-bold font-mono text-neutral-300">
+                                    {(historyStudent.legacyDebt || 0) > 0 ? (
+                                      <span className="text-red-400 font-black">GHC {(historyStudent.legacyDebt || 0).toFixed(2)}</span>
+                                    ) : 'GHC 0.00 (None)'}
+                                  </span>
+                                ) : discountValue > 0 ? (
+                                  <span className="text-sm font-black text-emerald-400 flex items-center gap-1 font-mono">
+                                    <Award size={14} className="stroke-[2.5]" />
+                                    GHC {discountValue.toFixed(2)} ({discountValue === 5 ? '100% Scholarship' : 'Special rate'})
+                                  </span>
+                                ) : (
+                                  <span className="text-sm font-bold text-neutral-500 uppercase tracking-wide">None (Standard rate)</span>
+                                )}
+                              </div>
+                              <div className="bg-neutral-950 p-3 border border-neutral-850">
+                                <span className="text-[9px] font-mono uppercase text-neutral-500 block font-bold">Guardian Contact Phone</span>
+                                <span className="text-sm font-mono font-bold text-neutral-200">{historyStudent.guardianPhone || 'Not Configured'}</span>
+                              </div>
+                              <div className="bg-neutral-950 p-3 border border-neutral-850">
+                                <span className="text-[9px] font-mono uppercase text-neutral-500 block font-bold">Enrollment Date / Status</span>
+                                <span className="text-xs font-mono font-bold text-neutral-300 flex items-center gap-2">
+                                  <span>{historyStudent.enrollmentDate || 'Standard Term Start'}</span>
+                                  <span className={`text-[9px] px-1.5 py-0.2 rounded-xs font-black uppercase ${historyStudent.active !== false ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-red-950 text-red-400 border border-red-800'}`}>
+                                    {historyStudent.active !== false ? 'Active' : 'Inactive'}
+                                  </span>
+                                </span>
                               </div>
                             </div>
                           </div>
-                        ) : (
-                          <div className="md:col-span-8 space-y-5">
-                            <div>
-                              <h4 className="text-[10px] font-mono uppercase font-black tracking-widest text-neutral-500 mb-2">Student Credentials & Registration File</h4>
-                              
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                <div className="bg-neutral-950 p-3 border border-neutral-850">
-                                  <span className="text-[9px] font-mono uppercase text-neutral-550 block font-bold">Cohorted Segment Grade</span>
-                                  <span className="text-sm font-black text-white">{historyStudent.class} ({historyStudent.category})</span>
-                                </div>
-                                <div className="bg-neutral-950 p-3 border border-neutral-850">
-                                  <span className="text-[9px] font-mono uppercase text-neutral-550 block font-bold">System ID / Roll Number</span>
-                                  <span className="text-sm font-bold text-amber-400 font-mono tracking-wide">{historyStudent.rollNumber}</span>
-                                </div>
-                                <div className="bg-neutral-950 p-3 border border-neutral-850">
-                                  <span className="text-[9px] font-mono uppercase text-neutral-550 block font-bold">Standard Single-Day Attendance Fee</span>
-                                  <span className="text-sm font-black text-neutral-300">GHC 5.00</span>
-                                </div>
-                                <div className="bg-neutral-950 p-3 border border-neutral-850">
-                                  <span className="text-[9px] font-mono uppercase text-neutral-550 block font-bold">Daily Discount / Scholarship</span>
-                                  {discountValue > 0 ? (
-                                    <span className="text-sm font-black text-emerald-400 flex items-center gap-1 font-mono">
-                                      <Award size={14} className="stroke-[2.5]" />
-                                      GHC {discountValue.toFixed(2)} ({discountValue === 5 ? '100% Scholarship' : 'Special rate'})
-                                    </span>
-                                  ) : (
-                                    <span className="text-sm font-bold text-neutral-500 uppercase tracking-wide">None (Standard rate)</span>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
 
                             {/* Attendance summary statistics */}
                             <div className="bg-neutral-950 p-4 border border-neutral-850 space-y-3">
@@ -7296,7 +7587,6 @@ export const ClassRegister: React.FC = React.memo(() => {
                               </p>
                             </div>
                           </div>
-                        )}
                       </div>
                     </div>
                   )}
@@ -7308,10 +7598,10 @@ export const ClassRegister: React.FC = React.memo(() => {
                         <div className="bg-neutral-950 p-3.5 border border-neutral-850 rounded-xs">
                           <span className="text-[9px] font-black text-neutral-500 uppercase block">Total Fees Paid</span>
                           <strong className="text-base text-emerald-400 font-black mt-0.5 block">
-                            {currencySymbol} {payments.filter(p => p.studentId === historyStudent.id && !p.isAbsent).reduce((sum, p) => sum + p.amount, 0).toFixed(2)}
+                            {currencySymbol} {payments.filter(p => p.studentId === historyStudent.id && !p.isAbsent && p.verified !== false && p.amount > 0).reduce((sum, p) => sum + p.amount, 0).toFixed(2)}
                           </strong>
                           <span className="text-[9px] text-neutral-500 font-sans block mt-0.5">
-                            {payments.filter(p => p.studentId === historyStudent.id && !p.isAbsent).length} Payments Logged
+                            {payments.filter(p => p.studentId === historyStudent.id && !p.isAbsent && p.verified !== false && p.amount > 0).length} Payments Logged
                           </span>
                         </div>
 
@@ -7530,13 +7820,13 @@ export const ClassRegister: React.FC = React.memo(() => {
                         <div className="bg-neutral-950 p-4 border border-neutral-850">
                           <p className="text-[9px] font-black uppercase font-mono text-neutral-500">Total Paid Contribution</p>
                           <p className="text-lg font-black font-mono text-emerald-400 mt-1">
-                            GHC {payments.filter(p => p.studentId === historyStudent.id).reduce((sum, p) => sum + p.amount, 0).toFixed(2)}
+                            GHC {payments.filter(p => p.studentId === historyStudent.id && !p.isAbsent && p.verified !== false && p.amount > 0).reduce((sum, p) => sum + p.amount, 0).toFixed(2)}
                           </p>
                         </div>
                         <div className="bg-neutral-950 p-4 border border-neutral-850">
                           <p className="text-[9px] font-black uppercase font-mono text-neutral-500">Active Days Cleared</p>
                           <p className="text-lg font-black font-mono text-white mt-1">
-                            {payments.filter(p => p.studentId === historyStudent.id).length} Days
+                            {payments.filter(p => p.studentId === historyStudent.id && !p.isAbsent && p.verified !== false && p.amount > 0).length} Days
                           </p>
                         </div>
                         <div className="bg-neutral-950 p-4 border border-neutral-850">
@@ -7632,8 +7922,28 @@ export const ClassRegister: React.FC = React.memo(() => {
                               <button
                                 type="button"
                                 onClick={() => {
-                                  const res = purgeAdvancePayments(historyStudent.id);
-                                  showToast(res.message);
+                                  setDeleteConfirmDetails({
+                                    title: `PURGE ADVANCE LOGS FOR ${historyStudent.name.toUpperCase()}`,
+                                    subtitle: `Clears advance prepaid blocks for roll ${historyStudent.rollNumber || historyStudent.id}.`,
+                                    affectedCountMessage: `Action will clear advance payment entries recorded for ${historyStudent.name}.`,
+                                    whatWillBeDeleted: [
+                                      `Advance / prepaid payment block records for ${historyStudent.name}`,
+                                      "0-amount advance placekeeper markers"
+                                    ],
+                                    whatWillBePreserved: [
+                                      `Standard daily fee payments logged for ${historyStudent.name}`,
+                                      `Exams fee payments for ${historyStudent.name}`,
+                                      `Pupil profile & registration file for ${historyStudent.name}`
+                                    ],
+                                    verificationText: "PURGE",
+                                    confirmButtonText: "CONFIRM PURGE PUPIL ADVANCES",
+                                    onConfirm: () => {
+                                      const res = purgeAdvancePayments(historyStudent.id);
+                                      setDeleteConfirmDetails(null);
+                                      showToast(res.message);
+                                    },
+                                    onCancel: () => setDeleteConfirmDetails(null)
+                                  });
                                 }}
                                 className="px-2.5 py-1 text-[9px] font-mono font-black uppercase text-amber-400 hover:text-amber-300 border border-amber-500/30 hover:border-amber-500/60 bg-amber-950/10 hover:bg-amber-950/20 transition-all cursor-pointer inline-flex items-center gap-1 shrink-0"
                                 title="Purge advance payment records for this pupil"
@@ -7643,7 +7953,28 @@ export const ClassRegister: React.FC = React.memo(() => {
                               <button
                                 type="button"
                                 onClick={() => {
-                                  setShowDeleteAllPaymentsConfirm(true);
+                                  setDeleteConfirmDetails({
+                                    title: `DELETE ALL LOGS FOR ${historyStudent.name.toUpperCase()}`,
+                                    subtitle: `Permanently deletes all daily payment entries for pupil roll ${historyStudent.rollNumber || historyStudent.id}.`,
+                                    affectedCountMessage: `Action will delete ${studentPayments.length} payment log entry/entries for ${historyStudent.name}.`,
+                                    whatWillBeDeleted: [
+                                      `All ${studentPayments.length} payment record(s) recorded for ${historyStudent.name}`,
+                                      "All daily check-in marks and attendance flags for this student"
+                                    ],
+                                    whatWillBePreserved: [
+                                      `Pupil profile & class registration file for ${historyStudent.name}`,
+                                      "Payment records for all other pupils in the school",
+                                      "Exams fee payments & school expense logs"
+                                    ],
+                                    verificationText: "DELETE",
+                                    confirmButtonText: "CONFIRM DELETE ALL STUDENT LOGS",
+                                    onConfirm: () => {
+                                      deleteStudentPayments(historyStudent.id);
+                                      setDeleteConfirmDetails(null);
+                                      showToast(`Deleted all payment logs for ${historyStudent.name}`);
+                                    },
+                                    onCancel: () => setDeleteConfirmDetails(null)
+                                  });
                                 }}
                                 className="px-2.5 py-1 text-[9px] font-mono font-black uppercase text-red-500 hover:text-red-400 border border-red-500/30 hover:border-red-500/60 bg-red-950/10 hover:bg-red-950/20 transition-all cursor-pointer inline-flex items-center gap-1 shrink-0"
                               >
@@ -8045,7 +8376,7 @@ export const ClassRegister: React.FC = React.memo(() => {
                             <div>
                               <span className="text-[8px] font-black uppercase text-neutral-500 block">STUDENT BENEFICIARY</span>
                               <div className="text-[11px] font-black text-black uppercase">{historyStudent.name}</div>
-                              <div className="font-mono mt-0.5 text-neutral-700">Roll / ID: <strong className="text-black">{historyStudent.rollNumber || 'SHC-' + historyStudent.id.substring(0, 5).toUpperCase()}</strong></div>
+                              <div className="font-mono mt-0.5 text-neutral-700">Roll / ID: <strong className="text-black">{historyStudent.rollNumber || formatPupilId(historyStudent, systemSettings)}</strong></div>
                               <div className="font-bold text-neutral-800">Cohort Group: {historyStudent.class} ({historyStudent.category})</div>
                             </div>
 
@@ -8376,7 +8707,7 @@ export const ClassRegister: React.FC = React.memo(() => {
                             <div className="font-sans">
                               <span className="text-[8.5px] font-black uppercase text-neutral-500 block">STUDENT BENEFICIARY</span>
                               <div className="text-xs font-black text-black uppercase">{historyStudent.name}</div>
-                              <div className="font-mono mt-0.5 text-neutral-750 font-bold">Roll / ID: {historyStudent.rollNumber || 'SHC-' + historyStudent.id.substring(0, 5).toUpperCase()}</div>
+                              <div className="font-mono mt-0.5 text-neutral-750 font-bold">Roll / ID: {historyStudent.rollNumber || formatPupilId(historyStudent, systemSettings)}</div>
                               <div className="font-bold mt-0.5">Cohort Group: {historyStudent.class} ({historyStudent.category}) {historyStudent.paymentType === 'Term' && <span className="text-[8px] font-black text-green-700 bg-green-50 border border-green-300 px-1 py-0.5 font-sans uppercase shrink-0 rounded-sm ml-1">Term Scheme</span>}</div>
                             </div>
 
@@ -8645,6 +8976,237 @@ export const ClassRegister: React.FC = React.memo(() => {
                     </div>
                   </div>
 
+                {historyModalTab === 'gallery' && (
+                  <div className="space-y-6 no-print font-mono text-left">
+                    {/* Visual Header Banner */}
+                    <div className="p-4 bg-amber-955 border-2 border-amber-600/60 rounded flex flex-col md:flex-row items-center justify-between gap-4">
+                      <div className="flex items-center gap-3">
+                        <div className="p-2.5 bg-amber-400/20 border border-amber-400/40 text-amber-400 rounded">
+                          <Camera size={22} />
+                        </div>
+                        <div>
+                          <h4 className="text-sm font-black text-white uppercase tracking-wider">
+                            Student Photo Verification & Cohort Gallery
+                          </h4>
+                          <p className="text-[10px] text-neutral-400 uppercase font-bold">
+                            Visual check-in verification for morning attendance & security clearance
+                          </p>
+                        </div>
+                      </div>
+                      
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedPhotoStudent(historyStudent)}
+                          className="px-3.5 py-2 bg-amber-400 hover:bg-amber-300 text-black text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 rounded transition-all cursor-pointer shadow-md"
+                        >
+                          <Camera size={13} />
+                          <span>Update / Take Photo</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Primary Student Verification Card & Details Grid */}
+                    <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-start">
+                      {/* Column 1: HD Student Photo Display & Actions (5/12) */}
+                      <div className="md:col-span-5 bg-neutral-950 border-2 border-neutral-800 p-5 rounded space-y-4 text-center">
+                        <div className="relative group/photo mx-auto w-56 h-56 bg-neutral-900 border-4 border-amber-400/80 rounded-sm overflow-hidden shadow-xl flex items-center justify-center">
+                          {historyStudent.photoUrl || editedPhotoUrl ? (
+                            <img
+                              src={editedPhotoUrl || historyStudent.photoUrl}
+                              alt={historyStudent.name}
+                              className="w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform duration-300"
+                              onClick={() => setZoomedPhotoUrl(editedPhotoUrl || historyStudent.photoUrl || null)}
+                              referrerPolicy="no-referrer"
+                            />
+                          ) : (
+                            <div className="w-full h-full flex flex-col items-center justify-center p-4 bg-neutral-950 text-neutral-600">
+                              <Users size={64} className="mb-2 text-neutral-800" />
+                              <span className="text-[10px] font-black uppercase tracking-widest text-neutral-500">No Photo Registered</span>
+                              <button
+                                type="button"
+                                onClick={() => setSelectedPhotoStudent(historyStudent)}
+                                className="mt-3 px-3 py-1.5 bg-neutral-900 hover:bg-neutral-850 text-amber-400 border border-amber-400/40 rounded text-[9px] font-black uppercase tracking-wider"
+                              >
+                                + Add Photo Now
+                              </button>
+                            </div>
+                          )}
+
+                          {/* Quick Zoom Overlay button */}
+                          {(historyStudent.photoUrl || editedPhotoUrl) && (
+                            <button
+                              type="button"
+                              onClick={() => setZoomedPhotoUrl(editedPhotoUrl || historyStudent.photoUrl || null)}
+                              className="absolute bottom-2 right-2 p-2 bg-neutral-950/80 hover:bg-neutral-900 text-amber-400 border border-amber-400/50 rounded text-xs transition-colors cursor-pointer"
+                              title="Click to Zoom Photo"
+                            >
+                              <Search size={14} />
+                            </button>
+                          )}
+
+                          {/* Verification Shield Badge Overlay */}
+                          <div className="absolute top-2 left-2">
+                            {identityVerifiedMap[historyStudent.id] ? (
+                              <span className="px-2 py-0.5 bg-emerald-950 border border-emerald-500 text-emerald-300 text-[8px] font-black uppercase tracking-wider rounded flex items-center gap-1 shadow">
+                                <CheckCircle2 size={10} /> Verified
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 bg-amber-955 border border-amber-600/80 text-amber-300 text-[8px] font-black uppercase tracking-wider rounded flex items-center gap-1 shadow">
+                                Unverified
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Verification Action Deck */}
+                        <div className="space-y-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const current = !!identityVerifiedMap[historyStudent.id];
+                              setIdentityVerifiedMap(prev => ({ ...prev, [historyStudent.id]: !current }));
+                              showToast(
+                                !current
+                                  ? `Identity verified for ${historyStudent.name} on check-in!`
+                                  : `Identity mark reset for ${historyStudent.name}`
+                              );
+                            }}
+                            className={`w-full py-2.5 px-3 text-[10px] font-mono font-black uppercase tracking-wider flex items-center justify-center gap-2 border transition-all cursor-pointer rounded-xs ${
+                              identityVerifiedMap[historyStudent.id]
+                                ? 'bg-emerald-950/80 text-emerald-300 border-emerald-600'
+                                : 'bg-amber-400 hover:bg-amber-300 text-black border-amber-500 shadow-md'
+                            }`}
+                          >
+                            <UserCheck size={14} />
+                            <span>
+                              {identityVerifiedMap[historyStudent.id]
+                                ? '✓ Identity Verified for Today'
+                                : 'Verify Identity for Check-In'}
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setSelectedPhotoStudent(historyStudent)}
+                            className="w-full py-2 px-3 bg-neutral-900 hover:bg-neutral-850 text-neutral-300 border border-neutral-800 text-[9px] font-mono font-black uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors cursor-pointer rounded-xs"
+                          >
+                            <Upload size={12} />
+                            <span>Replace / Recapture Pupil Photo</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Column 2: Security & Student Verification Specifications (7/12) */}
+                      <div className="md:col-span-7 space-y-4">
+                        <div className="bg-neutral-950 p-5 border border-neutral-800 rounded space-y-3">
+                          <h5 className="text-xs font-black uppercase text-amber-400 tracking-wider flex items-center gap-2">
+                            <ShieldAlert size={14} /> Official Identity Clearance Specs
+                          </h5>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                            <div className="p-2.5 bg-neutral-900 border border-neutral-800 rounded">
+                              <span className="text-[9px] text-neutral-500 uppercase font-bold block">Pupil Full Name</span>
+                              <span className="font-black text-white text-sm">{historyStudent.name}</span>
+                            </div>
+                            <div className="p-2.5 bg-neutral-900 border border-neutral-800 rounded">
+                              <span className="text-[9px] text-neutral-500 uppercase font-bold block">Roll / Register Reference</span>
+                              <span className="font-bold text-amber-400 font-mono text-sm">{historyStudent.rollNumber}</span>
+                            </div>
+                            <div className="p-2.5 bg-neutral-900 border border-neutral-800 rounded">
+                              <span className="text-[9px] text-neutral-500 uppercase font-bold block">Class & Cohort Category</span>
+                              <span className="font-bold text-neutral-200">{historyStudent.class} ({historyStudent.category})</span>
+                            </div>
+                            <div className="p-2.5 bg-neutral-900 border border-neutral-800 rounded">
+                              <span className="text-[9px] text-neutral-500 uppercase font-bold block">Daily Pickup Verification Code</span>
+                              <span className="font-black text-emerald-400 font-mono text-sm tracking-widest">
+                                {getStudentPickupCode(historyStudent.id, historyStudent.rollNumber || '')}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Classmate Cohort Gallery Roll */}
+                        <div className="bg-neutral-950 p-4 border border-neutral-800 rounded space-y-3">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-neutral-800">
+                            <div>
+                              <span className="text-xs font-black text-white uppercase tracking-wider block">
+                                Class Cohort Photo Gallery ({historyStudent.class})
+                              </span>
+                              <span className="text-[9px] text-neutral-500 font-bold uppercase">
+                                Browse classmates during morning visual verification check-in
+                              </span>
+                            </div>
+                            
+                            <div className="relative">
+                              <Search size={12} className="absolute left-2.5 top-2.5 text-neutral-500" />
+                              <input
+                                type="text"
+                                value={galleryClassSearch}
+                                onChange={(e) => setGalleryClassSearch(e.target.value)}
+                                placeholder="Search classmate..."
+                                className="pl-7 pr-3 py-1 bg-neutral-900 border border-neutral-800 text-[10px] text-white focus:outline-none focus:border-amber-400 rounded w-44 font-mono"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 max-h-64 overflow-y-auto p-1 font-mono">
+                            {students
+                              .filter(s => s.class === historyStudent.class && s.name.toLowerCase().includes(galleryClassSearch.toLowerCase()))
+                              .map(peer => {
+                                const peerPaid = paidStudentMap.has(peer.id);
+                                const isCurrent = peer.id === historyStudent.id;
+                                return (
+                                  <div
+                                    key={peer.id}
+                                    onClick={() => {
+                                      setHistoryStudent(peer);
+                                    }}
+                                    className={`p-2 rounded border flex items-center gap-2.5 cursor-pointer transition-all ${
+                                      isCurrent
+                                        ? 'bg-amber-955 border-amber-500/80 shadow'
+                                        : 'bg-neutral-900/80 border-neutral-800 hover:border-neutral-700 hover:bg-neutral-850'
+                                    }`}
+                                  >
+                                    <div className="w-9 h-9 rounded-full overflow-hidden bg-neutral-950 border border-neutral-700 shrink-0 flex items-center justify-center">
+                                      {peer.photoUrl ? (
+                                        <img src={peer.photoUrl} alt={peer.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                                      ) : (
+                                        <span className="text-[9px] font-black text-amber-400 uppercase">
+                                          {peer.name.slice(0, 2).toUpperCase()}
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    <div className="min-w-0 flex-1">
+                                      <span className="text-[10px] font-bold text-white truncate block uppercase leading-tight">
+                                        {peer.name}
+                                      </span>
+                                      <div className="flex items-center gap-1 mt-0.5">
+                                        <span className="text-[8px] text-neutral-500 uppercase font-mono">
+                                          {peer.rollNumber}
+                                        </span>
+                                        {peerPaid ? (
+                                          <span className="text-[7px] bg-emerald-950 text-emerald-400 border border-emerald-800 px-1 py-0.2 rounded font-bold">
+                                            Paid
+                                          </span>
+                                        ) : (
+                                          <span className="text-[7px] bg-red-955 text-red-400 border border-red-900 px-1 py-0.2 rounded font-bold">
+                                            Due
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
           </>
         );
       })()}
@@ -8737,7 +9299,7 @@ export const ClassRegister: React.FC = React.memo(() => {
 
               <div className="space-y-4">
                 <p className="text-xs text-neutral-300 leading-relaxed font-bold">
-                  Now that bulk date entry is available for daily fees, you can safely clean up repeated payment entries, duplicate daily fee submissions, and advance payment markers.
+                  Review repeated payment records vs physical teacher receipts or clean network ghost collisions and advance placeholder markers.
                 </p>
 
                 <div className="grid grid-cols-2 gap-3">
@@ -8758,11 +9320,24 @@ export const ClassRegister: React.FC = React.memo(() => {
                   </div>
                 </div>
 
-                <div className="bg-neutral-950 p-3 border border-neutral-800 text-[10px] text-neutral-400 font-mono space-y-1">
-                  <span className="text-amber-400 font-black uppercase block">ℹ️ Safe Cleaning Guarantee:</span>
-                  <p className="leading-normal">
-                    • Purging duplicates will keep 1 valid primary payment per pupil per day and delete repeated submissions.<br/>
-                    • Purging advances will delete advance block records & 0-amount markers so you can log dates cleanly via Bulk Dates or Daily Check-in.
+                <div className="bg-amber-950/20 p-3.5 border border-amber-500/40 text-[10px] text-amber-200 font-mono space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-amber-400 font-black uppercase flex items-center gap-1.5">
+                      <ShieldAlert size={13} /> Hard-Copy Verification Guarantee:
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowPurgeModal(false);
+                        setShowReconciliationModal(true);
+                      }}
+                      className="text-amber-300 hover:text-white underline font-bold uppercase cursor-pointer"
+                    >
+                      Audit Per Pupil ↗
+                    </button>
+                  </div>
+                  <p className="leading-normal text-neutral-300">
+                    Smart Purge deletes phantom sync ghosts and redundant 0-markers, while <strong className="text-emerald-400">protecting 100% of legitimate multi-installment receipts</strong> so digital totals match teachers' paper receipt books.
                   </p>
                 </div>
               </div>
@@ -8770,27 +9345,82 @@ export const ClassRegister: React.FC = React.memo(() => {
               <div className="space-y-2 pt-2">
                 <button
                   type="button"
+                  onClick={() => {
+                    setShowPurgeModal(false);
+                    setShowReconciliationModal(true);
+                  }}
+                  className="w-full text-xs bg-amber-400 hover:bg-amber-300 text-black py-3 font-black uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-2 font-mono shadow-md border-2 border-amber-500"
+                >
+                  <ShieldAlert size={15} />
+                  <span>🔍 Open Hard-Copy Reconciliation Center</span>
+                </button>
+
+                <button
+                  type="button"
                   disabled={dupCount === 0}
                   onClick={() => {
-                    const res = purgeDuplicatePayments();
-                    showToast(res.message);
-                    playFeedbackSound?.('success');
+                    setDeleteConfirmDetails({
+                      title: "PURGE DUPLICATE PAYMENTS ONLY",
+                      subtitle: "Deletes repeated daily payment submissions recorded on the same date for the same pupil.",
+                      affectedCountMessage: `Found ${dupCount} duplicate payment record(s) ready for safe purging.`,
+                      whatWillBeDeleted: [
+                        `${dupCount} repeated daily payment record(s) logged on the same date for the same pupil`
+                      ],
+                      whatWillBePreserved: [
+                        "1 primary valid daily fee payment per pupil per date",
+                        "Legitimate multiple installments matching teacher hard copies",
+                        "Exams fee payment records & expenses",
+                        `All ${students.length} registered pupil profiles`
+                      ],
+                      verificationText: "PURGE",
+                      confirmButtonText: "CONFIRM PURGE DUPLICATES",
+                      onConfirm: () => {
+                        const res = purgeDuplicatePayments({
+                          onlyExactGhosts: true,
+                          deleteRedundantZero: true,
+                          preserveLegitimateInstallments: true
+                        });
+                        setDeleteConfirmDetails(null);
+                        showToast(res.message);
+                        playFeedbackSound?.(res.count > 0 ? 'success' : 'warning');
+                      },
+                      onCancel: () => setDeleteConfirmDetails(null)
+                    });
                   }}
-                  className="w-full text-xs bg-red-950/80 hover:bg-red-900 border border-red-700 text-red-200 py-3 font-black uppercase tracking-wider transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2"
+                  className="w-full text-xs bg-red-950/80 hover:bg-red-900 border border-red-700 text-red-200 py-3 font-black uppercase tracking-wider transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2 font-mono"
                 >
                   <Trash2 size={14} />
-                  Purge Duplicate Payments Only ({dupCount})
+                  Purge Ghost Duplicates Only ({dupCount})
                 </button>
 
                 <button
                   type="button"
                   disabled={advCount === 0}
                   onClick={() => {
-                    const res = purgeAdvancePayments();
-                    showToast(res.message);
-                    playFeedbackSound?.('success');
+                    setDeleteConfirmDetails({
+                      title: "PURGE ADVANCE & PREPAID LOGS ONLY",
+                      subtitle: "Deletes advance payment block records & 0-amount placeholder markers.",
+                      affectedCountMessage: `Found ${advCount} advance/prepaid log record(s) ready for purging.`,
+                      whatWillBeDeleted: [
+                        `${advCount} advance payment blocks & zero-amount prepaid placekeeper markers`
+                      ],
+                      whatWillBePreserved: [
+                        "Standard daily fee payment records logged on actual attendance dates",
+                        "Exams fee payment entries & expenses",
+                        `All ${students.length} registered pupil profiles`
+                      ],
+                      verificationText: "PURGE",
+                      confirmButtonText: "CONFIRM PURGE ADVANCES",
+                      onConfirm: () => {
+                        const res = purgeAdvancePayments();
+                        setDeleteConfirmDetails(null);
+                        showToast(res.message);
+                        playFeedbackSound?.('success');
+                      },
+                      onCancel: () => setDeleteConfirmDetails(null)
+                    });
                   }}
-                  className="w-full text-xs bg-amber-950/80 hover:bg-amber-900 border border-amber-700 text-amber-200 py-3 font-black uppercase tracking-wider transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2"
+                  className="w-full text-xs bg-amber-950/80 hover:bg-amber-900 border border-amber-700 text-amber-200 py-3 font-black uppercase tracking-wider transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2 font-mono"
                 >
                   <Trash2 size={14} />
                   Purge Advance & Prepaid Logs Only ({advCount})
@@ -8800,11 +9430,32 @@ export const ClassRegister: React.FC = React.memo(() => {
                   type="button"
                   disabled={dupCount === 0 && advCount === 0}
                   onClick={() => {
-                    const res = purgeRepeatedAndAdvancePayments({ duplicates: true, advance: true });
-                    showToast(res.message);
-                    playFeedbackSound?.('success');
+                    setDeleteConfirmDetails({
+                      title: "CLEAN REPEATED & ADVANCE RECORDS",
+                      subtitle: "Cleans both duplicate daily submissions and prepaid advance block logs.",
+                      affectedCountMessage: `Found ${dupCount + advCount} total record(s) ready for safe cleaning.`,
+                      whatWillBeDeleted: [
+                        `${dupCount} duplicate payment submission(s)`,
+                        `${advCount} advance payment block(s) & zero-amount placekeeper marker(s)`
+                      ],
+                      whatWillBePreserved: [
+                        "1 primary valid daily fee payment per pupil per date",
+                        "Legitimate hard-copy receipts",
+                        "Exams fee payment records & expenses",
+                        `All ${students.length} registered pupil profiles`
+                      ],
+                      verificationText: "PURGE",
+                      confirmButtonText: "CONFIRM CLEAN ALL REPEATED & ADVANCE LOGS",
+                      onConfirm: () => {
+                        const res = purgeRepeatedAndAdvancePayments({ duplicates: true, advance: true });
+                        setDeleteConfirmDetails(null);
+                        showToast(res.message);
+                        playFeedbackSound?.('success');
+                      },
+                      onCancel: () => setDeleteConfirmDetails(null)
+                    });
                   }}
-                  className="w-full text-xs bg-amber-400 hover:bg-amber-300 text-black py-3.5 font-black uppercase tracking-wider transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2 font-mono shadow-md"
+                  className="w-full text-xs bg-neutral-800 hover:bg-neutral-700 text-neutral-200 py-3 font-black uppercase tracking-wider transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2 font-mono"
                 >
                   <CheckCircle2 size={15} />
                   Clean All Repeated & Advance Records ({dupCount + advCount})
@@ -8902,11 +9553,11 @@ export const ClassRegister: React.FC = React.memo(() => {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-neutral-500 uppercase font-black">Roll / ID:</span>
-                  <span className="text-amber-400 font-bold">{historyStudent.rollNumber || 'SHC-' + historyStudent.id.substring(0, 5).toUpperCase()}</span>
+                  <span className="text-amber-400 font-bold">{historyStudent.rollNumber || formatPupilId(historyStudent, systemSettings)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-neutral-500 uppercase font-black">Total Logs:</span>
-                  <span className="text-white font-bold">{payments.filter(p => p.studentId === historyStudent.id).length} Entries</span>
+                  <span className="text-neutral-500 uppercase font-black">Total Valid Payments:</span>
+                  <span className="text-white font-bold">{payments.filter(p => p.studentId === historyStudent.id && !p.isAbsent && p.verified !== false && p.amount > 0).length} Entries</span>
                 </div>
               </div>
 
@@ -9271,7 +9922,7 @@ export const ClassRegister: React.FC = React.memo(() => {
                             <img class="qr-img" src="${generatedQrUrl}" />
                             <div class="student-name">${qrStudent.name}</div>
                             <div class="student-details">Class Group: ${qrStudent.class} <br/>Roll Ref: ${qrStudent.rollNumber}</div>
-                            <div class="payload-ref">SAAKOCHECK:STUDENT:${qrStudent.id}</div>
+                            <div class="payload-ref">Fee Tracker Ledger • SAAKOCHECK:STUDENT:${qrStudent.id}</div>
                           </div>
                           <script>
                             window.onload = function() {
@@ -9416,7 +10067,10 @@ export const ClassRegister: React.FC = React.memo(() => {
                   <button
                     type="button"
                     onClick={() => {
-                      const past15 = (activeTerm?.schoolDays ?? []).filter(d => d <= currentDate).slice(-15);
+                      const publicHolidays = activeTerm?.publicHolidays || [];
+                      const past15 = (activeTerm?.schoolDays ?? [])
+                        .filter(d => d <= currentDate && !publicHolidays.includes(d) && !isHolidayOrVacationDate(d, terms, activeTerm).isHoliday)
+                        .slice(-15);
                       if (past15.length > 0) {
                         setBulkRangeStartDate(past15[0]);
                         setBulkRangeEndDate(past15[past15.length - 1]);
@@ -9430,7 +10084,10 @@ export const ClassRegister: React.FC = React.memo(() => {
                   <button
                     type="button"
                     onClick={() => {
-                      const past10 = (activeTerm?.schoolDays ?? []).filter(d => d <= currentDate).slice(-10);
+                      const publicHolidays = activeTerm?.publicHolidays || [];
+                      const past10 = (activeTerm?.schoolDays ?? [])
+                        .filter(d => d <= currentDate && !publicHolidays.includes(d) && !isHolidayOrVacationDate(d, terms, activeTerm).isHoliday)
+                        .slice(-10);
                       if (past10.length > 0) {
                         setBulkRangeStartDate(past10[0]);
                         setBulkRangeEndDate(past10[past10.length - 1]);
@@ -9444,8 +10101,9 @@ export const ClassRegister: React.FC = React.memo(() => {
                   <button
                     type="button"
                     onClick={() => {
+                      const publicHolidays = activeTerm?.publicHolidays || [];
                       const unmarked = (activeTerm?.schoolDays ?? [])
-                        .filter(d => d <= currentDate)
+                        .filter(d => d <= currentDate && !publicHolidays.includes(d) && !isHolidayOrVacationDate(d, terms, activeTerm).isHoliday)
                         .filter(d => !payments.some(p => p.studentId === bulkPupil.id && p.date === d && !p.id.endsWith('_debt')));
                       setSelectedBulkDates(unmarked);
                     }}
@@ -9475,13 +10133,21 @@ export const ClassRegister: React.FC = React.memo(() => {
                     return <div className="text-neutral-500 text-center py-8 school-title">No school days recorded in current term yet.</div>;
                   }
 
+                  const publicHolidays = activeTerm?.publicHolidays || [];
+
                   return termDays.map(dayStr => {
+                    const holInfo = isHolidayOrVacationDate(dayStr, terms, activeTerm);
+                    const isHoliday = holInfo.isHoliday || publicHolidays.includes(dayStr);
                     const record = payments.find(p => p.studentId === bulkPupil.id && p.date === dayStr && !p.id.endsWith('_debt'));
                     
                     let statusLabel = 'UNMARKED';
                     let statusColor = 'text-neutral-500 border-neutral-900 bg-neutral-900/30';
 
-                    if (record) {
+                    if (isHoliday) {
+                      const hName = holInfo.label || 'Public Holiday';
+                      statusLabel = `🌴 HOLIDAY (${hName.toUpperCase()})`;
+                      statusColor = 'text-amber-500 border-amber-900/50 bg-amber-950/20';
+                    } else if (record) {
                       if (record.isAbsent) {
                         statusLabel = 'ABSENT';
                         statusColor = 'text-red-400 border-red-950 bg-red-950/30';
@@ -9502,18 +10168,22 @@ export const ClassRegister: React.FC = React.memo(() => {
                     return (
                       <label 
                         key={dayStr}
-                        className={`flex items-center justify-between p-2.5 border transition-all cursor-pointer ${
-                          isChecked 
-                            ? 'bg-amber-450/10 border-amber-400 text-white font-bold' 
-                            : 'bg-neutral-900/40 border-neutral-850 text-neutral-300 hover:border-neutral-700'
+                        className={`flex items-center justify-between p-2.5 border transition-all ${
+                          isHoliday 
+                            ? 'bg-neutral-950/80 border-neutral-900 text-neutral-600 opacity-60 cursor-not-allowed select-none' 
+                            : isChecked 
+                              ? 'bg-amber-450/10 border-amber-400 text-white font-bold cursor-pointer' 
+                              : 'bg-neutral-900/40 border-neutral-850 text-neutral-300 hover:border-neutral-700 cursor-pointer'
                         }`}
                       >
                         <div className="flex items-center gap-2.5">
                           <input
                             type="checkbox"
-                            className="w-4 h-4 rounded-none border border-neutral-850 checked:bg-amber-400 checked:border-amber-400"
-                            checked={isChecked}
+                            disabled={isHoliday}
+                            className="w-4 h-4 rounded-none border border-neutral-850 checked:bg-amber-400 checked:border-amber-400 disabled:opacity-30 disabled:cursor-not-allowed"
+                            checked={isChecked && !isHoliday}
                             onChange={(e) => {
+                              if (isHoliday) return;
                               if (e.target.checked) {
                                 setSelectedBulkDates(prev => [...prev, dayStr]);
                               } else {
@@ -9696,7 +10366,7 @@ export const ClassRegister: React.FC = React.memo(() => {
                       <div className="grid grid-cols-2 gap-x-4 gap-y-3 pt-1 text-[11px]">
                         <div>
                           <span className="text-[9px] text-neutral-505 block uppercase">Admission ID</span>
-                          <strong className="text-neutral-300 font-bold">{receiptStudent.rollNumber || 'SHC-'+receiptStudent.id.substring(0,5).toUpperCase()}</strong>
+                          <strong className="text-neutral-300 font-bold">{receiptStudent.rollNumber || formatPupilId(receiptStudent, systemSettings)}</strong>
                         </div>
                         
                         <div>
@@ -9834,7 +10504,7 @@ export const ClassRegister: React.FC = React.memo(() => {
                     <div className="font-sans space-y-1.5">
                       <span className="text-[8.5px] font-black uppercase text-neutral-500 block text-neutral-510 font-bold">STUDENT BENEFICIARY</span>
                       <div className="text-sm font-black text-black uppercase font-bold">{receiptStudent.name}</div>
-                      <div className="font-mono text-neutral-755 font-bold">Roll Ref: {receiptStudent.rollNumber || 'SHC-' + receiptStudent.id.substring(0, 5).toUpperCase()}</div>
+                      <div className="font-mono text-neutral-755 font-bold">Roll Ref: {receiptStudent.rollNumber || formatPupilId(receiptStudent, systemSettings)}</div>
                       <div className="font-bold">Cohort Grade: {receiptStudent.class} ({receiptStudent.category})</div>
                       <div><strong>Gender:</strong> {receiptStudent.gender || 'Not Specified'}</div>
                       <div><strong>Guardian Contact:</strong> {receiptStudent.guardianPhone || 'Not Specified'}</div>
@@ -9936,7 +10606,7 @@ export const ClassRegister: React.FC = React.memo(() => {
                     <div className="grid grid-cols-2 gap-x-4 gap-y-3 pt-1 text-[11px]">
                       <div>
                         <span className="text-[9px] text-neutral-505 block uppercase">Admission ID</span>
-                        <strong className="text-neutral-300 font-bold">{student.rollNumber || 'SHC-'+student.id.substring(0,5).toUpperCase()}</strong>
+                        <strong className="text-neutral-300 font-bold">{student.rollNumber || formatPupilId(student, systemSettings)}</strong>
                       </div>
                       
                       <div>
@@ -10083,7 +10753,7 @@ export const ClassRegister: React.FC = React.memo(() => {
                   <div className="font-sans space-y-1.5">
                     <span className="text-[8.5px] font-black uppercase text-neutral-500 block text-neutral-510 font-bold">STUDENT BENEFICIARY</span>
                     <div className="text-sm font-black text-black uppercase font-bold">{student.name}</div>
-                    <div className="font-mono text-neutral-755 font-bold">Roll Ref: {student.rollNumber || 'SHC-' + student.id.substring(0, 5).toUpperCase()}</div>
+                    <div className="font-mono text-neutral-755 font-bold">Roll Ref: {student.rollNumber || formatPupilId(student, systemSettings)}</div>
                     <div className="font-bold">Cohort Grade: {student.class} ({student.category})</div>
                     <div><strong>Gender:</strong> {student.gender || 'Not Specified'}</div>
                     <div><strong>Guardian Contact:</strong> {student.guardianPhone || 'Not Specified'}</div>
@@ -10228,7 +10898,7 @@ export const ClassRegister: React.FC = React.memo(() => {
             </div>
 
             {/* Mode Switcher Tabs */}
-            <div className="flex items-center bg-neutral-950 border border-neutral-800 p-1 font-mono text-xs font-bold">
+            <div className="flex flex-wrap items-center bg-neutral-950 border border-neutral-800 p-1 font-mono text-xs font-bold gap-1">
               <button
                 type="button"
                 onClick={() => setHardcopyMode('weekly')}
@@ -10250,6 +10920,18 @@ export const ClassRegister: React.FC = React.memo(() => {
               >
                 <CheckSquare size={14} />
                 <span>Daily Gate Sheet (1 Day)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowPrintHardcopyModal(false);
+                  setShowCanteenModal(true);
+                }}
+                className="px-3 py-1.5 uppercase bg-amber-500/20 text-amber-400 hover:bg-amber-400 hover:text-black transition-colors cursor-pointer flex items-center gap-1.5 border border-amber-500/30 font-black"
+                title="Printable Full-Term Feeding Fee Daily Register Booklet for Pre-school Canteen Rep"
+              >
+                <Utensils size={14} />
+                <span>Pre-School Canteen Booklet</span>
               </button>
             </div>
             
@@ -11258,6 +11940,45 @@ export const ClassRegister: React.FC = React.memo(() => {
         </div>
       )}
 
+      {/* Lightbox Photo Zoom Inspection Modal */}
+      {zoomedPhotoUrl && (
+        <div
+          className="fixed inset-0 bg-black/90 backdrop-blur-md flex items-center justify-center p-4"
+          style={{ zIndex: 120 }}
+          onClick={() => setZoomedPhotoUrl(null)}
+        >
+          <div
+            className="relative bg-neutral-900 border-4 border-amber-400 p-4 max-w-xl w-full rounded shadow-2xl space-y-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex justify-between items-center pb-2 border-b border-neutral-800">
+              <span className="text-xs font-black uppercase text-amber-400 font-mono flex items-center gap-2">
+                <Camera size={14} /> Student Photo Lightbox Inspection
+              </span>
+              <button
+                type="button"
+                onClick={() => setZoomedPhotoUrl(null)}
+                className="text-neutral-400 hover:text-white cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="w-full max-h-[70vh] flex items-center justify-center bg-black overflow-hidden rounded">
+              <img src={zoomedPhotoUrl} alt="Zoomed Pupil" className="max-h-[65vh] w-auto object-contain" referrerPolicy="no-referrer" />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pre-School Canteen & Feeding Register Booklet Modal */}
+      <CanteenBookletModal
+        isOpen={showCanteenModal}
+        onClose={() => setShowCanteenModal(false)}
+        students={students}
+        activeTerm={activeTerm}
+        initialClass={['Nursery', 'KG1', 'KG2'].includes(selectedClass) ? selectedClass : 'All-Preschool'}
+      />
+
       {/* Pupil Pickup Passes Modal */}
       <PickupPassesModal
         isOpen={showPickupPassesModal}
@@ -11267,10 +11988,49 @@ export const ClassRegister: React.FC = React.memo(() => {
         systemSettings={systemSettings}
       />
 
+      {/* Pupil Admission & Enrollment Form Modal */}
+      <AdmissionFormModal
+        isOpen={showAdmissionFormModal}
+        onClose={() => {
+          setShowAdmissionFormModal(false);
+          setAdmissionFormStudent(null);
+        }}
+        initialStudent={admissionFormStudent}
+        initialClass={selectedClass}
+      />
+
       {/* Express Speed Fee Collector Modal */}
       <ExpressFeeModal
         isOpen={isExpressFeeOpen}
         onClose={() => setIsExpressFeeOpen(false)}
+      />
+
+      {/* Render DeleteConfirmationModal */}
+      <DeleteConfirmationModal details={deleteConfirmDetails} />
+
+      {/* Edit Student Modal Popup */}
+      <EditStudentModal
+        student={studentToEdit}
+        isOpen={!!studentToEdit}
+        onClose={() => setStudentToEdit(null)}
+        onSaved={(updated) => {
+          if (historyStudent?.id === updated.id) {
+            setHistoryStudent(updated);
+          }
+        }}
+      />
+
+      {/* Duplicate Payment Audit & Hard-Copy Reconciliation Modal */}
+      <DuplicateReconciliationModal
+        isOpen={showReconciliationModal}
+        onClose={() => setShowReconciliationModal(false)}
+      />
+
+      {/* Delete Entire Class Fees Modal */}
+      <ClearClassFeesModal
+        isOpen={showClearClassFeesModal}
+        onClose={() => setShowClearClassFeesModal(false)}
+        initialClass={selectedClass}
       />
     </div>
   );

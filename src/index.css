@@ -66,6 +66,12 @@
   /* Bring back visibility specifically for the print friendly area container and children */
   #print-friendly-area,
   #print-friendly-area *,
+  #print-quick-daily-area,
+  #print-quick-daily-area *,
+  #print-directors-debt-area,
+  #print-directors-debt-area *,
+  #print-term-summaries-area,
+  #print-term-summaries-area *,
   #print-single-invoice-area-upgrade,
   #print-single-invoice-area-upgrade *,
   #print-payslip-area,
@@ -217,99 +223,276 @@
   }
 }
 
-/* HIGH-CONTRAST 'DAYLIGHT' MODE OVERRIDES FOR SUNNY OUTDOOR SCHOOL HOURS */
+/* HIGH-CONTRAST & ELEGANT 'DAYLIGHT' MODE OVERRIDES */
 .daylight {
-  /* Dynamic mapping of Tailwind v4 core color variables */
-  --color-neutral-950: #ffffff !important;
-  --color-neutral-900: #f8fafc !important; /* light slate background */
-  --color-neutral-850: #f1f5f9 !important;
-  --color-neutral-800: #e2e8f0 !important; /* solid borders */
-  --color-neutral-750: #cbd5e1 !important;
-  --color-neutral-700: #94a3b8 !important;
-  --color-neutral-600: #475569 !important;
-  --color-neutral-500: #334155 !important;
-  --color-neutral-450: #1e293b !important;
-  --color-neutral-400: #0f172a !important; /* maximum readability text */
-  --color-neutral-300: #020617 !important;
-  --color-white: #000000 !important;
-  --color-black: #ffffff !important;
+  /* Dynamic mapping of Tailwind v4 core neutral color variables for light mode */
+  --color-neutral-950: #f8fafc !important; /* Page canvas: slate-50 */
+  --color-neutral-900: #ffffff !important; /* Card surface: pure white */
+  --color-neutral-850: #f1f5f9 !important; /* Panel section: slate-100 */
+  --color-neutral-800: #e2e8f0 !important; /* Sub-surface / border: slate-200 */
+  --color-neutral-750: #cbd5e1 !important; /* Border: slate-300 */
+  --color-neutral-700: #94a3b8 !important; /* Slate-400 */
+  --color-neutral-600: #64748b !important; /* Slate-500 */
+  --color-neutral-500: #475569 !important; /* Slate-600 */
+  --color-neutral-450: #334155 !important; /* Slate-700 */
+  --color-neutral-400: #334155 !important; /* Slate-700 readable secondary text */
+  --color-neutral-300: #1e293b !important; /* Slate-800 */
+  --color-neutral-200: #0f172a !important; /* Slate-900 primary dark text */
+  --color-neutral-100: #0f172a !important; /* Slate-900 heading text */
 
   color: #0f172a !important;
-  background-color: #ffffff !important;
-}
-
-/* Base elements within daylight theme */
-.daylight main, .daylight footer, .daylight header {
-  background-color: var(--color-neutral-950) !important;
-  color: var(--color-neutral-400) !important;
-}
-
-.daylight h1, .daylight h2, .daylight h3, .daylight h4, .daylight p,
-.daylight th, .daylight td, .daylight button, .daylight label, .daylight strong {
-  color: #0f172a;
-}
-
-/* Card components & background panels */
-.daylight .bg-neutral-900,
-.daylight [class*="bg-neutral-900"] {
   background-color: #f8fafc !important;
-  border-color: #cbd5e1 !important;
+  color-scheme: light;
 }
 
+/* Document body background in daylight */
+body.daylight {
+  background-color: #f8fafc !important;
+  color: #0f172a !important;
+}
+
+/* Base structural layout containers */
+.daylight main {
+  background-color: #f8fafc !important;
+  color: #0f172a !important;
+}
+
+.daylight header {
+  background-color: #ffffff !important;
+  border-bottom-color: #e2e8f0 !important;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05) !important;
+}
+
+.daylight aside {
+  background-color: #ffffff !important;
+  border-right-color: #e2e8f0 !important;
+  box-shadow: 1px 0 3px 0 rgba(0, 0, 0, 0.03) !important;
+}
+
+/* Card surfaces & panels */
 .daylight .bg-neutral-950 {
   background-color: #ffffff !important;
+  color: #0f172a !important;
+  border-color: #e2e8f0 !important;
+}
+
+.daylight .bg-neutral-900,
+.daylight [class*="bg-neutral-900"] {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border-color: #e2e8f0 !important;
+  box-shadow: 0 1px 2px 0 rgba(15, 23, 42, 0.04) !important;
+}
+
+.daylight .bg-neutral-850,
+.daylight [class*="bg-neutral-850"] {
+  background-color: #f8fafc !important;
+  border-color: #e2e8f0 !important;
+  color: #0f172a !important;
 }
 
 .daylight .bg-neutral-800,
 .daylight [class*="bg-neutral-800"] {
   background-color: #f1f5f9 !important;
-  border-color: #cbd5e1 !important;
+  border-color: #e2e8f0 !important;
   color: #0f172a !important;
 }
 
-.daylight .text-neutral-400,
-.daylight .text-neutral-500,
-.daylight .text-neutral-600 {
-  color: #334155 !important;
-}
-
+/* Headings & Text Hierarchy */
+.daylight h1, .daylight h2, .daylight h3, .daylight h4, .daylight h5, .daylight h6,
+.daylight .text-neutral-100,
+.daylight .text-neutral-200,
 .daylight .text-neutral-300 {
   color: #0f172a !important;
 }
 
-.daylight .border-neutral-800 {
+.daylight .text-neutral-400 {
+  color: #475569 !important; /* Slate-600 */
+}
+
+.daylight .text-neutral-500 {
+  color: #64748b !important; /* Slate-500 */
+}
+
+.daylight .text-neutral-600 {
+  color: #94a3b8 !important; /* Slate-400 */
+}
+
+/* Borders & Dividers */
+.daylight .border-neutral-800,
+.daylight .border-neutral-850,
+.daylight .border-neutral-900,
+.daylight [class*="border-neutral-8"] {
+  border-color: #e2e8f0 !important;
+}
+
+.daylight .border-neutral-700 {
   border-color: #cbd5e1 !important;
 }
 
+.daylight .divide-neutral-800 > :not([hidden]) ~ :not([hidden]),
+.daylight .divide-neutral-850 > :not([hidden]) ~ :not([hidden]) {
+  border-color: #e2e8f0 !important;
+}
+
+/* Inputs, Selects, Textareas & Options */
 .daylight input,
 .daylight select,
 .daylight textarea {
   background-color: #ffffff !important;
   color: #0f172a !important;
-  border-color: #94a3b8 !important;
+  border-color: #cbd5e1 !important;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.03) !important;
 }
 
-.daylight input::placeholder {
-  color: #64748b !important;
+.daylight input:focus,
+.daylight select:focus,
+.daylight textarea:focus {
+  background-color: #ffffff !important;
+  border-color: #d97706 !important; /* Warm Amber */
+  outline: none !important;
+  box-shadow: 0 0 0 2px rgba(217, 119, 6, 0.25) !important;
 }
 
-/* Ensure contrasting yellow/amber for texts & elements */
-.daylight .text-amber-400 {
-  color: #b45309 !important; /* High-contrast darker warm amber */
+.daylight input::placeholder,
+.daylight textarea::placeholder {
+  color: #94a3b8 !important;
+}
+
+.daylight option {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+}
+
+/* Tables & Grid Headers */
+.daylight table th {
+  background-color: #f1f5f9 !important;
+  color: #334155 !important;
+  border-bottom-color: #cbd5e1 !important;
+  font-weight: 800 !important;
+}
+
+.daylight table td {
+  border-bottom-color: #e2e8f0 !important;
+  color: #0f172a !important;
+}
+
+.daylight tr:hover {
+  background-color: #f8fafc !important;
+}
+
+/* Modals & Overlays */
+.daylight [class*="bg-black/"],
+.daylight [class*="bg-neutral-950/"] {
+  background-color: rgba(15, 23, 42, 0.55) !important;
+  backdrop-filter: blur(4px) !important;
+}
+
+.daylight [role="dialog"],
+.daylight .modal-window,
+.daylight div[class*="max-w-"][class*="bg-neutral-900"],
+.daylight div[class*="max-w-"][class*="bg-neutral-950"] {
+  background-color: #ffffff !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.12), 0 8px 10px -6px rgba(0, 0, 0, 0.08) !important;
+}
+
+/* Vibrant Light Mode Status Badges & Pills */
+.daylight .text-amber-400,
+.daylight .text-amber-300,
+.daylight .text-amber-500 {
+  color: #b45309 !important; /* Amber-700 */
+}
+
+.daylight .bg-amber-400\/10,
+.daylight .bg-amber-400\/20,
+.daylight .bg-amber-500\/10,
+.daylight .bg-amber-500\/20,
+.daylight .bg-amber-950\/20,
+.daylight .bg-amber-950\/30,
+.daylight .bg-amber-950\/40,
+.daylight .bg-amber-950\/50,
+.daylight .bg-amber-900\/30 {
+  background-color: #fef3c7 !important; /* Amber-100 */
+  border-color: #fcd34d !important; /* Amber-300 */
+  color: #92400e !important; /* Amber-800 */
 }
 
 .daylight .bg-amber-400 {
   background-color: #f59e0b !important;
-  color: #ffffff !important;
+  color: #0f172a !important;
 }
 
-/* Keep critical green/red indicator colors fully visible */
-.daylight .text-emerald-400 {
-  color: #166534 !important;
+.daylight .text-emerald-400,
+.daylight .text-emerald-300,
+.daylight .text-emerald-500 {
+  color: #15803d !important; /* Emerald-700 */
 }
 
-.daylight .text-red-500, .daylight .text-red-400 {
-  color: #991b1b !important;
+.daylight .bg-emerald-950\/20,
+.daylight .bg-emerald-950\/30,
+.daylight .bg-emerald-950\/40,
+.daylight .bg-emerald-950\/50,
+.daylight .bg-emerald-900\/30,
+.daylight .bg-emerald-500\/10,
+.daylight .bg-emerald-400\/10,
+.daylight .bg-emerald-400\/20 {
+  background-color: #dcfce7 !important; /* Emerald-100 */
+  border-color: #86efac !important; /* Emerald-300 */
+  color: #166534 !important; /* Emerald-800 */
+}
+
+.daylight .text-red-400,
+.daylight .text-red-500,
+.daylight .text-rose-400 {
+  color: #b91c1c !important; /* Red-700 */
+}
+
+.daylight .bg-red-950\/20,
+.daylight .bg-red-950\/30,
+.daylight .bg-red-950\/40,
+.daylight .bg-red-950\/50,
+.daylight .bg-red-900\/30,
+.daylight .bg-red-500\/10,
+.daylight .bg-red-400\/10,
+.daylight .bg-red-400\/20 {
+  background-color: #fee2e2 !important; /* Red-100 */
+  border-color: #fca5a5 !important; /* Red-300 */
+  color: #991b1b !important; /* Red-800 */
+}
+
+.daylight .text-blue-400,
+.daylight .text-cyan-400,
+.daylight .text-sky-400,
+.daylight .text-indigo-400 {
+  color: #1d4ed8 !important;
+}
+
+.daylight .bg-blue-950\/20,
+.daylight .bg-blue-950\/30,
+.daylight .bg-blue-950\/40,
+.daylight .bg-blue-500\/10,
+.daylight .bg-cyan-950\/30,
+.daylight .bg-indigo-950\/30 {
+  background-color: #dbeafe !important;
+  border-color: #93c5fd !important;
+  color: #1e40af !important;
+}
+
+/* Sidebar Navigation Items */
+.daylight aside nav button {
+  color: #475569 !important;
+}
+
+.daylight aside nav button:hover {
+  color: #0f172a !important;
+  background-color: #f1f5f9 !important;
+}
+
+.daylight aside nav button.text-amber-400 {
+  color: #b45309 !important;
+  border-left-color: #b45309 !important;
 }
 
 /* KEYBOARD SHORTCUT & FOCUS ANIMATIONS FOR SEARCH SHIFTING */

@@ -131,8 +131,8 @@ export const LoginMFA: React.FC = () => {
               </p>
             </div>
             
-            <div className="flex justify-center sm:block">
-              <SchoolLogo size={110} className="border-2 border-neutral-800 bg-neutral-900 shadow-sm" />
+            <div className="flex justify-center sm:block shrink-0">
+              <SchoolLogo size={80} className="border-2 border-emerald-500/40 bg-neutral-900 shadow-lg shadow-emerald-500/10" />
             </div>
           </div>
         </div>

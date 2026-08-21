@@ -1,12 +1,20 @@
-const STATIC_CACHE_NAME = 'holy-child-static-v5';
-const DYNAMIC_CACHE_NAME = 'holy-child-dynamic-v5';
+const STATIC_CACHE_NAME = 'holy-child-static-v8';
+const DYNAMIC_CACHE_NAME = 'holy-child-dynamic-v8';
 
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
+  '/favicon.ico',
+  '/favicon-16x16.png',
+  '/favicon-32x32.png',
+  '/apple-touch-icon.png',
   '/icon.svg',
   '/icon-192.png',
   '/icon-512.png',
+  '/maskable-192.png',
+  '/maskable-512.png',
+  '/fee_tracker_logo.jpg',
+  '/fee_tracker_logo.png',
   '/school_logo.jpg',
   '/manifest.json'
 ];

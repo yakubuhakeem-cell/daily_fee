@@ -4,19 +4,22 @@
  */
 
 import React, { useState, useMemo } from 'react';
-import { useApp } from '../context/AppContext';
-import { StudentClass, SchoolCategory, PaymentRecord } from '../types';
+import { useApp, getStudentBaselineTermFee, isTermPayer } from '../context/AppContext';
+import { StudentClass, SchoolCategory, PaymentRecord, ALL_CLASSES } from '../types';
 import { 
   FileSpreadsheet, Mail, Search, Calendar, ChevronRight, ChevronDown, CheckCircle2, 
   HelpCircle, Settings, CheckSquare, PlusSquare, ArrowUpDown, X, Printer,
   UserCheck, CalendarRange, AlertTriangle, TrendingUp, UserMinus, Eye,
   ZoomIn, ZoomOut, FileText, Check, Info, MessageSquare, Share2,
-  Lock, Unlock, Users, Receipt, Coins, TrendingDown, Database
+  Lock, Unlock, Users, Receipt, Coins, TrendingDown, Database, Utensils,
+  Download, Zap, Copy
 } from 'lucide-react';
 import { SchoolLogo } from './SchoolLogo';
 import { VoiceSearchButton } from './VoiceSearchButton';
 import { AuditTrailTab } from './AuditTrailTab';
 import { DatabaseTab } from './DatabaseTab';
+import { CanteenBookletModal } from './CanteenBookletModal';
+import { isHolidayOrVacationDate } from '../utils/termUtils';
 import * as XLSX from 'xlsx';
 
 export const ReportPanel: React.FC = React.memo(() => {
@@ -31,7 +34,8 @@ export const ReportPanel: React.FC = React.memo(() => {
     sendautomatedWhatsApp,
     examsPayments,
     examsSettings,
-    terms
+    terms,
+    systemSettings
   } = useApp();
 
   const paymentsIndexed = useMemo(() => {
@@ -56,7 +60,7 @@ export const ReportPanel: React.FC = React.memo(() => {
   const [visibleDailyCount, setVisibleDailyCount] = useState<number>(100);
 
   // Auditing & Month-To-Date (MTD) view states
-  const [auditViewMode, setAuditViewMode] = useState<'daily' | 'monthly' | 'ledger' | 'teller' | 'audit' | 'database'>('daily');
+  const [auditViewMode, setAuditViewMode] = useState<'monthly' | 'ledger' | 'teller' | 'audit' | 'database'>('monthly');
 
   React.useEffect(() => {
     setVisibleDailyCount(100);
@@ -122,11 +126,27 @@ export const ReportPanel: React.FC = React.memo(() => {
 
   // Term Summary PDF states
   const [showTermSummaryModal, setShowTermSummaryModal] = useState(false);
+  const [showCanteenBookletModal, setShowCanteenBookletModal] = useState(false);
   const [termSummarySearchQuery, setTermSummarySearchQuery] = useState('');
   const [termSummaryClassFilter, setTermSummaryClassFilter] = useState('ALL');
   const [termSummarySignatory, setTermSummarySignatory] = useState('Yakubu Hakeem (Headmaster)');
   const [termSummaryMemo, setTermSummaryMemo] = useState('Consolidated term billing record and verified registration statement. Please verify and resolve all outstanding balances with the administrative office.');
   const [termSummaryOnlyPending, setTermSummaryOnlyPending] = useState(false);
+
+  // Quick Daily Export States
+  const [showQuickDailyModal, setShowQuickDailyModal] = useState(false);
+  const [quickDailyDate, setQuickDailyDate] = useState<string>(() => currentDate || new Date().toISOString().slice(0, 10));
+  const [quickDailyClassFilter, setQuickDailyClassFilter] = useState<string>('ALL');
+  const [quickDailyStatusFilter, setQuickDailyStatusFilter] = useState<'ALL' | 'VERIFIED' | 'PENDING'>('ALL');
+  const [quickDailySignatory, setQuickDailySignatory] = useState<string>('Yakubu Hakeem (Headmaster)');
+  const [quickDailyMemo, setQuickDailyMemo] = useState<string>('Official audited daily transactions snapshot and cashier collection statement. All collections reconciled with physical tally.');
+
+  // Sync quickDailyDate if currentDate changes
+  React.useEffect(() => {
+    if (currentDate) {
+      setQuickDailyDate(currentDate);
+    }
+  }, [currentDate]);
   
   const [selectedReportTermId, setSelectedReportTermId] = useState<string>(activeTerm?.id || '');
 
@@ -383,14 +403,14 @@ export const ReportPanel: React.FC = React.memo(() => {
       const unpaidCount = unpaidDays.length;
 
       // Fees calculations
-      const isTermPayer = student.paymentType === 'Term';
-      const termFeeAmount = student.termFee || 350;
+      const isTermPayerStudent = isTermPayer(student);
+      const termFeeAmount = student.termFee || getStudentBaselineTermFee(student.class, systemSettings);
 
       let totalCharged = 0;
       let totalPaid = 0;
       let totalDue = 0;
 
-      if (isTermPayer) {
+      if (isTermPayerStudent) {
         totalCharged = termFeeAmount + (student.legacyDebt || 0);
         // Payments include any recorded payments.
         totalPaid = studentPayments.filter(p => !p.isAbsent && (includeUnverified || p.verified)).reduce((sum, p) => sum + p.amount, 0);
@@ -473,15 +493,15 @@ export const ReportPanel: React.FC = React.memo(() => {
       const unpaidCount = unpaidDays.length;
 
       // Fees calculations
-      const isTermPayer = student.paymentType === 'Term';
-      const termFeeAmount = student.termFee || 350;
+      const isTermPayerStudent = isTermPayer(student);
+      const termFeeAmount = student.termFee || getStudentBaselineTermFee(student.class, systemSettings);
       const legacyDebt = student.legacyDebt || 0;
 
       let tuitionBilled = 0;
       let tuitionPaid = 0;
       let tuitionDue = 0;
 
-      if (isTermPayer) {
+      if (isTermPayerStudent) {
         tuitionBilled = termFeeAmount + legacyDebt;
         tuitionPaid = studentPayments.filter(p => !p.isAbsent && (includeUnverified || p.verified)).reduce((sum, p) => sum + p.amount, 0);
         tuitionDue = Math.max(0, tuitionBilled - tuitionPaid);
@@ -663,6 +683,182 @@ export const ReportPanel: React.FC = React.memo(() => {
     document.body.appendChild(downloadAnchor);
     downloadAnchor.click();
     document.body.removeChild(downloadAnchor);
+  };
+
+  // Derived student map for quick lookups
+  const studentsByIdMap = useMemo(() => {
+    const map = new Map<string, typeof students[0]>();
+    students.forEach(s => map.set(s.id, s));
+    return map;
+  }, [students]);
+
+  // Filtered transactions for the quick daily export
+  const quickDailyTransactions = useMemo(() => {
+    const targetDate = quickDailyDate || currentDate;
+    return payments.filter(p => {
+      if (p.date !== targetDate) return false;
+      if (quickDailyClassFilter !== 'ALL' && p.class !== quickDailyClassFilter) return false;
+      if (quickDailyStatusFilter === 'VERIFIED' && !p.verified) return false;
+      if (quickDailyStatusFilter === 'PENDING' && p.verified) return false;
+      return true;
+    }).sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
+  }, [payments, quickDailyDate, currentDate, quickDailyClassFilter, quickDailyStatusFilter]);
+
+  // Summary totals for the quick daily export
+  const quickDailyTotals = useMemo(() => {
+    const totalCount = quickDailyTransactions.length;
+    const grossAmount = quickDailyTransactions.reduce((sum, p) => sum + (p.amount || 0), 0);
+    const verifiedAmount = quickDailyTransactions.filter(p => p.verified).reduce((sum, p) => sum + (p.amount || 0), 0);
+    const pendingAmount = quickDailyTransactions.filter(p => !p.verified).reduce((sum, p) => sum + (p.amount || 0), 0);
+    const verifiedCount = quickDailyTransactions.filter(p => p.verified).length;
+    const pendingCount = quickDailyTransactions.filter(p => !p.verified).length;
+
+    // Cashiers on duty
+    const cashiersSet = new Set<string>();
+    quickDailyTransactions.forEach(p => {
+      if (p.collectedBy) cashiersSet.add(p.collectedBy);
+    });
+
+    // Class breakdown
+    const classMap: Record<string, { count: number; total: number; verified: number; pending: number }> = {};
+    ALL_CLASSES.forEach(cls => {
+      classMap[cls] = { count: 0, total: 0, verified: 0, pending: 0 };
+    });
+    quickDailyTransactions.forEach(p => {
+      if (!classMap[p.class]) {
+        classMap[p.class] = { count: 0, total: 0, verified: 0, pending: 0 };
+      }
+      classMap[p.class].count += 1;
+      classMap[p.class].total += p.amount || 0;
+      if (p.verified) {
+        classMap[p.class].verified += p.amount || 0;
+      } else {
+        classMap[p.class].pending += p.amount || 0;
+      }
+    });
+
+    return {
+      totalCount,
+      grossAmount,
+      verifiedAmount,
+      pendingAmount,
+      verifiedCount,
+      pendingCount,
+      cashiers: Array.from(cashiersSet),
+      classBreakdown: Object.entries(classMap)
+        .filter(([_, d]) => d.count > 0)
+        .map(([cls, d]) => ({
+          className: cls as StudentClass,
+          ...d
+        }))
+    };
+  }, [quickDailyTransactions]);
+
+  // ⚡ 1-Click Quick Daily Export (CSV)
+  const handleQuickDailyCSVExport = (targetDateOverride?: string) => {
+    const targetDate = targetDateOverride || quickDailyDate || currentDate;
+    const txns = payments.filter(p => p.date === targetDate);
+
+    const totalGross = txns.reduce((sum, p) => sum + (p.amount || 0), 0);
+    const totalVerified = txns.filter(p => p.verified).reduce((sum, p) => sum + (p.amount || 0), 0);
+    const totalPending = txns.filter(p => !p.verified).reduce((sum, p) => sum + (p.amount || 0), 0);
+
+    let csvContent = "";
+    // Institutional Header
+    csvContent += `"SAAKO HOLY CHILD ACADEMY - OFFICIAL DAILY TRANSACTIONS AUDIT REPORT"\r\n`;
+    csvContent += `"Target Audit Date:","${targetDate}","Generated On:","${new Date().toLocaleString()}","Signatory:","${quickDailySignatory}"\r\n`;
+    csvContent += `"Total Daily Transactions:",${txns.length},"Total Gross Revenue (GHC):",${totalGross.toFixed(2)},"Verified (GHC):",${totalVerified.toFixed(2)},"Pending Verification (GHC):",${totalPending.toFixed(2)}\r\n`;
+    csvContent += `\r\n`;
+
+    // Column headers
+    csvContent += `"No.","Receipt ID","Checked Date","Time","Student ID","Pupil Full Name","Class Grade","Academic Category","Amount Paid (GHC)","Cashier / Collected By","Audit Security Status","Payment Type / Notes","Guardian Contact Phone"\r\n`;
+
+    // Transaction rows
+    txns.forEach((p, idx) => {
+      const student = studentsByIdMap.get(p.studentId);
+      const parentContact = student?.guardianPhone || 'N/A';
+      const timeStr = p.timestamp ? (p.timestamp.includes('T') ? p.timestamp.split('T')[1].substring(0, 8) : p.timestamp) : '- -';
+      const row = [
+        idx + 1,
+        `="${p.id}"`,
+        `"${p.date}"`,
+        `"${timeStr}"`,
+        `="${p.studentId}"`,
+        `"${(p.studentName || '').replace(/"/g, '""')}"`,
+        `"${p.class}"`,
+        `"${p.category || 'Standard'}"`,
+        p.amount.toFixed(2),
+        `"${(p.collectedBy || 'Staff').replace(/"/g, '""')}"`,
+        `"${p.verified ? 'VERIFIED / APPROVED' : 'PENDING AUDIT'}"`,
+        `"${(p.notes || 'Daily Schooling Fee').replace(/"/g, '""')}"`,
+        `="${parentContact}"`
+      ];
+      csvContent += row.join(",") + "\r\n";
+    });
+
+    // Summary footer rows
+    csvContent += `\r\n`;
+    csvContent += `"SUMMARY","TOTAL ROWS: ${txns.length}","---","---","---","---","---","TOTAL: GHC ${totalGross.toFixed(2)}","---","VERIFIED: GHC ${totalVerified.toFixed(2)}","PENDING: GHC ${totalPending.toFixed(2)}","---"\r\n`;
+
+    // Trigger download with UTF-8 BOM
+    const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `Daily_Transactions_Audit_${targetDate.replace(/-/g, "")}_SaakoHolyChild.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    showToast(`⚡ Daily CSV Exported: ${txns.length} records (GHC ${totalGross.toFixed(2)}) for ${targetDate}`);
+  };
+
+  // 📄 1-Click Quick Daily Export (PDF / Print Snapshot)
+  const handleQuickDailyPDFExport = (targetDateOverride?: string) => {
+    if (targetDateOverride) {
+      setQuickDailyDate(targetDateOverride);
+    }
+    setShowQuickDailyModal(true);
+  };
+
+  // Direct print document trigger
+  const handlePrintDailyDocument = () => {
+    if (typeof window !== 'undefined') {
+      window.focus();
+      window.print();
+    }
+  };
+
+  // WhatsApp / Clipboard Share Summary
+  const handleShareDailySummary = () => {
+    const targetDate = quickDailyDate || currentDate;
+    const lines = [
+      `🏫 *SAAKO HOLY CHILD ACADEMY*`,
+      `📋 *Daily Transactions Audit & Cashier Snapshot*`,
+      `📅 *Date:* ${targetDate}`,
+      `---------------------------------------`,
+      `💰 *Total Collections:* GHC ${quickDailyTotals.grossAmount.toFixed(2)}`,
+      `✅ *Verified Amount:* GHC ${quickDailyTotals.verifiedAmount.toFixed(2)} (${quickDailyTotals.verifiedCount} receipts)`,
+      `⏳ *Pending Audit:* GHC ${quickDailyTotals.pendingAmount.toFixed(2)} (${quickDailyTotals.pendingCount} receipts)`,
+      `👥 *Total Transactions:* ${quickDailyTotals.totalCount} entries`,
+      `👨‍🏫 *Cashiers on Duty:* ${quickDailyTotals.cashiers.length > 0 ? quickDailyTotals.cashiers.join(', ') : 'Accounts Desk'}`,
+      ``,
+      `*Class Collections Summary:*`,
+      ...quickDailyTotals.classBreakdown.map(c => `• *${c.className}*: ${c.count} pupils → GHC ${c.total.toFixed(2)} (${c.verified > 0 ? `GHC ${c.verified.toFixed(2)} ver.` : 'pending'})`),
+      ``,
+      `✍️ *Prepared By:* ${quickDailySignatory}`,
+      `📌 *Directive:* ${quickDailyMemo}`
+    ];
+    const text = lines.join('\n');
+
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text);
+      showToast('📋 Daily audit summary copied to clipboard! Opening WhatsApp...');
+    }
+
+    const waUrl = `https://wa.me/?text=${encodeURIComponent(text)}`;
+    window.open(waUrl, '_blank');
   };
 
   // Aggregate stats of filtered set
@@ -1012,7 +1208,7 @@ export const ReportPanel: React.FC = React.memo(() => {
 
     const collectedGhc = paidPayments.reduce((sum, p) => sum + p.amount, 0);
     const expectedGhc = activeStudents.reduce((sum, s) => {
-      if (s.paymentType === 'Term') {
+      if (isTermPayer(s)) {
         return sum; // Term payers do not contribute to daily expected collections
       }
       const discount = s.discount || 0;
@@ -1173,8 +1369,11 @@ export const ReportPanel: React.FC = React.memo(() => {
             </div>
           </div>
 
-          <div class="footer-notes">
-            "This document is an official certified billing transcript generated directly from Saako Holy Child Academy financial core. Please resolve any outstanding balances with the bursar to ensure check-in compliance."
+          <div class="footer-notes" style="display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: #6b7280; border-top: 1px solid #e5e7eb; padding-top: 10px; margin-top: 20px;">
+            <span>"This document is an official certified billing transcript generated directly from Saako Holy Child Academy financial core. Please resolve any outstanding balances with the bursar to ensure check-in compliance."</span>
+            <span style="display: inline-flex; align-items: center; gap: 4px; font-weight: bold; font-size: 9px; white-space: nowrap; margin-left: 12px;">
+              Fee Tracker System
+            </span>
           </div>
         </body>
       </html>
@@ -1555,7 +1754,7 @@ export const ReportPanel: React.FC = React.memo(() => {
         const isHoliday = holidays.includes(dayStr);
         const isAbsent = pRecord?.isAbsent || false;
         const isVerified = pRecord?.verified || false;
-        const isTermPayer = student.paymentType === 'Term';
+        const isTermPayerStudent = isTermPayer(student);
         const isPresentZeroPay = pRecord && pRecord.amount === 0 && !pRecord.isAbsent;
 
         let attendanceStatus = 'Present';
@@ -1579,7 +1778,7 @@ export const ReportPanel: React.FC = React.memo(() => {
           paymentStatus = 'Paid';
           amountGhc = pRecord.amount;
           collectedBy = pRecord.collectedBy;
-        } else if (isTermPayer) {
+        } else if (isTermPayerStudent) {
           attendanceStatus = 'Present';
           paymentStatus = 'Paid (Term Scheme)';
           collectedBy = 'System';
@@ -1674,15 +1873,15 @@ export const ReportPanel: React.FC = React.memo(() => {
       const unpaidCount = unpaidDays.length;
 
       // Fees calculations
-      const isTermPayer = student.paymentType === 'Term';
-      const termFeeAmount = student.termFee || 350;
+      const isTermPayerStudent = isTermPayer(student);
+      const termFeeAmount = student.termFee || getStudentBaselineTermFee(student.class, systemSettings);
       const legacyDebt = student.legacyDebt || 0;
 
       let totalCharged = 0;
       let totalPaid = 0;
       let totalDue = 0;
 
-      if (isTermPayer) {
+      if (isTermPayerStudent) {
         totalCharged = termFeeAmount + legacyDebt;
         totalPaid = studentPayments.filter(p => !p.isAbsent).reduce((sum, p) => sum + p.amount, 0);
         totalDue = Math.max(0, totalCharged - totalPaid);
@@ -1860,6 +2059,26 @@ export const ReportPanel: React.FC = React.memo(() => {
         </div>
 
         <div className="flex flex-wrap gap-2 w-full sm:w-auto">
+          {/* ⚡ Quick Daily Export (CSV) - 1-Click today's snapshot */}
+          <button
+            onClick={() => handleQuickDailyCSVExport(currentDate)}
+            className="flex-1 sm:flex-initial text-[10px] font-black bg-amber-400 hover:bg-amber-300 text-black py-3.5 px-4 transition-all border-2 border-amber-400 uppercase tracking-widest cursor-pointer flex items-center justify-center gap-1.5 shadow-sm"
+            title="1-Click immediate CSV export of all transactions for the current school day (simplified auditor snapshot)"
+            id="btn-quick-daily-csv"
+          >
+            <Zap size={14} className="fill-black" /> Quick Daily Export (CSV)
+          </button>
+
+          {/* 📄 Quick Daily Export (PDF) - 1-Click today's PDF & print view */}
+          <button
+            onClick={() => handleQuickDailyPDFExport(currentDate)}
+            className="flex-1 sm:flex-initial text-[10px] font-black bg-neutral-950 hover:bg-neutral-850 hover:text-white text-amber-400 py-3.5 px-4 transition-all border-2 border-neutral-800 hover:border-amber-400 uppercase tracking-widest cursor-pointer flex items-center justify-center gap-1.5"
+            title="1-Click printable daily transactions audit PDF & management dispatch summary"
+            id="btn-quick-daily-pdf"
+          >
+            <FileText size={14} className="text-amber-400" /> Quick Daily Export (PDF)
+          </button>
+
           {/* Email Summary Slider Trigger */}
           <button
             onClick={() => {
@@ -1905,6 +2124,18 @@ export const ReportPanel: React.FC = React.memo(() => {
             id="btn-printable-term-reports"
           >
             <Printer size={14} className="text-emerald-400" /> Print Term Reports (PDF)
+          </button>
+
+          {/* Pre-School Canteen Booklet Button */}
+          <button
+            onClick={() => {
+              setShowCanteenBookletModal(true);
+            }}
+            className="flex-1 sm:flex-initial text-[10px] font-black bg-neutral-950 hover:bg-neutral-850 hover:text-white text-amber-400 py-3.5 px-4 transition-all border-2 border-neutral-800 hover:border-amber-400 uppercase tracking-widest cursor-pointer flex items-center justify-center gap-1.5"
+            title="Generate printable hardcopy daily feeding register booklets for Pre-school classes (Nursery, KG1, KG2)"
+            id="btn-canteen-feeding-booklet"
+          >
+            <Utensils size={14} className="text-amber-400" /> Canteen Feeding Booklet (PDF)
           </button>
 
           {/* Download CSV audit core */}
@@ -2136,6 +2367,20 @@ export const ReportPanel: React.FC = React.memo(() => {
                           const isSelectedDate = dateFilter === dStr;
 
                           if (!isSchoolDay) {
+                            const holInfo = isHolidayOrVacationDate(dStr, terms, activeTerm);
+                            if (holInfo.isHoliday) {
+                              slots.push(
+                                <div
+                                  key={`day-${d}`}
+                                  className="aspect-square bg-amber-950/20 border border-amber-500/30 flex flex-col items-center justify-center font-mono text-[10px] select-none text-amber-400 font-bold"
+                                  title={`${dStr}: ${holInfo.label || 'Vacation Break / Holiday'} (Exempt - GHC 0.00 Due)`}
+                                >
+                                  {d}
+                                  <span className="text-[7px] text-amber-500/80 font-black">VAC</span>
+                                </div>
+                              );
+                              continue;
+                            }
                             // Non-school day (weekend / off-term)
                             slots.push(
                               <div
@@ -2415,18 +2660,6 @@ export const ReportPanel: React.FC = React.memo(() => {
         <div className="flex bg-neutral-950 p-1 border border-neutral-850 gap-1 w-full md:w-auto">
           <button
             type="button"
-            onClick={() => setAuditViewMode('daily')}
-            className={`flex-1 md:flex-initial px-4 py-2 text-[10px] uppercase font-mono font-black tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-              auditViewMode === 'daily'
-                ? 'bg-amber-400 text-black'
-                : 'text-neutral-400 hover:text-white'
-            }`}
-          >
-            <Calendar size={12} />
-            Daily Log View
-          </button>
-          <button
-            type="button"
             onClick={() => setAuditViewMode('monthly')}
             className={`flex-1 md:flex-initial px-4 py-2 text-[10px] uppercase font-mono font-black tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
               auditViewMode === 'monthly'
@@ -2488,92 +2721,7 @@ export const ReportPanel: React.FC = React.memo(() => {
         </div>
       </div>
 
-      {auditViewMode === 'daily' ? (
-        /* Main Ledger Listing Sheet */
-        <div className="bg-neutral-900 border-4 border-neutral-800 overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="bg-neutral-950 border-b-2 border-neutral-800 text-[10px] font-black text-neutral-400 uppercase tracking-widest font-mono">
-                  <th className="p-4 cursor-pointer select-none" onClick={() => handleSort('date')}>
-                    <div className="flex items-center gap-1.5 py-1">Date Check <ArrowUpDown size={12} /></div>
-                  </th>
-                  <th className="p-4 cursor-pointer select-none" onClick={() => handleSort('studentName')}>
-                    <div className="flex items-center gap-1.5 py-1">Student Name <ArrowUpDown size={12} /></div>
-                  </th>
-                  <th className="p-4 cursor-pointer select-none font-mono" onClick={() => handleSort('class')}>
-                    <div className="flex items-center gap-1.5 py-1">Class <ArrowUpDown size={12} /></div>
-                  </th>
-                  <th className="p-4 font-mono uppercase tracking-widest">Group</th>
-                  <th className="p-4 text-right uppercase tracking-widest">Fee (GHC)</th>
-                  <th className="p-4 uppercase tracking-widest">Staff Gate</th>
-                  <th className="p-4 text-center uppercase tracking-widest">Security Check</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-neutral-850 font-sans text-neutral-300">
-                {filteredPayments.length === 0 ? (
-                  <tr>
-                    <td colSpan={7} className="text-center py-12 text-neutral-500 font-black uppercase tracking-widest text-xs">
-                      No payment ledger found. Change filter queries to load records.
-                    </td>
-                  </tr>
-                ) : (
-                  displayedDailyPayments.map((p) => (
-                    <tr key={p.id} className="hover:bg-neutral-950/20">
-                      <td className="p-4 font-mono text-neutral-450">{p.date}</td>
-                      <td className="p-4 font-black text-white uppercase text-xs tracking-wide">
-                        <div>{p.studentName}</div>
-                        {p.notes && (
-                          <div className="mt-1 text-[10px] font-mono text-neutral-400 font-bold normal-case flex flex-wrap items-center gap-1.5 leading-snug">
-                            {p.notes.toLowerCase().includes('settled debt') || p.notes.toLowerCase().includes('arrears') ? (
-                              <span className="px-1.5 py-0.5 rounded-xs uppercase text-[8px] font-black bg-red-950/80 text-rose-400 border border-red-900/60 tracking-wider inline-block">
-                                DEBT CLEARANCE
-                              </span>
-                            ) : p.notes.toLowerCase().includes('prepaid') || p.notes.toLowerCase().includes('covered') || p.notes.toLowerCase().includes('advance') ? (
-                              <span className="px-1.5 py-0.5 rounded-xs uppercase text-[8px] font-black bg-sky-955 text-sky-400 border border-sky-900 tracking-wider inline-block">
-                                ADVANCE PREPAID
-                              </span>
-                            ) : null}
-                            <span className="text-neutral-450 uppercase">{p.notes}</span>
-                          </div>
-                        )}
-                      </td>
-                      <td className="p-4 font-mono font-black text-amber-400 text-sm">{p.class}</td>
-                      <td className="p-4 text-neutral-400 text-[11px] font-black uppercase tracking-wider">{p.category}</td>
-                      <td className="p-4 text-right font-black font-mono text-white">GHC {p.amount.toFixed(2)}</td>
-                      <td className="p-4 text-neutral-300 font-bold uppercase text-[11px] truncate max-w-[120px]">{p.collectedBy}</td>
-                      <td className="p-4 text-center">
-                        {p.verified ? (
-                          <span className="inline-flex items-center gap-1 px-3 py-1 bg-neutral-950 text-emerald-400 border border-neutral-850 font-black text-[10px] uppercase tracking-widest">
-                            Approved
-                          </span>
-                        ) : (
-                          <button
-                            onClick={() => verifyPayment(p.id)}
-                            className="px-3 py-1 text-[9px] font-black bg-white hover:bg-amber-400 text-black uppercase tracking-widest transition-colors cursor-pointer"
-                          >
-                            Approve Check
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-          {filteredPayments.length > visibleDailyCount && (
-            <div className="p-4 bg-neutral-950 border-t border-neutral-800 text-center font-mono">
-              <button
-                onClick={() => setVisibleDailyCount(prev => prev + 100)}
-                className="px-4 py-2 text-[10px] font-black bg-neutral-900 hover:bg-neutral-850 text-amber-400 border border-neutral-800 hover:border-amber-400 uppercase tracking-widest cursor-pointer transition-colors"
-              >
-                Show More Records ({filteredPayments.length - visibleDailyCount} remaining)
-              </button>
-            </div>
-          )}
-        </div>
-      ) : auditViewMode === 'monthly' ? (
+      {auditViewMode === 'monthly' ? (
         /* Monthly Aggregated MTD Audit View */
         <div className="bg-neutral-900 border-4 border-neutral-800 p-6 space-y-6">
           {/* Month selector and main numbers overview */}
@@ -3947,8 +4095,8 @@ B7 to B9: GHC [SUM]`}
                       return !paymentsIndexed.byStudentIdAndDate.has(`${sProfile.id}_${dStr}`);
                     });
                     unpaidDaysCount = unpaidDays.length;
-                    if (sProfile.paymentType === 'Term') {
-                      const tFee = sProfile.termFee || 350;
+                    if (isTermPayer(sProfile)) {
+                      const tFee = sProfile.termFee || getStudentBaselineTermFee(sProfile.class, systemSettings);
                       const legacyD = sProfile.legacyDebt || 0;
                       const totalPaidAllTime = allStudentPayments
                         .filter(p => !p.isAbsent)
@@ -3977,7 +4125,7 @@ B7 to B9: GHC [SUM]`}
                       const isHoliday = holidays.includes(dayStr);
                       const isAbsent = pRecord?.isAbsent || false;
                       const isVerified = pRecord?.verified || false;
-                      const isTermPayer = sProfile.paymentType === 'Term';
+                      const isTermPayerStudent = isTermPayer(sProfile);
 
                       let statusLabel = 'Unpaid Arrears';
                       let feeLabel = 'GHC 5.00';
@@ -3997,7 +4145,7 @@ B7 to B9: GHC [SUM]`}
                         feeLabel = `GHC ${pRecord.amount.toFixed(2)}`;
                         paymentRef = pRecord.id.substring(0, 8).toUpperCase();
                         collector = pRecord.collectedBy;
-                      } else if (isTermPayer) {
+                      } else if (isTermPayerStudent) {
                         statusLabel = 'Present (Term Paid)';
                         feeLabel = 'Covered (Term)';
                         paymentRef = 'TERM-SCHEME';
@@ -6258,6 +6406,476 @@ B7 to B9: GHC [SUM]`}
           </div>
         </div>
       )}
+      {/* Pre-School Canteen Feeding Booklet Modal */}
+      {/* Quick Daily Transactions Audit & PDF/CSV Export Modal */}
+      {showQuickDailyModal && (
+        <div className="fixed inset-0 z-[9990] bg-black/90 flex flex-col backdrop-blur-sm overflow-hidden animate-fade-in font-sans">
+          {/* Modal Navigation & Action Header */}
+          <div className="bg-neutral-950 border-b-4 border-neutral-800 p-4 sm:px-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shrink-0 font-mono">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-amber-400 text-black font-black">
+                <Zap size={20} className="fill-black" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-base font-black text-white uppercase tracking-tight">Quick Daily Audit Snapshot (CSV & PDF)</h3>
+                  <span className="text-[10px] bg-amber-400/20 text-amber-400 font-bold px-2 py-0.5 border border-amber-400/40">
+                    {quickDailyDate}
+                  </span>
+                </div>
+                <p className="text-xs text-neutral-450 font-sans mt-0.5">
+                  1-Click auditor downloads, PDF print snapshots, and instant management dispatch for single-day fee collections.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+              {/* ⚡ Download CSV Button */}
+              <button
+                type="button"
+                onClick={() => handleQuickDailyCSVExport(quickDailyDate)}
+                className="flex-1 sm:flex-initial text-xs font-black bg-amber-400 hover:bg-amber-300 text-black px-4 py-2.5 uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md font-mono"
+                title="Download full CSV of all transactions on this date for Excel or audit tools"
+                id="btn-modal-quick-daily-csv"
+              >
+                <Download size={15} className="stroke-[2.5]" /> Download Daily CSV
+              </button>
+
+              {/* 🖨️ Print / PDF Button */}
+              <button
+                type="button"
+                onClick={handlePrintDailyDocument}
+                className="flex-1 sm:flex-initial text-xs font-black bg-white hover:bg-neutral-200 text-black px-4 py-2.5 uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md font-mono"
+                title="Print or Save as PDF using system printer dialogue"
+                id="btn-modal-quick-daily-print"
+              >
+                <Printer size={15} /> Print / Save PDF
+              </button>
+
+              {/* 📲 WhatsApp / Clipboard Share */}
+              <button
+                type="button"
+                onClick={handleShareDailySummary}
+                className="flex-1 sm:flex-initial text-xs font-black bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2.5 uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all cursor-pointer font-mono"
+                title="Copy daily executive financial brief & open WhatsApp to share with management"
+                id="btn-modal-quick-daily-share"
+              >
+                <Share2 size={15} /> Share Brief
+              </button>
+
+              {/* Close Button */}
+              <button
+                type="button"
+                onClick={() => setShowQuickDailyModal(false)}
+                className="text-xs font-black bg-neutral-900 hover:bg-neutral-800 text-neutral-400 hover:text-white p-2.5 transition-all border border-neutral-750 cursor-pointer"
+                title="Close Daily Snapshot"
+              >
+                <X size={18} />
+              </button>
+            </div>
+          </div>
+
+          {/* Modal Body: Sidebar Controls + A4 Document Sheet */}
+          <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
+            {/* Left Sidebar: Controls & Live Daily KPIs */}
+            <div className="w-full md:w-80 lg:w-96 bg-neutral-900 border-r-4 border-neutral-800 p-5 overflow-y-auto shrink-0 space-y-6 font-mono text-xs">
+              {/* Target Date Picker */}
+              <div className="space-y-2 bg-neutral-950 p-4 border-2 border-neutral-800">
+                <label className="block text-[10px] font-black uppercase text-amber-400 tracking-wider">
+                  Audit Snapshot Date
+                </label>
+                <input
+                  type="date"
+                  value={quickDailyDate}
+                  onChange={(e) => setQuickDailyDate(e.target.value)}
+                  className="w-full bg-neutral-900 border-2 border-neutral-750 text-white font-mono px-3 py-2 text-sm focus:border-amber-400 focus:outline-none"
+                />
+                <div className="flex gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setQuickDailyDate(currentDate)}
+                    className="flex-1 py-1 text-[9px] font-black uppercase bg-neutral-850 hover:bg-neutral-750 text-neutral-300 border border-neutral-700 transition-all cursor-pointer"
+                  >
+                    Current Day ({currentDate})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const d = new Date();
+                      d.setDate(d.getDate() - 1);
+                      setQuickDailyDate(d.toISOString().slice(0, 10));
+                    }}
+                    className="flex-1 py-1 text-[9px] font-black uppercase bg-neutral-850 hover:bg-neutral-750 text-neutral-300 border border-neutral-700 transition-all cursor-pointer"
+                  >
+                    Yesterday
+                  </button>
+                </div>
+              </div>
+
+              {/* Filter Options */}
+              <div className="space-y-4 bg-neutral-950 p-4 border-2 border-neutral-800">
+                <span className="block text-[10px] font-black uppercase text-neutral-400 tracking-wider">
+                  Auditor Display Filters
+                </span>
+
+                {/* Class Filter */}
+                <div className="space-y-1">
+                  <label className="text-[9px] uppercase text-neutral-500 font-bold">Class Grade</label>
+                  <select
+                    value={quickDailyClassFilter}
+                    onChange={(e) => setQuickDailyClassFilter(e.target.value)}
+                    className="w-full bg-neutral-900 border border-neutral-750 text-white font-mono px-2 py-1.5 text-xs focus:border-amber-400 focus:outline-none"
+                  >
+                    <option value="ALL">All Classes (Whole School)</option>
+                    {ALL_CLASSES.map(cls => (
+                      <option key={cls} value={cls}>{cls}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Verification Status */}
+                <div className="space-y-1">
+                  <label className="text-[9px] uppercase text-neutral-500 font-bold">Audit Status</label>
+                  <select
+                    value={quickDailyStatusFilter}
+                    onChange={(e) => setQuickDailyStatusFilter(e.target.value as any)}
+                    className="w-full bg-neutral-900 border border-neutral-750 text-white font-mono px-2 py-1.5 text-xs focus:border-amber-400 focus:outline-none"
+                  >
+                    <option value="ALL">All Transactions (Verified + Pending)</option>
+                    <option value="VERIFIED">Verified Receipts Only</option>
+                    <option value="PENDING">Pending Audit Verification Only</option>
+                  </select>
+                </div>
+
+                {/* Authorized Signatory */}
+                <div className="space-y-1">
+                  <label className="text-[9px] uppercase text-neutral-500 font-bold">Authorized Signatory</label>
+                  <input
+                    type="text"
+                    value={quickDailySignatory}
+                    onChange={(e) => setQuickDailySignatory(e.target.value)}
+                    placeholder="Headmaster / Bursar Name"
+                    className="w-full bg-neutral-900 border border-neutral-750 text-white font-sans px-2.5 py-1.5 text-xs focus:border-amber-400 focus:outline-none"
+                  />
+                </div>
+
+                {/* Official Memo */}
+                <div className="space-y-1">
+                  <label className="text-[9px] uppercase text-neutral-500 font-bold">Auditor Directive Memo</label>
+                  <textarea
+                    rows={2}
+                    value={quickDailyMemo}
+                    onChange={(e) => setQuickDailyMemo(e.target.value)}
+                    className="w-full bg-neutral-900 border border-neutral-750 text-white font-sans px-2.5 py-1.5 text-xs focus:border-amber-400 focus:outline-none resize-none"
+                  />
+                </div>
+              </div>
+
+              {/* Financial Snapshot Summary KPI Block */}
+              <div className="bg-neutral-950 p-4 border-2 border-neutral-800 space-y-3 font-mono">
+                <span className="block text-[10px] font-black uppercase text-amber-400 tracking-wider">
+                  Daily Reconciled Financials
+                </span>
+                
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="bg-neutral-900 p-2.5 border border-neutral-800">
+                    <span className="text-[8px] text-neutral-400 uppercase block font-bold">Total Inflow</span>
+                    <span className="text-sm font-black text-amber-400 font-mono">GHC {quickDailyTotals.grossAmount.toFixed(2)}</span>
+                  </div>
+                  <div className="bg-neutral-900 p-2.5 border border-neutral-800">
+                    <span className="text-[8px] text-neutral-400 uppercase block font-bold">Total Receipts</span>
+                    <span className="text-sm font-black text-white font-mono">{quickDailyTotals.totalCount}</span>
+                  </div>
+                  <div className="bg-neutral-900 p-2.5 border border-neutral-800">
+                    <span className="text-[8px] text-emerald-400 uppercase block font-bold">Verified</span>
+                    <span className="text-xs font-black text-emerald-400 font-mono">GHC {quickDailyTotals.verifiedAmount.toFixed(2)}</span>
+                    <span className="text-[8px] text-neutral-500 block">({quickDailyTotals.verifiedCount} receipts)</span>
+                  </div>
+                  <div className="bg-neutral-900 p-2.5 border border-neutral-800">
+                    <span className="text-[8px] text-amber-400 uppercase block font-bold">Pending Reconcile</span>
+                    <span className="text-xs font-black text-amber-300 font-mono">GHC {quickDailyTotals.pendingAmount.toFixed(2)}</span>
+                    <span className="text-[8px] text-neutral-500 block">({quickDailyTotals.pendingCount} receipts)</span>
+                  </div>
+                </div>
+
+                {quickDailyTotals.cashiers.length > 0 && (
+                  <div className="pt-2 border-t border-neutral-850">
+                    <span className="text-[8.5px] uppercase text-neutral-500 font-bold block mb-1">Cashiers on Duty:</span>
+                    <div className="flex flex-wrap gap-1">
+                      {quickDailyTotals.cashiers.map(c => (
+                        <span key={c} className="text-[9px] bg-neutral-850 text-neutral-300 px-1.5 py-0.5 border border-neutral-750">
+                          {c}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Class Collections Distribution */}
+              {quickDailyTotals.classBreakdown.length > 0 && (
+                <div className="bg-neutral-950 p-4 border-2 border-neutral-800 space-y-2">
+                  <span className="block text-[10px] font-black uppercase text-neutral-400 tracking-wider">
+                    Class Collections Summary
+                  </span>
+                  <div className="space-y-1 max-h-48 overflow-y-auto text-[10px]">
+                    {quickDailyTotals.classBreakdown.map(c => (
+                      <div key={c.className} className="flex justify-between items-center py-1 border-b border-neutral-850">
+                        <span className="font-bold text-neutral-300">{c.className} ({c.count} txns)</span>
+                        <span className="font-mono font-black text-amber-400">GHC {c.total.toFixed(2)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Right Side: A4 Printable Document View */}
+            <div className="flex-1 bg-neutral-800/80 p-4 sm:p-8 overflow-y-auto flex justify-center">
+              <div
+                id="print-quick-daily-area"
+                className="w-full max-w-[210mm] bg-white text-black p-8 sm:p-12 shadow-2xl border border-neutral-300 font-sans min-h-[297mm] flex flex-col justify-between"
+              >
+                <div className="space-y-6">
+                  {/* Institutional Header */}
+                  <div className="flex items-start justify-between border-b-2 border-neutral-900 pb-5">
+                    <div className="flex items-center gap-4">
+                      <div className="w-14 h-14 shrink-0">
+                        <SchoolLogo className="w-full h-full object-contain" />
+                      </div>
+                      <div>
+                        <h1 className="text-xl font-black uppercase tracking-tight text-black font-sans leading-none">
+                          SAAKO HOLY CHILD ACADEMY
+                        </h1>
+                        <p className="text-[9px] font-bold text-neutral-600 uppercase tracking-widest mt-1">
+                          Holiness is our Key • GES Reg. No. G/GAR/AN/12/342
+                        </p>
+                        <p className="text-[8px] text-neutral-500 font-mono mt-0.5">
+                          P. O. Box LS 15, Sawla, Savannah Region • Tel: +233 54 502 9200 / +233 50 727 4133
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="text-right font-mono">
+                      <span className="inline-block bg-black text-white text-[9px] font-black uppercase px-2.5 py-1 tracking-wider">
+                        OFFICIAL DAILY AUDIT
+                      </span>
+                      <p className="text-[9px] text-neutral-600 mt-1 font-bold">
+                        DATE: <span className="text-black font-black">{quickDailyDate}</span>
+                      </p>
+                      <p className="text-[7.5px] text-neutral-500">
+                        REF: SHC-DAY-{quickDailyDate.replace(/-/g, '')}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Document Title Banner */}
+                  <div className="bg-neutral-100 border border-neutral-300 p-3.5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                    <div>
+                      <h2 className="text-xs font-black uppercase tracking-wider text-black font-mono">
+                        DAILY TRANSACTIONS AUDIT & CASHIER RECONCILIATION STATEMENT
+                      </h2>
+                      <p className="text-[8.5px] text-neutral-600 font-sans mt-0.5">
+                        Itemized financial transcript of daily fee collections, verified cashier receipts, and audit trail.
+                      </p>
+                    </div>
+                    <span className="text-[8px] font-mono font-black bg-neutral-900 text-white px-2 py-0.5 shrink-0 uppercase">
+                      STATUS: AUDITED TRANSCRIPT
+                    </span>
+                  </div>
+
+                  {/* Executive KPI Summary Grid */}
+                  <div className="grid grid-cols-4 gap-2 text-center font-mono">
+                    <div className="bg-neutral-50 border border-neutral-300 p-2.5">
+                      <span className="text-[7.5px] text-neutral-500 uppercase font-bold block">Total Collections</span>
+                      <span className="text-sm font-black text-black">GHC {quickDailyTotals.grossAmount.toFixed(2)}</span>
+                    </div>
+                    <div className="bg-neutral-50 border border-neutral-300 p-2.5">
+                      <span className="text-[7.5px] text-neutral-500 uppercase font-bold block">Verified Inflow</span>
+                      <span className="text-sm font-black text-emerald-700">GHC {quickDailyTotals.verifiedAmount.toFixed(2)}</span>
+                    </div>
+                    <div className="bg-neutral-50 border border-neutral-300 p-2.5">
+                      <span className="text-[7.5px] text-neutral-500 uppercase font-bold block">Pending Audit</span>
+                      <span className="text-sm font-black text-amber-700">GHC {quickDailyTotals.pendingAmount.toFixed(2)}</span>
+                    </div>
+                    <div className="bg-neutral-50 border border-neutral-300 p-2.5">
+                      <span className="text-[7.5px] text-neutral-500 uppercase font-bold block">Total Entries</span>
+                      <span className="text-sm font-black text-black">{quickDailyTotals.totalCount} Receipts</span>
+                    </div>
+                  </div>
+
+                  {/* Class Deposit Summary Row (if multiple classes) */}
+                  {quickDailyTotals.classBreakdown.length > 0 && (
+                    <div className="border border-neutral-300 p-2.5 bg-neutral-50/50">
+                      <span className="text-[8px] font-black uppercase tracking-wider text-neutral-700 block mb-1.5 font-mono">
+                        Class Collections Summary Breakdown:
+                      </span>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[8px] font-mono">
+                        {quickDailyTotals.classBreakdown.map(c => (
+                          <div key={c.className} className="bg-white p-1.5 border border-neutral-200 flex justify-between items-center">
+                            <span className="font-bold">{c.className}:</span>
+                            <span className="font-black text-black">GHC {c.total.toFixed(2)} ({c.count})</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Itemized Transactions Table */}
+                  <div className="space-y-1">
+                    <span className="text-[8.5px] font-black uppercase tracking-wider text-black font-mono block">
+                      Itemized Transactions Ledger ({quickDailyTransactions.length} records)
+                    </span>
+                    <table className="w-full text-left text-[8px] border-collapse border border-neutral-300">
+                      <thead>
+                        <tr className="bg-neutral-900 text-white font-mono text-[7.5px] uppercase">
+                          <th className="p-1.5 border border-neutral-800 text-center w-8">No.</th>
+                          <th className="p-1.5 border border-neutral-800 w-16">Receipt ID</th>
+                          <th className="p-1.5 border border-neutral-800">Pupil Full Name</th>
+                          <th className="p-1.5 border border-neutral-800 w-12">Class</th>
+                          <th className="p-1.5 border border-neutral-800 text-right w-16">Amount (GHC)</th>
+                          <th className="p-1.5 border border-neutral-800 w-18">Cashier</th>
+                          <th className="p-1.5 border border-neutral-800 text-center w-16">Status</th>
+                          <th className="p-1.5 border border-neutral-800">Notes / Purpose</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-neutral-200">
+                        {quickDailyTransactions.length === 0 ? (
+                          <tr>
+                            <td colSpan={8} className="p-6 text-center text-neutral-400 font-mono italic text-[9px]">
+                              No transactions recorded for the selected audit parameters on {quickDailyDate}.
+                            </td>
+                          </tr>
+                        ) : (
+                          quickDailyTransactions.map((p, idx) => (
+                            <tr key={p.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-neutral-50'}>
+                              <td className="p-1.5 border border-neutral-200 text-center font-mono font-bold text-neutral-500">
+                                {idx + 1}
+                              </td>
+                              <td className="p-1.5 border border-neutral-200 font-mono font-bold text-neutral-800">
+                                {p.id.substring(0, 8)}
+                              </td>
+                              <td className="p-1.5 border border-neutral-200 font-bold uppercase text-black">
+                                {p.studentName}
+                              </td>
+                              <td className="p-1.5 border border-neutral-200 font-mono text-neutral-700">
+                                {p.class}
+                              </td>
+                              <td className="p-1.5 border border-neutral-200 font-mono font-black text-right text-black">
+                                {p.amount.toFixed(2)}
+                              </td>
+                              <td className="p-1.5 border border-neutral-200 font-mono text-neutral-600">
+                                {p.collectedBy || 'Staff'}
+                              </td>
+                              <td className="p-1.5 border border-neutral-200 text-center font-mono">
+                                <span className={`inline-block px-1 py-0.2 text-[7px] font-black uppercase ${
+                                  p.verified 
+                                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' 
+                                    : 'bg-amber-100 text-amber-800 border border-amber-300'
+                                }`}>
+                                  {p.verified ? 'VERIFIED' : 'PENDING'}
+                                </span>
+                              </td>
+                              <td className="p-1.5 border border-neutral-200 text-neutral-600 italic">
+                                {p.notes || 'Daily Schooling Fee'}
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                      <tfoot>
+                        <tr className="bg-neutral-100 font-mono font-black text-[8px] border-t-2 border-neutral-900">
+                          <td colSpan={4} className="p-2 border border-neutral-300 text-right uppercase">
+                            TOTAL AUDITED REVENUE ({quickDailyTransactions.length} entries):
+                          </td>
+                          <td className="p-2 border border-neutral-300 text-right text-black text-[9px]">
+                            GHC {quickDailyTotals.grossAmount.toFixed(2)}
+                          </td>
+                          <td colSpan={3} className="p-2 border border-neutral-300 text-neutral-600 text-[7.5px]">
+                            Verified: GHC {quickDailyTotals.verifiedAmount.toFixed(2)} | Pending: GHC {quickDailyTotals.pendingAmount.toFixed(2)}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+
+                  {/* Auditor Directive Memo */}
+                  {quickDailyMemo && (
+                    <div className="bg-neutral-50 border border-neutral-300 p-2.5 font-sans">
+                      <span className="text-[7.5px] font-black uppercase tracking-wider text-neutral-500 font-mono block">
+                        ADMINISTRATIVE MEMORANDUM & DIRECTIVE:
+                      </span>
+                      <p className="text-[8.5px] text-neutral-700 mt-0.5 italic">
+                        "{quickDailyMemo}"
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Official Quad Signature Block */}
+                <div className="mt-8 pt-4 border-t-2 border-neutral-900 space-y-4 print-avoid-break">
+                  <div className="grid grid-cols-3 gap-6 text-[8px]">
+                    {/* Prepared by */}
+                    <div className="space-y-3">
+                      <span className="text-neutral-500 font-bold uppercase text-[7px] block font-mono">
+                        1. PREPARED BY (CASHIER / DESK):
+                      </span>
+                      <div className="h-6 border-b border-neutral-400 w-32"></div>
+                      <div>
+                        <span className="text-black font-extrabold uppercase block font-sans">
+                          {quickDailyTotals.cashiers.length > 0 ? quickDailyTotals.cashiers[0] : 'Accounting Officer'}
+                        </span>
+                        <span className="text-neutral-500 block text-[7.5px] font-sans">Revenue Officer</span>
+                      </div>
+                    </div>
+
+                    {/* Audited by */}
+                    <div className="space-y-3">
+                      <span className="text-neutral-500 font-bold uppercase text-[7px] block font-mono">
+                        2. VERIFIED & AUDITED BY:
+                      </span>
+                      <div className="h-6 border-b border-neutral-400 w-32"></div>
+                      <div>
+                        <span className="text-black font-extrabold uppercase block font-sans">Internal Auditor</span>
+                        <span className="text-neutral-500 block text-[7.5px] font-sans">Bursary & Accounts Desk</span>
+                      </div>
+                    </div>
+
+                    {/* Approved by */}
+                    <div className="space-y-3 text-right">
+                      <span className="text-neutral-500 font-bold uppercase text-[7px] block font-mono">
+                        3. APPROVED BY (HEADMASTER):
+                      </span>
+                      <div className="h-6 border-b border-neutral-400 w-32 ml-auto"></div>
+                      <div>
+                        <span className="text-black font-extrabold uppercase block font-sans">
+                          {quickDailySignatory}
+                        </span>
+                        <span className="text-neutral-500 block text-[7.5px] font-sans">Headmaster & Administration</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Running Document Footer */}
+                  <div className="flex justify-between items-center text-[7px] font-mono text-neutral-400 pt-2 border-t border-neutral-200">
+                    <span>GEN: {new Date().toLocaleString()} • SAAKO HOLY CHILD ACADEMY</span>
+                    <span>CONFIDENTIAL AUDIT TRANSCRIPT • SAAKO EDUCATION CLOUD</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pre-School Canteen Feeding Booklet Modal */}
+      <CanteenBookletModal
+        isOpen={showCanteenBookletModal}
+        onClose={() => setShowCanteenBookletModal(false)}
+        students={students}
+        activeTerm={activeTerm}
+      />
+
       {/* Toast Alert Header */}
       {successMsg && (
         <div className="fixed bottom-4 right-4 z-[9999] bg-amber-400 text-black border-4 border-neutral-800 p-4 text-xs font-black flex items-center justify-between shadow-[4px_4px_0px_0px_rgba(255,255,255,0.1)] font-mono uppercase tracking-widest animate-fade-in">

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
+import { isDateInTermGap } from '../utils/termUtils';
 import { Student, StudentClass, ALL_CLASSES } from '../types';
 import { VoiceSearchButton } from './VoiceSearchButton';
 import { 
@@ -38,6 +39,7 @@ export default function ExpressFeeModal({ isOpen, onClose }: ExpressFeeModalProp
     deletePayment, 
     bulkRecordPayments,
     recordPupilBulkDates,
+    terms,
     activeTerm,
     currentDate, 
     setCurrentDate,
@@ -107,7 +109,8 @@ export default function ExpressFeeModal({ isOpen, onClose }: ExpressFeeModalProp
       }
       rangeDays = generated;
     }
-    return rangeDays;
+    const publicHolidays = new Set(activeTerm?.publicHolidays || []);
+    return rangeDays.filter(d => !publicHolidays.has(d) && !isDateInTermGap(d, terms));
   };
 
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -159,7 +162,7 @@ export default function ExpressFeeModal({ isOpen, onClose }: ExpressFeeModalProp
   };
 
   // Calculate today's total collected fees
-  const todayPayments = payments.filter(p => p.date === currentDate && !p.isAbsent);
+  const todayPayments = payments.filter(p => p.date === currentDate && !p.isAbsent && p.verified !== false && p.amount > 0);
   const todayTotalCollected = todayPayments.reduce((acc, p) => acc + (p.amount || 0), 0);
 
   // Focus search input when modal opens or single tab is selected

@@ -4,8 +4,9 @@
  */
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { useApp, getSchoolWeekForDate, getDiscountedTermFee, getStudentBaselineTermFee } from '../context/AppContext';
+import { useApp, getSchoolWeekForDate, getDiscountedTermFee, getStudentBaselineTermFee, isTermPayer } from '../context/AppContext';
 import { Student, PaymentRecord, StudentClass } from '../types';
+import { formatPupilId } from '../utils/pupilIdUtils';
 import {
   ResponsiveContainer,
   AreaChart,
@@ -59,11 +60,15 @@ import {
   Coins,
   CalendarDays,
   ShieldAlert,
-  Award
+  Award,
+  RefreshCw,
+  CheckCircle,
+  Edit2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { VoiceSearchButton } from './VoiceSearchButton';
 import { SchoolLogo } from './SchoolLogo';
+import { EditStudentModal } from './EditStudentModal';
 
 export const TermPayersTab: React.FC = React.memo(() => {
   const { 
@@ -77,8 +82,13 @@ export const TermPayersTab: React.FC = React.memo(() => {
     activeTerm,
     sendautomatedWhatsApp,
     systemSettings,
-    users
+    users,
+    carryForwardTermBalances
   } = useApp();
+
+  const [showCarryForwardModal, setShowCarryForwardModal] = useState(false);
+  const [resetPaymentsOnCarryForward, setResetPaymentsOnCarryForward] = useState(true);
+  const [carryForwardSuccessResult, setCarryForwardSuccessResult] = useState<{ updatedStudentsCount: number; totalCarriedDebt: number; message: string } | null>(null);
 
   const baseTermFee = systemSettings?.baselineTermFee ?? 350;
   const currencySymbol = systemSettings?.currencyCode || 'GHC';
@@ -116,6 +126,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
 
   // Selected student for detail overlay/modal and quick collection
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
+  const [studentToEdit, setStudentToEdit] = useState<Student | null>(null);
 
   // Active sub-tab inside the selected student modal (Ledger vs Analytics vs History)
   const [drawerActiveTab, setDrawerActiveTab] = useState<'ledger' | 'analytics' | 'history'>('ledger');
@@ -137,7 +148,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
     if (selectedStudent) {
       setMomoPhone(selectedStudent.guardianPhone || '');
       // Calculate selected student finance info on selection
-      const studentPayments = payments.filter(p => p.studentId === selectedStudent.id && !p.isAbsent);
+      const studentPayments = payments.filter(p => p.studentId === selectedStudent.id && !p.isAbsent && p.verified !== false && p.amount > 0);
       const totalPaid = studentPayments.reduce((sum, p) => sum + p.amount, 0);
       const termFee = selectedStudent.termFee || baseTermFee;
       const legacyDebt = selectedStudent.legacyDebt || 0;
@@ -270,9 +281,9 @@ export const TermPayersTab: React.FC = React.memo(() => {
     balanceDue: number
   ) => {
     const txId = `SHC-TERM-${payment.date.replace(/-/g, '')}-${payment.id.substring(0, 8).toUpperCase()}`;
-    const rollRef = student.rollNumber || 'SHC-' + student.id.substring(0, 5).toUpperCase();
+    const rollRef = student.rollNumber || formatPupilId(student, systemSettings);
     const amountStr = `GHC ${payment.amount.toFixed(2)}`;
-    const termFee = student.termFee || 350;
+    const termFee = student.termFee || getStudentBaselineTermFee(student.class, systemSettings);
     const legacyDebt = student.legacyDebt || 0;
     const totalCommitment = termFee + legacyDebt;
     const auditor = payment.collectedBy || 'Certified Registrar';
@@ -655,7 +666,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
 
   // Active Term Payers list
   const activeTermPayers = useMemo(() => {
-    return students.filter(s => s.active !== false && s.paymentType === 'Term');
+    return students.filter(s => s.active !== false && isTermPayer(s));
   }, [students]);
 
   // Find all school days up to currentDate for active term
@@ -721,7 +732,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
       const legacyDebt = s.legacyDebt || 0;
       totalExpected += studentFee + legacyDebt;
 
-      const studentPayments = payments.filter(p => p.studentId === s.id && !p.isAbsent);
+      const studentPayments = payments.filter(p => p.studentId === s.id && !p.isAbsent && p.verified !== false && p.amount > 0);
       const studentTotalPaid = studentPayments.reduce((sum, p) => sum + p.amount, 0);
       totalPaid += studentTotalPaid;
 
@@ -752,7 +763,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
       const discountInfo = getDiscountedTermFee(s, payments, activeTerm, currentDate, systemSettings);
       const studentFee = discountInfo.termFee;
       const legacyDebt = s.legacyDebt || 0;
-      const studentPayments = payments.filter(p => p.studentId === s.id && !p.isAbsent);
+      const studentPayments = payments.filter(p => p.studentId === s.id && !p.isAbsent && p.verified !== false && p.amount > 0);
       const studentTotalPaid = studentPayments.reduce((sum, p) => sum + p.amount, 0);
       const balanceDue = Math.max(0, studentFee + legacyDebt - studentTotalPaid);
       return {
@@ -772,7 +783,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
       const discountInfo = getDiscountedTermFee(s, payments, activeTerm, currentDate, systemSettings);
       const studentFee = discountInfo.termFee;
       const legacyDebt = s.legacyDebt || 0;
-      const studentPayments = payments.filter(p => p.studentId === s.id && !p.isAbsent);
+      const studentPayments = payments.filter(p => p.studentId === s.id && !p.isAbsent && p.verified !== false && p.amount > 0);
       const studentTotalPaid = studentPayments.reduce((sum, p) => sum + p.amount, 0);
       const balanceDue = Math.max(0, studentFee + legacyDebt - studentTotalPaid);
       return {
@@ -808,7 +819,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
       
       const message = `*SAAKO HOLY CHILD ACADEMY*\n*FEES OUTSTANDING NOTICE*\n\n` +
         `*Beneficiary/Pupil:* ${s.name}\n` +
-        `*Roll ID:* ${s.rollNumber || 'SHC-' + s.id.substring(0, 5).toUpperCase()}\n` +
+        `*Roll ID:* ${s.rollNumber || formatPupilId(s, systemSettings)}\n` +
         `*Class:* ${s.class}\n\n` +
         `Dear Parent/Guardian,\n` +
         `We wish to remind you that your child has an outstanding Term fee balance of *GHC ${due.toFixed(2)}* (Total Term Fee: GHC ${fee.toFixed(2)}, Paid: GHC ${paid.toFixed(2)}).\n\n` +
@@ -861,7 +872,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
   const handleSendSingleReminder = async (student: Student) => {
     const studentFee = student.termFee || getStudentBaselineTermFee(student.class, systemSettings);
     const legacyDebt = student.legacyDebt || 0;
-    const studentPayments = payments.filter(p => p.studentId === student.id && !p.isAbsent);
+    const studentPayments = payments.filter(p => p.studentId === student.id && !p.isAbsent && p.verified !== false && p.amount > 0);
     const studentTotalPaid = studentPayments.reduce((sum, p) => sum + p.amount, 0);
     const balanceDue = Math.max(0, studentFee + legacyDebt - studentTotalPaid);
 
@@ -872,7 +883,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
 
     const message = `*SAAKO HOLY CHILD ACADEMY*\n*FEES OUTSTANDING NOTICE*\n\n` +
       `*Beneficiary/Pupil:* ${student.name}\n` +
-      `*Roll ID:* ${student.rollNumber || 'SHC-' + student.id.substring(0, 5).toUpperCase()}\n` +
+      `*Roll ID:* ${student.rollNumber || formatPupilId(student, systemSettings)}\n` +
       `*Class:* ${student.class}\n\n` +
       `Dear Parent/Guardian,\n` +
       `We wish to remind you that your child has an outstanding Term fee balance of *GHC ${balanceDue.toFixed(2)}* (Total Term Fee: GHC ${studentFee.toFixed(2)}, Legacy Debt: GHC ${legacyDebt.toFixed(2)}, Paid: GHC ${studentTotalPaid.toFixed(2)}).\n\n` +
@@ -966,7 +977,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
       const discountInfo = getDiscountedTermFee(s, payments, activeTerm, currentDate, systemSettings);
       const studentFee = discountInfo.termFee;
       const legacyDebt = s.legacyDebt || 0;
-      const studentPayments = payments.filter(p => p.studentId === s.id && !p.isAbsent);
+      const studentPayments = payments.filter(p => p.studentId === s.id && !p.isAbsent && p.verified !== false && p.amount > 0);
       const studentTotalPaid = studentPayments.reduce((sum, p) => sum + p.amount, 0);
       const isPaid = studentTotalPaid >= (studentFee + legacyDebt);
 
@@ -1012,7 +1023,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
     const studentFee = discountInfo.termFee;
     const legacyDebt = selectedStudent.legacyDebt || 0;
     const studentPayments = payments.filter(p => p.studentId === selectedStudent.id);
-    const paidPayments = studentPayments.filter(p => !p.isAbsent);
+    const paidPayments = studentPayments.filter(p => !p.isAbsent && p.verified !== false && p.amount > 0);
     const totalPaid = paidPayments.reduce((sum, p) => sum + p.amount, 0);
     const totalTarget = studentFee + legacyDebt;
     const balanceDue = Math.max(0, totalTarget - totalPaid);
@@ -1192,7 +1203,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
     const studentFee = discountInfo.termFee;
     const legacyDebt = historySelectedStudent.legacyDebt || 0;
     const studentPayments = payments.filter(p => p.studentId === historySelectedStudent.id);
-    const paidPayments = studentPayments.filter(p => !p.isAbsent);
+    const paidPayments = studentPayments.filter(p => !p.isAbsent && p.verified !== false && p.amount > 0);
     
     // Sort chronologically based on historySortOrder
     const sortedPayments = [...paidPayments].sort((a, b) => {
@@ -1231,7 +1242,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
     const studentFee = discountInfo.termFee;
     const legacyDebt = receiptStudent.legacyDebt || 0;
     const studentPayments = payments.filter(p => p.studentId === receiptStudent.id);
-    const paidPayments = studentPayments.filter(p => !p.isAbsent && p.verified);
+    const paidPayments = studentPayments.filter(p => !p.isAbsent && p.verified !== false && p.amount > 0);
     const totalPaid = paidPayments.reduce((sum, p) => sum + p.amount, 0);
     const totalTarget = studentFee + legacyDebt;
     const balanceDue = Math.max(0, totalTarget - totalPaid);
@@ -1280,6 +1291,16 @@ export const TermPayersTab: React.FC = React.memo(() => {
           >
             <FileText size={15} />
             <span>Export Debt Report</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowCarryForwardModal(true)}
+            className="bg-indigo-600 hover:bg-indigo-500 text-white font-mono font-black uppercase text-xs tracking-wider px-4 py-3 flex items-center justify-center gap-2 rounded-xs border-b-2 border-indigo-800 transition-all shadow-md cursor-pointer hover:-translate-y-0.5"
+            title="Automated Term Transition Carry-Forward: Convert unpaid term balances into Legacy Debt for the new term"
+          >
+            <RefreshCw size={15} />
+            <span>Term Carry-Forward</span>
           </button>
 
           <button
@@ -1561,7 +1582,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
                   const termFee = discountInfo.termFee;
                   const legacyDebt = student.legacyDebt || 0;
                   const totalExpected = termFee + legacyDebt;
-                  const studentPayments = payments.filter(p => p.studentId === student.id && !p.isAbsent);
+                  const studentPayments = payments.filter(p => p.studentId === student.id && !p.isAbsent && p.verified !== false && p.amount > 0);
                   const totalPaid = studentPayments.reduce((sum, p) => sum + p.amount, 0);
                   const balanceDue = Math.max(0, totalExpected - totalPaid);
                   const isSettled = totalPaid >= totalExpected;
@@ -1860,7 +1881,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
                 const isSelected = student.id === historySelectedStudentId;
                 const studentFee = student.termFee || getStudentBaselineTermFee(student.class, systemSettings);
                 const legacyDebt = student.legacyDebt || 0;
-                const studentPayments = payments.filter(p => p.studentId === student.id && !p.isAbsent);
+                const studentPayments = payments.filter(p => p.studentId === student.id && !p.isAbsent && p.verified !== false && p.amount > 0);
                 const totalPaid = studentPayments.reduce((sum, p) => sum + p.amount, 0);
                 const totalTarget = studentFee + legacyDebt;
                 const isSettle = totalPaid >= totalTarget;
@@ -1894,7 +1915,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
                           {student.name}
                         </h4>
                         <span className="text-[9px] text-neutral-500 font-mono font-bold block mt-0.5">
-                          {student.class} • {student.rollNumber || 'SHC-' + student.id.substring(0, 5).toUpperCase()}
+                          {student.class} • {student.rollNumber || formatPupilId(student, systemSettings)}
                         </span>
                       </div>
                     </div>
@@ -1938,7 +1959,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
                       {historySelectedStudent.name}
                     </h3>
                     <p className="text-[11px] text-amber-400 font-mono font-black mt-1.5 uppercase">
-                      ROLL ID: {historySelectedStudent.rollNumber || 'SHC-' + historySelectedStudent.id.substring(0, 5).toUpperCase()}
+                      ROLL ID: {historySelectedStudent.rollNumber || formatPupilId(historySelectedStudent, systemSettings)}
                     </p>
                     <p className="text-[10px] text-neutral-505 font-bold mt-1 uppercase font-sans">
                       Grade {historySelectedStudent.class} • {historySelectedStudent.category} Group • Guardian: {historySelectedStudent.guardianPhone || 'N/A'}
@@ -2170,7 +2191,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
             const termFee = student.termFee || getStudentBaselineTermFee(student.class, systemSettings);
             const legacyDebt = student.legacyDebt || 0;
             const totalExpected = termFee + legacyDebt;
-            const studentPayments = payments.filter(p => p.studentId === student.id && !p.isAbsent);
+            const studentPayments = payments.filter(p => p.studentId === student.id && !p.isAbsent && p.verified !== false && p.amount > 0);
             const totalPaid = studentPayments.reduce((sum, p) => sum + p.amount, 0);
             const balanceDue = Math.max(0, totalExpected - totalPaid);
             const percentPaid = Math.min(100, (totalPaid / totalExpected) * 100);
@@ -2235,6 +2256,15 @@ export const TermPayersTab: React.FC = React.memo(() => {
                 <div className="flex gap-2 pt-2 border-t border-neutral-850">
                   <button
                     type="button"
+                    onClick={() => setStudentToEdit(student)}
+                    className="bg-neutral-955 hover:bg-neutral-850 text-amber-400 border border-neutral-800 hover:border-amber-400 p-2.5 text-[10px] font-black font-mono uppercase tracking-wider transition-all cursor-pointer rounded-xs flex items-center justify-center gap-1"
+                    title="Edit pupil profile, gender, payment scheme, and fee details"
+                  >
+                    <Edit2 size={12} />
+                    <span>Edit</span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setSelectedStudent(student)}
                     className="flex-1 bg-neutral-955 hover:bg-neutral-850 text-white border border-neutral-800 hover:border-amber-400 py-2.5 text-[10px] font-black font-mono uppercase tracking-wider transition-all cursor-pointer rounded-xs flex items-center justify-center gap-1.5"
                     title="Open tuition payment modal logs and registration tools"
@@ -2252,7 +2282,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
                     title="Draft standard follow-up text alert to guardian"
                   >
                     <Calendar size={11} className="text-red-400" />
-                    <span>SMS Registry Warning</span>
+                    <span>SMS Warning</span>
                   </button>
                 </div>
               </div>
@@ -2623,31 +2653,66 @@ export const TermPayersTab: React.FC = React.memo(() => {
                         {selectedStudent.name}
                       </h3>
                       <p className="text-xs text-amber-400 font-mono font-black mt-1">
-                        ROLL ID: {selectedStudent.rollNumber || 'SHC-' + selectedStudent.id.substring(0, 5).toUpperCase()}
+                        ROLL ID: {selectedStudent.rollNumber || formatPupilId(selectedStudent, systemSettings)}
                       </p>
                     </div>
                   </div>
                 </div>
 
                 {/* Subsystem meta values */}
-                <div className="bg-neutral-950 p-4 border-l-4 border-amber-400 space-y-2 font-sans">
+                <div className="bg-neutral-950 p-4 border-l-4 border-amber-400 space-y-2.5 font-sans">
                   <div className="flex justify-between text-xs">
-                    <span className="text-neutral-500 uppercase font-black uppercase">Academic Grade:</span>
+                    <span className="text-neutral-500 uppercase font-black">Academic Grade:</span>
                     <strong className="text-white font-mono">{selectedStudent.class} ({selectedStudent.category})</strong>
                   </div>
                   <div className="flex justify-between text-xs">
-                    <span className="text-neutral-500 uppercase font-black uppercase">Active Clearance:</span>
-                    <strong className="text-emerald-400 font-sans uppercase">ALL-ACCESS PASS</strong>
+                    <span className="text-neutral-500 uppercase font-black">Pupil Gender:</span>
+                    <strong className="text-amber-400 font-mono">
+                      {selectedStudent.gender === 'Female' ? '👧 Female' : '👦 Male'}
+                    </strong>
                   </div>
                   <div className="flex justify-between text-xs">
-                    <span className="text-neutral-500 uppercase font-black uppercase">Guardian SMS Contact:</span>
+                    <span className="text-neutral-500 uppercase font-black">Payment Status / Scheme:</span>
+                    <span className={`text-[10px] font-black uppercase font-mono px-1.5 py-0.5 rounded-xs ${selectedStudent.paymentType === 'Daily' ? 'bg-sky-400/10 text-sky-400 border border-sky-400/30' : 'bg-amber-400/10 text-amber-400 border border-amber-400/30'}`}>
+                      {selectedStudent.paymentType === 'Daily' ? '☀️ Daily Check-in' : '🎓 Fixed Term Scheme'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-neutral-500 uppercase font-black">
+                      {selectedStudent.paymentType === 'Daily' ? 'Daily Rate:' : 'Term Tuition Fee:'}
+                    </span>
+                    <strong className="text-white font-mono">
+                      {selectedStudent.paymentType === 'Daily' ? 'GHC 5.00 / day' : `GHC ${(selectedStudent.termFee !== undefined ? selectedStudent.termFee : baseTermFee).toFixed(2)}`}
+                    </strong>
+                  </div>
+                  {(selectedStudent.legacyDebt || 0) > 0 && (
+                    <div className="flex justify-between text-xs">
+                      <span className="text-neutral-500 uppercase font-black">Carried Legacy Debt:</span>
+                      <strong className="text-red-400 font-mono">GHC {(selectedStudent.legacyDebt || 0).toFixed(2)}</strong>
+                    </div>
+                  )}
+                  <div className="flex justify-between text-xs">
+                    <span className="text-neutral-500 uppercase font-black">Guardian SMS Contact:</span>
                     <strong className="text-white font-mono">{selectedStudent.guardianPhone || 'NOT CONFIGURED'}</strong>
                   </div>
                   <div className="flex justify-between text-xs border-t border-neutral-900 pt-2 mt-1">
-                    <span className="text-neutral-500 uppercase font-black uppercase">Term Attendance:</span>
+                    <span className="text-neutral-500 uppercase font-black">Term Attendance:</span>
                     <strong className="text-amber-400 font-mono">
                       {selectedStudentFinances.presentDaysTerm} / {selectedStudentFinances.schoolDaysNoHolidaysCount} Days Present
                     </strong>
+                  </div>
+
+                  <div className="pt-2 border-t border-neutral-900">
+                    <button
+                      type="button"
+                      onClick={() => setStudentToEdit(selectedStudent)}
+                      className="w-full py-2 bg-amber-400/10 hover:bg-amber-400/20 text-amber-400 border border-amber-400/40 text-[10px] font-mono font-black uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all cursor-pointer rounded-xs"
+                      title="Edit student name, gender, payment scheme, term fee, debt, and contacts"
+                      id="btn-edit-student-from-ledger"
+                    >
+                      <Edit2 size={12} />
+                      <span>Edit Pupil & Financial Ledger Info</span>
+                    </button>
                   </div>
                 </div>
 
@@ -4150,7 +4215,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
                   <div className="grid grid-cols-2 gap-x-4 gap-y-3 pt-1 text-[11px]">
                     <div>
                       <span className="text-[9px] text-neutral-505 block uppercase">Admission ID</span>
-                      <strong className="text-neutral-300 font-bold">{receiptStudent.rollNumber || 'SHC-'+receiptStudent.id.substring(0,5).toUpperCase()}</strong>
+                      <strong className="text-neutral-300 font-bold">{receiptStudent.rollNumber || formatPupilId(receiptStudent, systemSettings)}</strong>
                     </div>
                     
                     <div>
@@ -4336,7 +4401,7 @@ export const TermPayersTab: React.FC = React.memo(() => {
                 <div className="font-sans space-y-1.5">
                   <span className="text-[8.5px] font-black uppercase text-neutral-500 block text-neutral-510 font-bold">STUDENT BENEFICIARY</span>
                   <div className="text-sm font-black text-black uppercase font-bold">{receiptStudent.name}</div>
-                  <div className="font-mono text-neutral-755 font-bold">Roll Ref: {receiptStudent.rollNumber || 'SHC-' + receiptStudent.id.substring(0, 5).toUpperCase()}</div>
+                  <div className="font-mono text-neutral-755 font-bold">Roll Ref: {receiptStudent.rollNumber || formatPupilId(receiptStudent, systemSettings)}</div>
                   <div className="font-bold">Cohort Grade: {receiptStudent.class} ({receiptStudent.category})</div>
                   <div><strong>Gender:</strong> {receiptStudent.gender || 'Not Specified'}</div>
                   <div><strong>Guardian Contact:</strong> {receiptStudent.guardianPhone || 'Not Specified'}</div>
@@ -4420,6 +4485,120 @@ export const TermPayersTab: React.FC = React.memo(() => {
           </div>
         </>
       )}
+
+      {/* Automated Term Transition Carry-Forward Modal */}
+      {showCarryForwardModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-neutral-900 border-2 border-indigo-600/80 rounded max-w-lg w-full p-6 shadow-2xl font-mono text-left space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+              <div className="flex items-center gap-2">
+                <RefreshCw size={20} className="text-indigo-400" />
+                <h3 className="text-base font-black text-white uppercase tracking-wider">Automated Term Carry-Forward</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCarryForwardModal(false);
+                  setCarryForwardSuccessResult(null);
+                }}
+                className="text-neutral-400 hover:text-white cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {carryForwardSuccessResult ? (
+              <div className="space-y-4 py-2">
+                <div className="p-4 bg-emerald-950/40 border-2 border-emerald-600/80 rounded space-y-2">
+                  <div className="flex items-center gap-2 text-emerald-400 font-bold text-sm">
+                    <CheckCircle size={18} />
+                    <span>Carry-Forward Execution Successful!</span>
+                  </div>
+                  <p className="text-xs text-emerald-200 leading-relaxed font-bold">
+                    {carryForwardSuccessResult.message}
+                  </p>
+                  <div className="grid grid-cols-2 gap-2 text-xs pt-2 border-t border-emerald-900/60 font-mono">
+                    <div>Updated Pupils: <strong className="text-white">{carryForwardSuccessResult.updatedStudentsCount}</strong></div>
+                    <div>Carried Arrears: <strong className="text-amber-400">GHC {carryForwardSuccessResult.totalCarriedDebt.toFixed(2)}</strong></div>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCarryForwardModal(false);
+                    setCarryForwardSuccessResult(null);
+                  }}
+                  className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-mono font-black uppercase text-xs tracking-widest py-3 rounded cursor-pointer transition-all"
+                >
+                  Done
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <p className="text-xs text-neutral-300 leading-relaxed">
+                  This administrative operation calculates the remaining unpaid fee balance for all active term pupils and carries it forward into their <strong className="text-amber-400">Legacy Debt</strong> balance for the next academic term.
+                </p>
+
+                <div className="p-3.5 bg-neutral-955 border border-neutral-800 rounded space-y-2">
+                  <label className="flex items-start gap-2.5 text-xs text-neutral-300 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={resetPaymentsOnCarryForward}
+                      onChange={(e) => setResetPaymentsOnCarryForward(e.target.checked)}
+                      className="w-4 h-4 mt-0.5 accent-indigo-500 cursor-pointer shrink-0"
+                    />
+                    <div>
+                      <span className="font-bold text-white block">Reset Term Payment Logs for New Term</span>
+                      <span className="text-[10px] text-neutral-400 block mt-0.5">
+                        Clears existing term daily payment logs so pupils start with zero payments recorded in the new term.
+                      </span>
+                    </div>
+                  </label>
+                </div>
+
+                <div className="p-3 bg-amber-950/30 border border-amber-800/60 rounded flex items-start gap-2.5 text-[11px] text-amber-200">
+                  <AlertCircle size={16} className="text-amber-400 shrink-0 mt-0.5" />
+                  <span>
+                    This action updates student legacy debt balances permanently and resets term balances for smooth term rollover.
+                  </span>
+                </div>
+
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowCarryForwardModal(false)}
+                    className="w-1/2 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-mono font-bold uppercase text-xs py-3 rounded cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const res = carryForwardTermBalances({ resetPaymentsForNewTerm: resetPaymentsOnCarryForward });
+                      setCarryForwardSuccessResult(res);
+                    }}
+                    className="w-1/2 bg-indigo-600 hover:bg-indigo-500 text-white font-mono font-black uppercase text-xs py-3 rounded cursor-pointer shadow-lg transition-all"
+                  >
+                    Run Carry-Forward
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {/* Edit Student Modal Popup */}
+      <EditStudentModal
+        student={studentToEdit}
+        isOpen={!!studentToEdit}
+        onClose={() => setStudentToEdit(null)}
+        onSaved={(updated) => {
+          if (selectedStudent?.id === updated.id) {
+            setSelectedStudent(updated);
+          }
+        }}
+      />
     </div>
   );
 });

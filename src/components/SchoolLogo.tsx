@@ -10,32 +10,36 @@ interface SchoolLogoProps {
   size?: number;
   className?: string;
   lightBackground?: boolean;
+  logoUrl?: string;
 }
 
 export const SchoolLogo: React.FC<SchoolLogoProps> = ({ 
   size = 120, 
   className = '', 
-  lightBackground = false 
+  lightBackground = false,
+  logoUrl
 }) => {
   const { systemSettings } = useApp();
   const [imgError, setImgError] = React.useState(false);
 
-  // Reset imgError whenever schoolLogoUrl changes
+  const effectiveLogoUrl = logoUrl || systemSettings?.schoolLogoUrl;
+
+  // Reset imgError whenever effectiveLogoUrl changes
   React.useEffect(() => {
     setImgError(false);
-  }, [systemSettings?.schoolLogoUrl]);
+  }, [effectiveLogoUrl]);
 
-  if (systemSettings?.schoolLogoUrl && !imgError) {
+  if (effectiveLogoUrl && !imgError) {
     return (
       <img 
-        src={systemSettings.schoolLogoUrl} 
-        alt={systemSettings.schoolName || "School Logo"} 
+        src={effectiveLogoUrl} 
+        alt={systemSettings?.schoolName || "School Logo"} 
         width={size}
         height={size}
-        className={`object-contain select-none shrink-0 rounded-full border border-neutral-800 shadow-sm ${className}`}
+        className={`object-cover select-none shrink-0 rounded-full border border-neutral-800 shadow-sm ${className}`}
         referrerPolicy="no-referrer"
         onError={() => setImgError(true)}
-        style={{ width: size, height: size }}
+        style={{ width: size, height: size, maxWidth: '100%', maxHeight: '100%' }}
       />
     );
   }
@@ -51,6 +55,7 @@ export const SchoolLogo: React.FC<SchoolLogoProps> = ({
       viewBox="0 0 400 400" 
       xmlns="http://www.w3.org/2000/svg"
       className={`select-none shrink-0 ${className}`}
+      style={{ width: size, height: size, maxWidth: '100%', maxHeight: '100%' }}
       id="saako-holy-child-crest"
     >
       <defs>

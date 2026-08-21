@@ -8,7 +8,9 @@ import {
   getAuth, 
   signInWithEmailAndPassword, 
   sendPasswordResetEmail,
-  createUserWithEmailAndPassword
+  createUserWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged
 } from 'firebase/auth';
 import { 
   initializeFirestore,
@@ -23,7 +25,14 @@ import {
   memoryLocalCache
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { Student, PaymentRecord, UserAccount, Term, Expense, WorkerSalary, SystemSettings, BudgetTarget, AuditLog, TeacherEvaluation, JournalEntry } from '../types';
+import { Student, PaymentRecord, UserAccount, Term, Expense, WorkerSalary, SystemSettings, BudgetTarget, AuditLog, TeacherEvaluation, JournalEntry, TrashItem } from '../types';
+
+export { onAuthStateChanged };
+
+export function safeDocId(id: any): string {
+  if (!id) return `doc_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  return String(id).replace(/\//g, '_').trim();
+}
 
 const dbId = (!firebaseConfig.firestoreDatabaseId || firebaseConfig.firestoreDatabaseId === 'default') 
   ? undefined 
@@ -32,6 +41,16 @@ const dbId = (!firebaseConfig.firestoreDatabaseId || firebaseConfig.firestoreDat
 const app = initializeApp(firebaseConfig);
 
 export const firebaseAuth = getAuth(app);
+
+export async function firebaseSignOut() {
+  try {
+    await signOut(firebaseAuth);
+    return { success: true };
+  } catch (err: any) {
+    console.warn("Firebase Auth signOut failed:", err);
+    return { success: false, error: err.message };
+  }
+}
 
 export async function firebaseLogin(email: string, pass: string) {
   try {
@@ -296,6 +315,23 @@ export const db = {
     }
   },
 
+  async deletePaymentsBatch(paymentIds: string[]): Promise<boolean> {
+    try {
+      if (!paymentIds || paymentIds.length === 0) return true;
+      const res = await fetch(`/api/payments/delete-batch`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ ids: paymentIds }),
+      });
+      return res.ok;
+    } catch (e) {
+      console.error("Local Server API deletePaymentsBatch error: ", e);
+      return false;
+    }
+  },
+
   async deleteStudentPayments(studentId: string): Promise<boolean> {
     try {
       const res = await fetch(`/api/payments/student/${studentId}`, {
@@ -309,14 +345,25 @@ export const db = {
   },
 
   // Seed local cache into server tables
-  async seedTables(users: UserAccount[], students: Student[], payments: PaymentRecord[], terms?: Term[]): Promise<boolean> {
+  async seedTables(
+    usersOrPayload: UserAccount[] | any,
+    students?: Student[],
+    payments?: PaymentRecord[],
+    terms?: Term[]
+  ): Promise<boolean> {
     try {
+      let bodyData: any = {};
+      if (usersOrPayload && !Array.isArray(usersOrPayload) && typeof usersOrPayload === 'object') {
+        bodyData = usersOrPayload;
+      } else {
+        bodyData = { users: usersOrPayload, students, payments, terms };
+      }
       const res = await fetch("/api/seed", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ users, students, payments, terms }),
+        body: JSON.stringify(bodyData),
       });
       return res.ok;
     } catch (e) {
@@ -747,6 +794,79 @@ export const db = {
     } catch (e) {
       console.error("Local Server API deleteJournalEntry error: ", e);
       return false;
+    }
+  },
+
+  async getTrashItems(): Promise<TrashItem[] | null> {
+    try {
+      const res = await fetch("/api/trash");
+      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+      return await res.json();
+    } catch (e) {
+      console.error("Local Server API getTrashItems error: ", e);
+      return null;
+    }
+  },
+
+  async saveTrashItem(item: TrashItem): Promise<boolean> {
+    try {
+      const res = await fetch("/api/trash", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(item),
+      });
+      return res.ok;
+    } catch (e) {
+      console.error("Local Server API saveTrashItem error: ", e);
+      return false;
+    }
+  },
+
+  async restoreTrashItem(trashId: string, operator?: string): Promise<{ success: boolean; message: string }> {
+    try {
+      const res = await fetch(`/api/trash/restore/${trashId}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ operator: operator || "System Admin" }),
+      });
+      const data = await res.json();
+      return { success: res.ok && data.success, message: data.message || data.error || "Restoration complete." };
+    } catch (e: any) {
+      console.error("Local Server API restoreTrashItem error: ", e);
+      return { success: false, message: e.message || "Failed to restore trash item." };
+    }
+  },
+
+  async deleteTrashItem(trashId: string): Promise<boolean> {
+    try {
+      const res = await fetch(`/api/trash/${trashId}`, {
+        method: "DELETE",
+      });
+      return res.ok;
+    } catch (e) {
+      console.error("Local Server API deleteTrashItem error: ", e);
+      return false;
+    }
+  },
+
+  async emptyTrash(operator?: string): Promise<{ success: boolean; message: string }> {
+    try {
+      const res = await fetch("/api/trash", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ operator: operator || "System Admin" }),
+      });
+      const data = await res.json();
+      return { success: res.ok, message: data.message || "Trash bin emptied." };
+    } catch (e: any) {
+      console.error("Local Server API emptyTrash error: ", e);
+      return { success: false, message: e.message || "Failed to empty trash." };
     }
   }
 };

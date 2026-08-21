@@ -3,15 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { Student, PaymentRecord, UserAccount, UserRole, StudentClass, SchoolCategory, Term, PendingEdit, BackupRecord, Expense, ExpenseCategory, PaymentMethod, WorkerSalary, SystemSettings, BudgetTarget, ExamsPayment, ExamsExpense, ExamsSettings, AuditLog, TeacherEvaluation, JournalEntry, TeacherEthicsEvaluation, AdministrativePurgeOptions, AdministrativePurgeResult } from '../types';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import { Student, PaymentRecord, UserAccount, UserRole, StudentClass, SchoolCategory, Term, PendingEdit, BackupRecord, Expense, ExpenseCategory, PaymentMethod, WorkerSalary, SystemSettings, BudgetTarget, ExamsPayment, ExamsExpense, ExamsSettings, AuditLog, TeacherEvaluation, JournalEntry, TeacherEthicsEvaluation, AdministrativePurgeOptions, AdministrativePurgeResult, StaffPermissions, TrashItem, DuplicatePaymentAuditItem, DuplicatePaymentAuditGroup, DeleteClassFeesOptions, DeleteClassFeesResult } from '../types';
 import { INITIAL_USERS, INITIAL_STUDENTS, ORIGINAL_DEMO_STUDENT_IDS, generateSeedPayments, getClassCategory } from '../initialData';
-import { db as rawDb, firebaseLogin, firebaseSendPasswordReset, firebaseCreateAccount } from '../lib/firebase';
-import { generateSchoolDays } from '../utils/termUtils';
+import { db as rawDb, firebaseLogin, firebaseSendPasswordReset, firebaseCreateAccount, firebaseAuth, firebaseSignOut, onAuthStateChanged } from '../lib/firebase';
+import { generateSchoolDays, isDateInTermGap } from '../utils/termUtils';
 import { idbEngine } from '../lib/idbEngine';
 import { roundCurrency, addCurrency, subtractCurrency, multiplyCurrency } from '../utils/currency';
-import { calculateStudentFeeStatus } from '../utils/feeCalculator';
+import { calculateStudentFeeStatus, isTermPayer } from '../utils/feeCalculator';
+export { isTermPayer };
 import { mergeCollectionsWithLWW } from '../utils/conflictResolver';
+import { generateNextPupilId, formatPupilId, standardizeAllPupilIds, PupilIdFormatStyle } from '../utils/pupilIdUtils';
 
 
 // Safe wrapper over browser's localStorage to prevent QuotaExceededError and sandbox blocking from crashing the application.
@@ -96,6 +98,7 @@ interface AppContextType {
   setViewingTermId: (id: string | null) => void;
   addTerm: (name: string, startDate: string, daysCount: number, isActive?: boolean) => void;
   editTerm: (termId: string, name: string, startDate: string, daysCount: number, isActive?: boolean) => void;
+  completeTerm: (termId: string, isCompleted?: boolean) => void;
   setActiveTerm: (termId: string) => void;
   deleteTerm: (termId: string) => void;
   addPublicHoliday: (termId: string, date: string) => void;
@@ -110,7 +113,9 @@ interface AppContextType {
   addStudent: (name: string, className: StudentClass, guardianPhone?: string, photoUrl?: string, discount?: number, gender?: 'Male' | 'Female', paymentType?: 'Daily' | 'Term', termFee?: number, legacyDebt?: number, enrollmentDate?: string) => void;
   updateStudent: (student: Student) => void;
   deleteStudent: (studentId: string) => void;
+  mergeStudents: (primaryStudentId: string, duplicateStudentId: string) => { success: boolean; message: string };
   purgeDeactivatedStudents: () => void;
+  standardizePupilIds: (formatStyle?: PupilIdFormatStyle) => { updatedCount: number; message: string };
   promoteAllStudents: (customActions?: Record<string, 'promote' | 'repeat' | 'graduate' | 'withdraw'>) => void;
   promotionBackups: any[];
   revertLastPromotion: (backupId?: string) => boolean;
@@ -126,9 +131,11 @@ interface AppContextType {
   deletePayment: (paymentId: string) => void;
   clearDailyPaymentsForClass: (classId: StudentClass, date: string) => void;
   deleteStudentPayments: (studentId: string) => void;
+  deleteClassFeeRecords: (options: DeleteClassFeesOptions) => DeleteClassFeesResult;
   adjustPayment: (paymentId: string, updatedAmount: number, updatedIsAbsent: boolean, notes: string, reason: string) => void;
-  registerStaff: (name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled?: boolean, passwordEnabled?: boolean, password?: string, assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string, photoUrl?: string, employeeId?: string, department?: string, gender?: 'Male' | 'Female', employmentType?: 'Full-Time' | 'Part-Time' | 'Contract' | 'Volunteer', appointmentDate?: string, contractEndDate?: string, renewalOption?: 'Automatic' | 'Manual Review' | 'Fixed Term' | 'Non-Renewable', renewalPeriod?: string, personalAddress?: string) => { success: boolean; error?: string };
-  updateStaff: (userId: string, name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled?: boolean, passwordEnabled?: boolean, password?: string, assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string, photoUrl?: string, employeeId?: string, department?: string, gender?: 'Male' | 'Female', employmentType?: 'Full-Time' | 'Part-Time' | 'Contract' | 'Volunteer', idCardDeactivated?: boolean, appointmentDate?: string, contractEndDate?: string, renewalOption?: 'Automatic' | 'Manual Review' | 'Fixed Term' | 'Non-Renewable', renewalPeriod?: string, signatureUrl?: string, managementSignatureUrl?: string, personalAddress?: string) => { success: boolean; error?: string };
+  registerStaff: (name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled?: boolean, passwordEnabled?: boolean, password?: string, assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string, photoUrl?: string, employeeId?: string, department?: string, gender?: 'Male' | 'Female', employmentType?: 'Full-Time' | 'Part-Time' | 'Contract' | 'Volunteer', appointmentDate?: string, contractEndDate?: string, renewalOption?: 'Automatic' | 'Manual Review' | 'Fixed Term' | 'Non-Renewable', renewalPeriod?: string, personalAddress?: string, permissions?: StaffPermissions) => { success: boolean; error?: string };
+  updateStaff: (userId: string, name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled?: boolean, passwordEnabled?: boolean, password?: string, assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string, photoUrl?: string, employeeId?: string, department?: string, gender?: 'Male' | 'Female', employmentType?: 'Full-Time' | 'Part-Time' | 'Contract' | 'Volunteer', idCardDeactivated?: boolean, appointmentDate?: string, contractEndDate?: string, renewalOption?: 'Automatic' | 'Manual Review' | 'Fixed Term' | 'Non-Renewable', renewalPeriod?: string, signatureUrl?: string, managementSignatureUrl?: string, personalAddress?: string, ethicsEvaluation?: TeacherEthicsEvaluation, permissions?: StaffPermissions) => { success: boolean; error?: string };
+  carryForwardTermBalances: (options?: { resetPaymentsForNewTerm?: boolean }) => { updatedStudentsCount: number; totalCarriedDebt: number; message: string };
   adjustStaffSalariesByPercentage: (adjustments: { userId: string; percentage: number; newSalary?: number; reason?: string }[]) => { success: boolean; count: number };
   deleteStaff: (userId: string) => { success: boolean; error?: string };
   toggleStaffActive: (userId: string) => { success: boolean; error?: string };
@@ -142,10 +149,16 @@ interface AppContextType {
   purgeOnlyDemoData: () => Promise<{ success: boolean; message: string }>;
   clearAllPayments: () => void;
   administrativePurge: (options: AdministrativePurgeOptions) => AdministrativePurgeResult;
-  purgeDuplicatePayments: () => { count: number; message: string };
+  purgeDuplicatePayments: (options?: { onlyExactGhosts?: boolean; deleteRedundantZero?: boolean; preserveLegitimateInstallments?: boolean }) => { count: number; ghostCount: number; redundantZeroCount: number; preservedCount: number; message: string };
+  getDuplicatePaymentAudit: () => DuplicatePaymentAuditGroup[];
+  deletePaymentRecord: (paymentId: string) => { success: boolean; message: string };
+  sanitizeDatabaseIntegrity: () => { orphanedPaymentsCount: number; orphanedExamsCount: number; message: string };
   purgeAdvancePayments: (studentId?: string) => { count: number; message: string };
-  purgeRepeatedAndAdvancePayments: (options: { duplicates?: boolean; advance?: boolean; studentId?: string }) => { count: number; message: string };
+  purgeOutOfTermPayments: (studentId?: string) => { count: number; message: string };
+  purgeRepeatedAndAdvancePayments: (options: { duplicates?: boolean; advance?: boolean; outOfTerm?: boolean; studentId?: string }) => { count: number; message: string };
   purgePublicHolidayPayments: () => { count: number; message: string };
+  purgePaymentsExceptYesterdayAndToday: () => { count: number; retainedCount: number; yesterdayStr: string; todayStr: string; message: string };
+  purgeClassOutOfTermAndDuplicates: (targetClass?: StudentClass) => { count: number; message: string };
   deleteAllAutomaticEntries: () => { deletedPaymentsCount: number; deletedJournalsCount: number; message: string };
   firebaseConnected: boolean;
   firebaseError: string | null;
@@ -209,7 +222,20 @@ interface AppContextType {
   fetchWhatsappLogs: () => Promise<void>;
   auditLogs: AuditLog[];
   fetchAuditLogs: () => Promise<void>;
-  logActivity: (action: string, category: 'students' | 'payments' | 'expenses' | 'settings' | 'security' | 'other', details: string, studentId?: string, studentName?: string, amount?: number) => Promise<void>;
+  logActivity: (action: string, category: 'students' | 'payments' | 'expenses' | 'settings' | 'security' | 'other', details: string, studentId?: string, studentName?: string, amount?: number, snapshotData?: any) => Promise<void>;
+  restoreDeletedRecord: (logOrSnapshot: any) => Promise<{ success: boolean; message: string }>;
+  trashItems: TrashItem[];
+  fetchTrashItems: () => Promise<void>;
+  moveToTrash: (
+    itemType: 'payment' | 'student' | 'expense' | 'bulk_payments',
+    originalId: string,
+    recordData: any,
+    reason: string,
+    meta?: { studentId?: string; studentName?: string; amount?: number; itemCount?: number; class?: string }
+  ) => Promise<TrashItem>;
+  restoreTrashItem: (trashId: string) => Promise<{ success: boolean; message: string }>;
+  permanentlyDeleteTrashItem: (trashId: string) => Promise<boolean>;
+  emptyTrash: () => Promise<{ success: boolean; message: string }>;
   systemSettings: SystemSettings;
   updateSystemSettings: (newSettings: Partial<SystemSettings>) => Promise<boolean>;
   autoSendCheckInAlert: boolean;
@@ -266,6 +292,14 @@ export interface PendingAlert {
   category: SchoolCategory;
   guardianPhone: string;
 }
+
+export const registerDeletedIds = (_ids: string[]) => {
+  // No-op to prevent accidental blacklisting of legitimate student fee records
+};
+
+export const getDeletedIds = (): Set<string> => {
+  return new Set<string>();
+};
 
 export function getSchoolWeekForDate(dateStr: string, startDateStr: string): number {
   if (!dateStr || !startDateStr) return 1;
@@ -387,7 +421,7 @@ export function getDiscountedTermFee(
   const discountAmount = originalFee * (discountPercent / 100);
   
   // Check if they have a non-absent payment in targetWeek of the active term
-  const studentPayments = payments.filter(p => p.studentId === student.id && !p.isAbsent);
+  const studentPayments = payments.filter(p => p.studentId === student.id && !p.isAbsent && p.verified !== false && p.amount > 0);
   const hasPaymentInWeek = studentPayments.some(p => {
     const paymentWeek = getSchoolWeekForDate(p.date, activeTerm.startDate);
     return paymentWeek === targetWeek;
@@ -430,18 +464,30 @@ export function calculateStudentFinancialState(
   activeTerm: Term | null,
   currentDate: string,
   baselineDailyFee?: number,
-  systemSettings?: SystemSettings
+  systemSettings?: SystemSettings,
+  allTerms?: Term[]
 ) {
   const baseDailyFee = baselineDailyFee ?? 5.00;
-  if (student.paymentType === 'Term') {
+  if (isTermPayer(student)) {
     const discountInfo = getDiscountedTermFee(student, payments, activeTerm, currentDate, systemSettings);
     const termFee = discountInfo.termFee;
     const legacyDebt = student.legacyDebt || 0;
     const studentPayments = payments.filter(p => p.studentId === student.id);
     const totalLateFees = studentPayments.reduce((sum, p) => sum + (p.lateFeeApplied || 0), 0);
     const totalTarget = termFee + legacyDebt + totalLateFees;
+    const termSchoolDays = activeTerm?.schoolDays || [];
+    const termStartDate = activeTerm?.startDate || '1970-01-01';
+    const lastTermDay = termSchoolDays.length > 0 ? termSchoolDays[termSchoolDays.length - 1] : '2099-12-31';
+
     const totalPaid = studentPayments
-      .filter(p => !p.isAbsent)
+      .filter(p => {
+        if (p.isAbsent || p.verified === false || p.amount <= 0) return false;
+        if (activeTerm && termSchoolDays.length > 0) {
+          if (p.termId && activeTerm.id && p.termId === activeTerm.id) return true;
+          if (p.date < termStartDate || p.date > lastTermDay) return false;
+        }
+        return true;
+      })
       .reduce((sum, p) => sum + p.amount, 0);
     const runningBalance = totalPaid - totalTarget;
     const isCheckedInToday = studentPayments.some(p => p.date === currentDate && !p.isAbsent);
@@ -475,6 +521,22 @@ export function calculateStudentFinancialState(
   }
 
   const holidays = activeTerm.publicHolidays || [];
+  const termStartDate = activeTerm.startDate || '1970-01-01';
+  const lastTermDay = activeTerm.schoolDays.length > 0 ? activeTerm.schoolDays[activeTerm.schoolDays.length - 1] : '2099-12-31';
+
+  // Include all valid payments for active term
+  const validPaymentMap = new Map<string, number>();
+  studentPayments.forEach(p => {
+    if (p.isAbsent || p.verified === false || p.amount <= 0) return;
+    if (p.date < termStartDate || p.date > lastTermDay) return;
+    if (holidays.includes(p.date)) return;
+
+    validPaymentMap.set(p.id, p.amount);
+  });
+
+  let rawTotalPaid = 0;
+  validPaymentMap.forEach(amt => { rawTotalPaid += amt; });
+
   // Get all school days in the active term up to currentDate (inclusive) and after student's enrollment date
   const schoolDaysUpToToday = activeTerm.schoolDays.filter(d => {
     const afterEnrollment = student.enrollmentDate ? d >= student.enrollmentDate : true;
@@ -487,9 +549,17 @@ export function calculateStudentFinancialState(
     return !isAbsent;
   });
 
-  const totalPaid = studentPayments
-    .filter(p => !p.isAbsent)
-    .reduce((sum, p) => sum + p.amount, 0);
+  // Max possible fee for active term based on total non-holiday school days after enrollment
+  const totalTermSchoolDays = activeTerm.schoolDays.filter(d => {
+    const afterEnrollment = student.enrollmentDate ? d >= student.enrollmentDate : true;
+    return !holidays.includes(d) && afterEnrollment;
+  });
+  const maxTermFeeCap = totalTermSchoolDays.length * dailyRate;
+
+  let totalPaid = Math.round(rawTotalPaid * 100) / 100;
+  if (maxTermFeeCap > 0 && totalPaid > maxTermFeeCap) {
+    totalPaid = Math.round(maxTermFeeCap * 100) / 100;
+  }
 
   const totalLateFees = studentPayments.reduce((sum, p) => sum + (p.lateFeeApplied || 0), 0);
   const totalRequired = billableDays.length * dailyRate + totalLateFees;
@@ -515,7 +585,7 @@ export function calculateStudentFinancialState(
   });
 
   // Is today paid/covered?
-  const isHolidayToday = holidays.includes(currentDate);
+  const isHolidayToday = holidays.includes(currentDate) || (allTerms ? isDateInTermGap(currentDate, allTerms) : false);
   const isAbsentToday = studentPayments.some(p => p.date === currentDate && p.isAbsent);
   const isTodayBillable = !isHolidayToday && !isAbsentToday && activeTerm.schoolDays.includes(currentDate);
 
@@ -564,6 +634,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([]);
   const [whatsappLogs, setWhatsappLogs] = useState<any[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [trashItems, setTrashItems] = useState<TrashItem[]>([]);
   const [budgetTargets, setBudgetTargets] = useState<BudgetTarget[]>([]);
   const [examsPayments, setExamsPayments] = useState<ExamsPayment[]>([]);
   const [examsExpenses, setExamsExpenses] = useState<ExamsExpense[]>([]);
@@ -592,7 +663,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     lateFeeEnabled: false,
     lateFeeCutoffTime: "08:30",
     lateFeePercentage: 10,
-    disableDemoData: false
+    disableDemoData: false,
+    pupilIdFormat: 'PREFIX_CLASS_NUM',
+    pupilIdPrefix: 'SHC',
+    pupilIdPadding: 3,
+    pupilIdSeparator: '-'
   };
 
   const [systemSettings, setSystemSettingsState] = useState<SystemSettings>(() => {
@@ -694,6 +769,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setThemeState(t);
     updateSystemSettings({ theme: t });
   };
+
+  useEffect(() => {
+    if (theme === 'daylight') {
+      document.documentElement.classList.add('daylight');
+      document.body.classList.add('daylight');
+    } else {
+      document.documentElement.classList.remove('daylight');
+      document.body.classList.remove('daylight');
+    }
+  }, [theme]);
 
   useEffect(() => {
     const primaryColor = systemSettings?.primaryColor || '#fbbf24';
@@ -989,6 +1074,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     recordLocallyPendingEdit('bulk', 'update', `Restored system state from local backup: "${backup.label}"`);
+
+    if (db.isActive() && storageMode === 'cloud') {
+      seedFirebaseFromLocal(
+        backup.data.users || users,
+        backup.data.students || students,
+        backup.data.payments || payments,
+        backup.data.terms || terms
+      ).catch(err => {
+        console.error("Auto-syncing to cloud after backup restore failed:", err);
+      });
+    }
   };
 
   const importDatabaseBackup = async (backupData: any) => {
@@ -1086,13 +1182,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     recordLocallyPendingEdit('bulk', 'update', `Uploaded and restored database state from external JSON backup`);
     
-    // Seed Firestore if in Cloud sync mode
-    if (db.isActive() && storageMode === 'cloud') {
-      try {
-        await seedFirebaseFromLocal();
-      } catch (err) {
-        console.error("Auto-syncing to firestore after database restore failed:", err);
-      }
+    // Server database & cloud persistence:
+    try {
+      await db.seedTables({
+        users: data.users || users,
+        students: data.students || students,
+        payments: data.payments || payments,
+        terms: data.terms || terms,
+        expenses: data.expenses || expenses,
+        salaries: data.salaries || salaries,
+        examsPayments: data.examsPayments || examsPayments,
+        examsExpenses: data.examsExpenses || examsExpenses,
+        examsSettings: data.examsSettings || examsSettings,
+        journalEntries: data.journalEntries,
+        teacherEvaluations: data.teacherEvaluations,
+        budgetTargets: data.budgetTargets || budgetTargets,
+        whatsappLogs: data.whatsappLogs || whatsappLogs,
+        systemSettings: backupSystemSettings || systemSettings
+      });
+    } catch (err) {
+      console.error("Auto-syncing server database after database restore failed:", err);
     }
   };
 
@@ -1120,7 +1229,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [bgSyncEnabled, setBgSyncEnabledState] = useState<boolean>(() => {
     const saved = localStorage.getItem('s_background_sync_enabled');
-    return saved === 'true'; // Defaults to false
+    return saved !== null ? saved === 'true' : false; // Defaults to FALSE to prevent periodic overwrites
   });
   const [bgSyncStatus, setBgSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
   const [lastBgSyncTime, setLastBgSyncTime] = useState<string | null>(null);
@@ -1183,34 +1292,60 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return;
       }
 
-      // Helper function for additive merging of arrays by id
-      const mergeRecords = <T extends { id: string; updatedAt?: string }>(current: T[], incoming: T[]): T[] => {
+      const syncCloudRecords = <T extends { id: string; updatedAt?: string }>(
+        current: T[], 
+        incoming: T[], 
+        collectionLabel: string
+      ): T[] => {
         const map = new Map<string, T>();
-        current.forEach(item => { if (item && item.id) map.set(item.id, item); });
+        
+        // 1. Primary source: Cloud incoming documents
         incoming.forEach(item => {
           if (item && item.id) {
-            const existing = map.get(item.id);
-            if (!existing) {
-              map.set(item.id, item);
-            } else {
-              const existingTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
-              const incomingTime = item.updatedAt ? new Date(item.updatedAt).getTime() : 0;
-              if (incomingTime >= existingTime) {
-                map.set(item.id, item);
-              }
-            }
+            map.set(item.id, item);
           }
         });
+
+        // 2. Check local pending creations that haven't reached Cloud yet
+        const pendingMap = new Set(
+          pendingLocalEdits
+            .filter(e => e.action === 'create' && (e.type === collectionLabel || e.type === 'bulk'))
+            .map(e => e.entityId)
+            .filter(Boolean)
+        );
+
+        current.forEach(item => {
+          if (item && item.id) {
+            if (map.has(item.id)) {
+              // Compare timestamps if local is strictly newer
+              const cloudItem = map.get(item.id)!;
+              const localTime = (item as any).timestamp || (item as any).updatedAt || (item as any).date;
+              const cloudTime = (cloudItem as any).timestamp || (cloudItem as any).updatedAt || (cloudItem as any).date;
+              if (localTime && cloudTime) {
+                const localMs = new Date(localTime).getTime();
+                const cloudMs = new Date(cloudTime).getTime();
+                if (!isNaN(localMs) && !isNaN(cloudMs) && localMs > cloudMs) {
+                  map.set(item.id, item);
+                }
+              }
+            } else if (pendingMap.has(item.id)) {
+              // Local offline creation pending sync
+              map.set(item.id, item);
+            }
+            // Discard items not in Cloud and not in pendingLocalEdits (was deleted on Cloud)
+          }
+        });
+
         return Array.from(map.values());
       };
 
-      const mergedUsers = mergeRecords(users, dbUsers);
-      const mergedStudents = mergeRecords(students, dbStudents);
-      const mergedPayments = mergeRecords(payments, dbPayments);
-      const mergedExpenses = mergeRecords(expenses, dbExpenses);
-      const mergedSalaries = mergeRecords(salaries, dbSalaries);
-      const mergedBudgets = mergeRecords(budgetTargets, dbBudgetTargets);
-      const mergedEvals = mergeRecords(teacherEvaluations, dbEvaluations);
+      const mergedUsers = syncCloudRecords(users, dbUsers, 'users');
+      const mergedStudents = syncCloudRecords(students, dbStudents, 'students');
+      const mergedPayments = syncCloudRecords(payments, dbPayments, 'payments');
+      const mergedExpenses = syncCloudRecords(expenses, dbExpenses, 'expenses');
+      const mergedSalaries = syncCloudRecords(salaries, dbSalaries, 'salaries');
+      const mergedBudgets = syncCloudRecords(budgetTargets, dbBudgetTargets, 'budget_targets');
+      const mergedEvals = syncCloudRecords(teacherEvaluations, dbEvaluations, 'teacher_evaluations');
 
       setUsers(mergedUsers);
       setStudents(mergedStudents);
@@ -1239,24 +1374,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Background Sync interval Scheduler
+  // Periodic background synchronization has been removed to prevent unexpected data loss or overwrites.
+  // Manual sync remains available via the Sync / Backup interface when requested.
   useEffect(() => {
-    if (!bgSyncEnabled || storageMode !== 'cloud') {
-      return;
-    }
-
-    // Trigger sync immediately upon enabling/mount
-    if (navigator.onLine) {
-      performBackgroundSync();
-    }
-
-    const interval = setInterval(() => {
-      if (navigator.onLine) {
-        performBackgroundSync();
-      }
-    }, 30000); // 30 seconds frequency
-
-    return () => clearInterval(interval);
+    // No automatic background interval or focus listener
   }, [bgSyncEnabled, storageMode]);
 
   const healTerms = (termsList: Term[]): Term[] => {
@@ -1276,15 +1397,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return termsList.map(t => {
       const isActive = t.id === selectedActive.id;
-      let startDate = t.startDate || '2026-04-27';
-      if (t.id === 'term_default' && !t.startDate) {
-        startDate = '2026-04-27';
-      }
-      const daysCount = t.daysCount && t.daysCount > 0 ? t.daysCount : (t.schoolDays?.length || 75);
-      const schoolDays = generateSchoolDays(startDate, daysCount);
-      const name = (t.id === 'term_default' || t.name.includes('May/June'))
-        ? 'Term 1 (April - August 2026)'
-        : t.name;
+      const startDate = t.startDate || '2026-04-27';
+      const daysCount = t.daysCount && t.daysCount > 0 ? t.daysCount : (t.schoolDays?.length || 68);
+      const schoolDays = (t.schoolDays && t.schoolDays.length > 0)
+        ? t.schoolDays
+        : generateSchoolDays(startDate, daysCount);
+      const name = t.name || 'Term';
+      const publicHolidays = Array.from(new Set(t.publicHolidays || []));
 
       return {
         ...t,
@@ -1292,6 +1411,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         startDate,
         daysCount,
         schoolDays,
+        publicHolidays,
         active: isActive
       };
     });
@@ -1338,7 +1458,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
-    const active = db.isActive() && storageMode === 'cloud';
+    try {
+      localStorage.removeItem('s_deleted_ids');
+      idbEngine.removeItem('s_deleted_ids');
+    } catch (e) {}
+
+    const active = db.isActive();
     setFirebaseConnected(active);
     setFirebaseError(null);
 
@@ -1378,96 +1503,78 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       console.log('FEETRACK active database connection detected. Synchronizing cloud entries...');
       
       try {
-        // Run lookups in parallel to minimize wait times (cut 24s sequence down to 8s)
-        const [dbUsers, dbStudents, dbPayments, dbTerms, dbExpenses, dbSalaries, dbBudgetTargets, dbExamsPayments, dbExamsExpenses, dbExamsSettings, dbEvaluations, dbJournalEntries] = await Promise.all([
-          db.getUsers(),
-          db.getStudents(),
-          db.getPayments(),
-          db.getTerms(),
-          db.getExpenses(),
-          db.getSalaries(),
-          db.getBudgetTargets(),
-          db.getExamsPayments(),
-          db.getExamsExpenses(),
-          db.getExamsSettings(),
-          db.getTeacherEvaluations(),
-          db.getJournalEntries()
+        // Run lookups in parallel to minimize wait times
+        const [dbUsers, dbStudents, dbPayments, dbTerms, dbExpenses, dbSalaries, dbBudgetTargets, dbExamsPayments, dbExamsExpenses, dbExamsSettings, dbEvaluations, dbJournalEntries, dbTrashItems] = await Promise.all([
+          db.getUsers().catch(() => null),
+          db.getStudents().catch(() => null),
+          db.getPayments().catch(() => null),
+          db.getTerms().catch(() => null),
+          db.getExpenses().catch(() => null),
+          db.getSalaries().catch(() => null),
+          db.getBudgetTargets().catch(() => null),
+          db.getExamsPayments().catch(() => null),
+          db.getExamsExpenses().catch(() => null),
+          db.getExamsSettings().catch(() => null),
+          db.getTeacherEvaluations().catch(() => null),
+          db.getJournalEntries().catch(() => null),
+          db.getTrashItems().catch(() => null)
         ]);
 
-        if (dbUsers === null || dbStudents === null || dbPayments === null || dbTerms === null || dbExpenses === null || dbSalaries === null || dbBudgetTargets === null || dbExamsPayments === null || dbExamsExpenses === null) {
+        if (dbUsers === null && dbStudents === null && dbPayments === null) {
           console.warn('Cloud database collections are offline/misconfigured. Falling back to LocalStorage...');
           setFirebaseConnected(false);
-          setStorageModeState('local');
-          setFirebaseError('Cloud database returned null. Reverting to local storage mode.');
           loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries, localBudgetTargets, localEvaluations, localJournalEntries, localExamsPayments, localExamsExpenses, localExamsSettings, localPromoBackups);
           return;
         }
 
-        // If db connection succeeds but collections are completely empty, self-seed them!
-        // We will seed using existing local datasets if available. This dynamically syncs registered pupil records (B5, Nursery, etc.)
+        // Build separate sets of soft-deleted trash items by collection type
+        const deletedStudentIds = new Set<string>();
+        const deletedPaymentIds = new Set<string>();
+        const deletedExpenseIds = new Set<string>();
+        const deletedSalaryIds = new Set<string>();
+        const deletedUserIds = new Set<string>();
+
+        if (Array.isArray(dbTrashItems)) {
+          dbTrashItems.forEach((t: any) => {
+            if (!t) return;
+            const itemType = t.itemType || t.type;
+            
+            if (itemType === 'student') {
+              if (t.id) deletedStudentIds.add(t.id);
+              if (t.originalId) deletedStudentIds.add(t.originalId);
+              if (t.recordData?.student?.id) deletedStudentIds.add(t.recordData.student.id);
+              if (t.recordData?.id) deletedStudentIds.add(t.recordData.id);
+            } else if (itemType === 'payment') {
+              if (t.id) deletedPaymentIds.add(t.id);
+              if (t.originalId) deletedPaymentIds.add(t.originalId);
+              if (t.recordData?.payment?.id) deletedPaymentIds.add(t.recordData.payment.id);
+              if (t.recordData?.id) deletedPaymentIds.add(t.recordData.id);
+            } else if (itemType === 'bulk_payments') {
+              if (t.id) deletedPaymentIds.add(t.id);
+              if (t.originalId) deletedPaymentIds.add(t.originalId);
+              if (Array.isArray(t.recordData?.payments)) {
+                t.recordData.payments.forEach((p: any) => { if (p?.id) deletedPaymentIds.add(p.id); });
+              }
+            } else if (itemType === 'expense') {
+              if (t.id) deletedExpenseIds.add(t.id);
+              if (t.originalId) deletedExpenseIds.add(t.originalId);
+              if (t.recordData?.id) deletedExpenseIds.add(t.recordData.id);
+            } else if (itemType === 'salary') {
+              if (t.id) deletedSalaryIds.add(t.id);
+              if (t.originalId) deletedSalaryIds.add(t.originalId);
+              if (t.recordData?.id) deletedSalaryIds.add(t.recordData.id);
+            } else if (itemType === 'user') {
+              if (t.id) deletedUserIds.add(t.id);
+              if (t.originalId) deletedUserIds.add(t.originalId);
+              if (t.recordData?.id) deletedUserIds.add(t.recordData.id);
+            }
+          });
+        }
+
+        // If db connection succeeds and users collection is completely unseeded, safely initialize default admin user accounts without touching or wiping payments or student data!
         if (dbUsers.length === 0) {
-          console.log('Firebase collections are unseeded. Performing initial core bootstrap sync...');
-          
-          const skipDemo = (dbSettings?.disableDemoData || systemSettings?.disableDemoData);
-          let parsedLocalUsers = INITIAL_USERS;
-          let parsedLocalStudents = skipDemo ? [] : INITIAL_STUDENTS;
-          let parsedLocalPayments = skipDemo ? [] : generateSeedPayments();
-          let parsedLocalTerms = [{
-            id: 'term_default',
-            name: 'Term 1 (April - August 2026)',
-            startDate: '2026-04-27',
-            daysCount: 75,
-            schoolDays: generateSchoolDays('2026-04-27', 75),
-            active: true
-          }];
-          
-          try {
-            if (localUsers) {
-              const u = typeof localUsers === 'string' ? JSON.parse(localUsers) : localUsers;
-              if (Array.isArray(u) && u.length > 0) parsedLocalUsers = u;
-            }
-          } catch (e) {}
-          
-          try {
-            if (localStudents) {
-              const s = typeof localStudents === 'string' ? JSON.parse(localStudents) : localStudents;
-              if (Array.isArray(s) && s.length > 0) parsedLocalStudents = s;
-            }
-          } catch (e) {}
-
-          try {
-            if (localPayments) {
-              const p = typeof localPayments === 'string' ? JSON.parse(localPayments) : localPayments;
-              if (Array.isArray(p) && p.length > 0) parsedLocalPayments = p;
-            }
-          } catch (e) {}
-
-          try {
-            if (localTerms) {
-              const t = typeof localTerms === 'string' ? JSON.parse(localTerms) : localTerms;
-              if (Array.isArray(t) && t.length > 0) parsedLocalTerms = t;
-            }
-          } catch (e) {}
-
-          const seeded = await db.seedTables(parsedLocalUsers, parsedLocalStudents, parsedLocalPayments, parsedLocalTerms);
-          if (seeded) {
-            setUsers(parsedLocalUsers);
-            setStudents(parsedLocalStudents);
-            setPayments(parsedLocalPayments);
-            setTerms(parsedLocalTerms);
-            idbEngine.setItem('s_users', parsedLocalUsers);
-            idbEngine.setItem('s_students', parsedLocalStudents);
-            idbEngine.setItem('s_payments', parsedLocalPayments);
-            idbEngine.setItem('s_terms', parsedLocalTerms);
-            return;
-          } else {
-            console.warn('Seeding failed (perhaps due to unauthorized 401 or structural issues). Falling back to local storage.');
-            setFirebaseConnected(false);
-            setStorageModeState('local');
-            setFirebaseError('Relational seeding transaction failed. Reverting to safe local storage mode.');
-            loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries, localBudgetTargets, localEvaluations, localJournalEntries, localExamsPayments, localExamsExpenses, localExamsSettings, localPromoBackups);
-            return;
-          }
+          console.log('Database users collection is unseeded. Creating default initial admin user accounts...');
+          INITIAL_USERS.forEach(u => db.saveUser(u));
         }
 
         const DEMO_STUDENT_ID_SET = new Set(ORIGINAL_DEMO_STUDENT_IDS);
@@ -1476,14 +1583,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           localItems: any,
           cloudItems: T[] | null | undefined,
           saveToCloud: (item: T) => Promise<any>,
-          collectionLabel: string
+          deleteFromCloud: ((id: string) => Promise<any>) | null,
+          collectionLabel: string,
+          deletedIdsSet: Set<string>
         ): T[] => {
           const mergedMap = new Map<string, T>();
           const cloudIds = new Set<string>();
 
           const resolvedCloud = cloudItems || [];
           resolvedCloud.forEach(item => {
-            if (item && item.id && !DEMO_STUDENT_ID_SET.has(item.id)) {
+            if (item && item.id) {
               mergedMap.set(item.id, item);
               cloudIds.add(item.id);
             }
@@ -1499,13 +1608,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
 
           const unsynced: T[] = [];
+
+          const cloudPaymentCompositeMap = new Map<string, string>();
+          if (collectionLabel === 'payments') {
+            resolvedCloud.forEach((item: any) => {
+              if (item && item.id && item.studentId && item.date) {
+                const compKey = `${item.studentId}_${item.date}_${item.amount}_${(item.paymentMethod || 'cash').toLowerCase()}`;
+                cloudPaymentCompositeMap.set(compKey, item.id);
+              }
+            });
+          }
+
           if (Array.isArray(resolvedLocal)) {
             resolvedLocal.forEach(item => {
-              if (item && item.id && !DEMO_STUDENT_ID_SET.has(item.id)) {
-                if ((item as any).studentId && DEMO_STUDENT_ID_SET.has((item as any).studentId)) return;
+              if (item && item.id) {
+                // Prevent resurrected demo data if cloud or local has real data
+                if (collectionLabel === 'students' && (resolvedCloud.length > 0 || (Array.isArray(resolvedLocal) && resolvedLocal.length > 30)) && DEMO_STUDENT_ID_SET.has(item.id)) {
+                  return;
+                }
+                if (collectionLabel === 'payments' && (resolvedCloud.length > 0 || (Array.isArray(resolvedLocal) && resolvedLocal.length > 30)) && (item as any).studentId && DEMO_STUDENT_ID_SET.has((item as any).studentId)) {
+                  return;
+                }
+
+                // Prevent sync collision: if exact same payment exists in cloud with matching student, date, amount, method
+                if (collectionLabel === 'payments' && !cloudIds.has(item.id)) {
+                  const pItem = item as any;
+                  const compKey = `${pItem.studentId}_${pItem.date}_${pItem.amount}_${(pItem.paymentMethod || 'cash').toLowerCase()}`;
+                  if (cloudPaymentCompositeMap.has(compKey)) {
+                    // Item already in cloud under different document ID. Avoid creating duplicate payment document.
+                    return;
+                  }
+                }
+
                 if (!cloudIds.has(item.id)) {
-                  mergedMap.set(item.id, item);
-                  unsynced.push(item);
+                  // Check if this record was soft-deleted in Trash for its specific collection
+                  const wasDeleted = deletedIdsSet.has(item.id) || ((item as any).originalId && deletedIdsSet.has((item as any).originalId));
+                  if (!wasDeleted) {
+                    // Not soft-deleted! This is a valid locally created or updated record. Preserve & sync to cloud!
+                    mergedMap.set(item.id, item);
+                    unsynced.push(item);
+                  }
                 } else {
                   // It exists in both cloud and local. Let's compare them to heal updates
                   const cloudItem = mergedMap.get(item.id);
@@ -1513,7 +1655,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     const localStr = JSON.stringify(item);
                     const cloudStr = JSON.stringify(cloudItem);
                     if (localStr !== cloudStr) {
-                      // They differ! Determine if local is newer or has active changes to push
                       let useLocal = false;
                       const localTime = (item as any).timestamp || (item as any).updatedAt || (item as any).datePaid || (item as any).date;
                       const cloudTime = (cloudItem as any).timestamp || (cloudItem as any).updatedAt || (cloudItem as any).datePaid || (cloudItem as any).date;
@@ -1553,19 +1694,62 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             });
           }
 
+          // Enforce strict single-record-per-(studentId, date) for payments
+          if (collectionLabel === 'payments') {
+            const byStudentDate = new Map<string, any>();
+            const duplicateIdsToDelete: string[] = [];
+
+            Array.from(mergedMap.values()).forEach((p: any) => {
+              if (!p || !p.studentId || !p.date) return;
+              const key = `${p.studentId}_${p.date}`;
+              const existing = byStudentDate.get(key);
+              if (!existing) {
+                byStudentDate.set(key, p);
+              } else {
+                const pTime = new Date(p.timestamp || p.date || 0).getTime();
+                const existTime = new Date(existing.timestamp || existing.date || 0).getTime();
+                let pIsAuthoritative = false;
+                if (p.amount > 0 && existing.amount === 0) {
+                  pIsAuthoritative = true;
+                } else if (p.amount === 0 && existing.amount > 0) {
+                  pIsAuthoritative = false;
+                } else {
+                  pIsAuthoritative = pTime >= existTime;
+                }
+
+                if (pIsAuthoritative) {
+                  duplicateIdsToDelete.push(existing.id);
+                  mergedMap.delete(existing.id);
+                  byStudentDate.set(key, p);
+                } else {
+                  duplicateIdsToDelete.push(p.id);
+                  mergedMap.delete(p.id);
+                }
+              }
+            });
+
+            if (duplicateIdsToDelete.length > 0) {
+              if (deleteFromCloud) {
+                duplicateIdsToDelete.forEach(id => {
+                  try { deleteFromCloud(id); } catch (_) {}
+                });
+              }
+            }
+          }
+
           return Array.from(mergedMap.values());
         };
 
-        const healedUsers = mergeAndHeal(localUsers, dbUsers, db.saveUser, 'users');
-        const healedStudents = mergeAndHeal(localStudents, dbStudents, db.saveStudent, 'students');
-        const healedPayments = mergeAndHeal(localPayments, dbPayments, db.savePayment, 'payments');
-        const healedExpenses = mergeAndHeal(localExpenses, dbExpenses, db.saveExpense, 'expenses');
-        const healedSalaries = mergeAndHeal(localSalaries, dbSalaries, db.saveSalary, 'salaries');
-        const healedBudgetTargets = mergeAndHeal(localBudgetTargets, dbBudgetTargets, db.saveBudgetTarget, 'budget_targets');
-        const healedEvaluations = mergeAndHeal(localEvaluations, dbEvaluations, db.saveTeacherEvaluation, 'teacher_evaluations');
-        const healedJournalEntries = mergeAndHeal(localJournalEntries, dbJournalEntries, db.saveJournalEntry, 'journal_entries');
-        const healedExamsPayments = mergeAndHeal(localExamsPayments, dbExamsPayments, db.saveExamsPayment, 'exams_payments');
-        const healedExamsExpenses = mergeAndHeal(localExamsExpenses, dbExamsExpenses, db.saveExamsExpense, 'exams_expenses');
+        const healedUsers = mergeAndHeal(localUsers, dbUsers, db.saveUser, db.deleteUser || null, 'users', deletedUserIds);
+        const healedStudents = mergeAndHeal(localStudents, dbStudents, db.saveStudent, db.deleteStudent || null, 'students', deletedStudentIds);
+        const healedPayments = mergeAndHeal(localPayments, dbPayments, db.savePayment, db.deletePayment || null, 'payments', deletedPaymentIds);
+        const healedExpenses = mergeAndHeal(localExpenses, dbExpenses, db.saveExpense, db.deleteExpense || null, 'expenses', deletedExpenseIds);
+        const healedSalaries = mergeAndHeal(localSalaries, dbSalaries, db.saveSalary, db.deleteSalary || null, 'salaries', deletedSalaryIds);
+        const healedBudgetTargets = mergeAndHeal(localBudgetTargets, dbBudgetTargets, db.saveBudgetTarget, null, 'budget_targets', new Set());
+        const healedEvaluations = mergeAndHeal(localEvaluations, dbEvaluations, db.saveTeacherEvaluation, null, 'teacher_evaluations', new Set());
+        const healedJournalEntries = mergeAndHeal(localJournalEntries, dbJournalEntries, db.saveJournalEntry, null, 'journal_entries', new Set());
+        const healedExamsPayments = mergeAndHeal(localExamsPayments, dbExamsPayments, db.saveExamsPayment, db.deleteExamsPayment || null, 'exams_payments', new Set());
+        const healedExamsExpenses = mergeAndHeal(localExamsExpenses, dbExamsExpenses, db.saveExamsExpense, db.deleteExamsExpense || null, 'exams_expenses', new Set());
 
         setUsers(healedUsers);
         setStudents(healedStudents);
@@ -1644,10 +1828,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           } else {
             const initialTerms = [{
               id: 'term_default',
-              name: 'Term 1 (April - August 2026)',
+              name: 'Term 3 (April - July 2026)',
               startDate: '2026-04-27',
-              daysCount: 75,
-              schoolDays: generateSchoolDays('2026-04-27', 75),
+              daysCount: 68,
+              schoolDays: generateSchoolDays('2026-04-27', 68),
+              publicHolidays: ['2026-05-01', '2026-05-25', '2026-07-01'],
               active: true
             }];
             setTerms(initialTerms);
@@ -1662,6 +1847,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         
         // Auto-revert storageMode selection to prevent lagging subsequent state mutations
         setStorageModeState('local');
+        loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries, localBudgetTargets, localEvaluations, localJournalEntries, localExamsPayments, localExamsExpenses, localExamsSettings, localPromoBackups);
 
         let displayError = "Cloud Sync timed out or was rejected. We have safely switched you to the Local Ledger so you can keep work saved locally.";
         try {
@@ -1738,7 +1924,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try {
         if (localStudents) {
           const parsed = typeof localStudents === 'string' ? JSON.parse(localStudents) : localStudents;
-          const clean = Array.isArray(parsed) ? parsed.filter((s: any) => s && s.id && !ORIGINAL_DEMO_STUDENT_IDS.includes(s.id)) : [];
+          const clean = Array.isArray(parsed) ? parsed.filter((s: any) => s && s.id) : [];
           if (clean.length > 0) {
             setStudents(clean);
           } else {
@@ -1746,7 +1932,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               .then(res => res.json())
               .then((list: Student[]) => {
                 if (Array.isArray(list) && list.length > 0) {
-                  const filtered = list.filter((s: any) => s && s.id && !ORIGINAL_DEMO_STUDENT_IDS.includes(s.id));
+                  const filtered = list.filter((s: any) => s && s.id);
                   setStudents(filtered);
                   idbEngine.setItem('s_students', filtered);
                 }
@@ -1757,7 +1943,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             .then(res => res.json())
             .then((list: Student[]) => {
               if (Array.isArray(list) && list.length > 0) {
-                const filtered = list.filter((s: any) => s && s.id && !ORIGINAL_DEMO_STUDENT_IDS.includes(s.id));
+                const filtered = list.filter((s: any) => s && s.id);
                 setStudents(filtered);
                 idbEngine.setItem('s_students', filtered);
               }
@@ -1768,7 +1954,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           .then(res => res.json())
           .then((list: Student[]) => {
             if (Array.isArray(list) && list.length > 0) {
-              const filtered = list.filter((s: any) => s && s.id && !ORIGINAL_DEMO_STUDENT_IDS.includes(s.id));
+              const filtered = list.filter((s: any) => s && s.id);
               setStudents(filtered);
               idbEngine.setItem('s_students', filtered);
             }
@@ -1782,19 +1968,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (Array.isArray(parsed) && parsed.length > 0) {
             setPayments(parsed);
           } else {
-            const seeds = generateSeedPayments();
-            setPayments(seeds);
-            idbEngine.setItem('s_payments', seeds);
+            fetch('/api/payments')
+              .then(res => res.json())
+              .then((list: PaymentRecord[]) => {
+                if (Array.isArray(list) && list.length > 0) {
+                  setPayments(list);
+                  idbEngine.setItem('s_payments', list);
+                }
+              }).catch(() => {});
           }
         } else {
-          const seeds = generateSeedPayments();
-          setPayments(seeds);
-          idbEngine.setItem('s_payments', seeds);
+          fetch('/api/payments')
+            .then(res => res.json())
+            .then((list: PaymentRecord[]) => {
+              if (Array.isArray(list) && list.length > 0) {
+                setPayments(list);
+                idbEngine.setItem('s_payments', list);
+              }
+            }).catch(() => {});
         }
       } catch (e) {
-        const seeds = generateSeedPayments();
-        setPayments(seeds);
-        idbEngine.setItem('s_payments', seeds);
+        fetch('/api/payments')
+          .then(res => res.json())
+          .then((list: PaymentRecord[]) => {
+            if (Array.isArray(list) && list.length > 0) {
+              setPayments(list);
+              idbEngine.setItem('s_payments', list);
+            }
+          }).catch(() => {});
       }
 
       // Terms database healing
@@ -1807,10 +2008,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         } else {
           const initialTerms = [{
             id: 'term_default',
-            name: 'Term 1 (April - August 2026)',
+            name: 'Term 3 (April - July 2026)',
             startDate: '2026-04-27',
-            daysCount: 75,
-            schoolDays: generateSchoolDays('2026-04-27', 75),
+            daysCount: 68,
+            schoolDays: generateSchoolDays('2026-04-27', 68),
+            publicHolidays: ['2026-05-01', '2026-05-25', '2026-07-01'],
             active: true
           }];
           setTerms(initialTerms);
@@ -1819,10 +2021,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (e) {
         const initialTerms = [{
           id: 'term_default',
-          name: 'Term 1 (April - August 2026)',
+          name: 'Term 3 (April - July 2026)',
           startDate: '2026-04-27',
-          daysCount: 75,
-          schoolDays: generateSchoolDays('2026-04-27', 75),
+          daysCount: 68,
+          schoolDays: generateSchoolDays('2026-04-27', 68),
+          publicHolidays: ['2026-05-01', '2026-05-25', '2026-07-01'],
           active: true
         }];
         setTerms(initialTerms);
@@ -2064,7 +2267,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       idbEngine.setItem('s_current_user', updatedUser);
     }
     saveState(nextUsers, students, payments);
-    if (updatedUser && db.isActive() && storageMode === 'cloud') {
+    if (updatedUser && db.isActive()) {
       db.saveUser(updatedUser);
     } else if (updatedUser) {
       recordLocallyPendingEdit('user', 'update', `Updated password for account: "${updatedUser.name}"`);
@@ -2080,9 +2283,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return await firebaseSendPasswordReset(trimmed);
   };
 
+  // Listen to Firebase Auth state changes
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(firebaseAuth, (fbUser) => {
+      if (fbUser && fbUser.email) {
+        const found = users.find(u => u.email.toLowerCase() === fbUser.email?.toLowerCase());
+        if (found) {
+          setCurrentUser(prev => prev?.id === found.id ? prev : found);
+          idbEngine.setItem('s_current_user', found);
+        }
+      }
+    });
+    return () => unsubscribe();
+  }, [users]);
+
   const logout = () => {
     setCurrentUser(null);
     idbEngine.removeItem('s_current_user');
+    firebaseSignOut().catch(() => {});
   };
 
   const toggleMfaForUser = (userId: string) => {
@@ -2105,14 +2323,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       idbEngine.setItem('s_current_user', updatedUser);
     }
     saveState(updated, students, payments);
-    if (updatedUser && db.isActive() && storageMode === 'cloud') {
+    if (updatedUser && db.isActive()) {
       db.saveUser(updatedUser);
     } else if (updatedUser) {
       recordLocallyPendingEdit('user', 'update', `Toggled MFA security for staff: "${updatedUser.name}"`);
     }
   };
 
-  const registerStaff = (name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled = false, passwordEnabled = false, password = '', assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string, photoUrl?: string, employeeId?: string, department?: string, gender?: 'Male' | 'Female', employmentType?: 'Full-Time' | 'Part-Time' | 'Contract' | 'Volunteer', appointmentDate?: string, contractEndDate?: string, renewalOption?: 'Automatic' | 'Manual Review' | 'Fixed Term' | 'Non-Renewable', renewalPeriod?: string, personalAddress?: string) => {
+  const registerStaff = (name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled = false, passwordEnabled = false, password = '', assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string, photoUrl?: string, employeeId?: string, department?: string, gender?: 'Male' | 'Female', employmentType?: 'Full-Time' | 'Part-Time' | 'Contract' | 'Volunteer', appointmentDate?: string, contractEndDate?: string, renewalOption?: 'Automatic' | 'Manual Review' | 'Fixed Term' | 'Non-Renewable', renewalPeriod?: string, personalAddress?: string, permissions?: StaffPermissions) => {
     const trimmedEmail = email.toLowerCase().trim();
     if (users.some(u => u.email.toLowerCase() === trimmedEmail)) {
       return { success: false, error: 'A staff member with this email is already registered.' };
@@ -2120,6 +2338,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const finalClasses = role === 'Teacher' ? (assignedClasses || (assignedClass ? [assignedClass] : [])) : undefined;
     const finalClass = role === 'Teacher' ? (assignedClass || (finalClasses && finalClasses.length > 0 ? finalClasses[0] : undefined)) : undefined;
+
+    const defaultPerms: StaffPermissions = {
+      canRecordPayments: true,
+      canEditPayments: role === 'Administrator' || role === 'Headmaster' || role === 'Accountant',
+      canDeletePayments: role === 'Administrator' || role === 'Headmaster',
+      canManageStudents: role !== 'Teacher',
+      canManageExams: true,
+      canViewReports: role !== 'Teacher',
+      canManageSettings: role === 'Administrator' || role === 'Headmaster'
+    };
 
     const newUser: UserAccount = {
       id: 'staff_' + Date.now(),
@@ -2144,13 +2372,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       contractEndDate,
       renewalOption,
       renewalPeriod,
-      personalAddress
+      personalAddress,
+      permissions: permissions || defaultPerms
     };
 
     const nextUsers = [...users, newUser];
     setUsers(nextUsers);
     saveState(nextUsers, students, payments);
-    if (db.isActive() && storageMode === 'cloud') {
+    if (db.isActive()) {
       db.saveUser(newUser);
     } else {
       recordLocallyPendingEdit('user', 'create', `Created user staff account: "${name}" (${role})`);
@@ -2158,7 +2387,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
-  const updateStaff = (userId: string, name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled = false, passwordEnabled = false, password = '', assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string, photoUrl?: string, employeeId?: string, department?: string, gender?: 'Male' | 'Female', employmentType?: 'Full-Time' | 'Part-Time' | 'Contract' | 'Volunteer', idCardDeactivated?: boolean, appointmentDate?: string, contractEndDate?: string, renewalOption?: 'Automatic' | 'Manual Review' | 'Fixed Term' | 'Non-Renewable', renewalPeriod?: string, signatureUrl?: string, managementSignatureUrl?: string, personalAddress?: string, ethicsEvaluation?: TeacherEthicsEvaluation) => {
+  const updateStaff = (userId: string, name: string, email: string, role: UserRole, assignedClass?: StudentClass, mfaEnabled = false, passwordEnabled = false, password = '', assignedClasses?: StudentClass[], stipendSalary?: number, momoNumber?: string, momoName?: string, photoUrl?: string, employeeId?: string, department?: string, gender?: 'Male' | 'Female', employmentType?: 'Full-Time' | 'Part-Time' | 'Contract' | 'Volunteer', idCardDeactivated?: boolean, appointmentDate?: string, contractEndDate?: string, renewalOption?: 'Automatic' | 'Manual Review' | 'Fixed Term' | 'Non-Renewable', renewalPeriod?: string, signatureUrl?: string, managementSignatureUrl?: string, personalAddress?: string, ethicsEvaluation?: TeacherEthicsEvaluation, permissions?: StaffPermissions) => {
     const trimmedEmail = email.toLowerCase().trim();
     if (users.some(u => u.email.toLowerCase() === trimmedEmail && u.id !== userId)) {
       return { success: false, error: 'A staff member with this email is already registered.' };
@@ -2196,7 +2425,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           signatureUrl: signatureUrl !== undefined ? signatureUrl : u.signatureUrl,
           managementSignatureUrl: managementSignatureUrl !== undefined ? managementSignatureUrl : u.managementSignatureUrl,
           personalAddress: personalAddress !== undefined ? personalAddress : u.personalAddress,
-          ethicsEvaluation: ethicsEvaluation !== undefined ? ethicsEvaluation : u.ethicsEvaluation
+          ethicsEvaluation: ethicsEvaluation !== undefined ? ethicsEvaluation : u.ethicsEvaluation,
+          permissions: permissions !== undefined ? permissions : u.permissions
         };
         return updatedUser;
       }
@@ -2209,7 +2439,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       idbEngine.setItem('s_current_user', updatedUser);
     }
     saveState(nextUsers, students, payments);
-    if (updatedUser && db.isActive() && storageMode === 'cloud') {
+    if (updatedUser && db.isActive()) {
       db.saveUser(updatedUser);
     } else if (updatedUser) {
       recordLocallyPendingEdit('user', 'update', `Updated settings for staff: "${updatedUser.name}"`);
@@ -2256,7 +2486,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     saveState(nextUsers, students, payments);
 
-    if (db.isActive() && storageMode === 'cloud') {
+    if (db.isActive()) {
       updatedUsersList.forEach(u => db.saveUser(u));
     } else {
       recordLocallyPendingEdit('user', 'update', `Batch adjusted wages/salaries for ${updatedUsersList.length} worker(s).`);
@@ -2303,7 +2533,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setUsers(nextUsers);
     saveState(nextUsers, students, payments);
-    if (updatedUser && db.isActive() && storageMode === 'cloud') {
+    if (updatedUser && db.isActive()) {
       db.saveUser(updatedUser);
     } else if (updatedUser) {
       recordLocallyPendingEdit('user', 'update', `Toggled active status for staff: "${updatedUser.name}"`);
@@ -2343,10 +2573,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const category = getClassCategory(className);
-    const prefix = className.startsWith('KG') ? className : className.startsWith('Nursery') ? 'NS' : className;
-    const year = new Date().getFullYear();
-    const count = students.filter(s => s.class === className).length + 1;
-    const rollNumber = `${prefix}-${year}-${String(count).padStart(3, '0')}`;
+    const rollNumber = generateNextPupilId(students, className, systemSettings);
 
     let adjustedLegacyDebt = legacyDebt;
     if (enrollmentDate && activeTerm && activeTerm.schoolDays && activeTerm.schoolDays.length > 0) {
@@ -2390,7 +2617,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const nextStudents = [...students, newStudent];
     setStudents(nextStudents);
     saveState(users, nextStudents, payments);
-    if (db.isActive() && storageMode === 'cloud') {
+    if (db.isActive()) {
       db.saveStudent(newStudent);
     } else {
       recordLocallyPendingEdit('student', 'create', `Admitted new pupil: "${name}" (${className})`);
@@ -2417,7 +2644,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const nextStudents = students.map(s => s.id === updatedStudent.id ? studentWithTimestamp : s);
     setStudents(nextStudents);
     saveState(users, nextStudents, payments);
-    if (db.isActive() && storageMode === 'cloud') {
+    if (db.isActive()) {
       db.saveStudent(studentWithTimestamp);
     } else {
       recordLocallyPendingEdit('student', 'update', `Updated record for pupil: "${updatedStudent.name}"`);
@@ -2431,6 +2658,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
     const targetStudent = students.find(s => s.id === studentId);
+    const targetStudentPayments = payments.filter(p => p.studentId === studentId);
+
+    if (targetStudent) {
+      moveToTrash(
+        'student',
+        studentId,
+        { student: targetStudent, payments: targetStudentPayments },
+        `Deleted pupil profile "${targetStudent.name}" (${targetStudent.class}) along with ${targetStudentPayments.length} payment records`,
+        {
+          studentId: targetStudent.id,
+          studentName: targetStudent.name,
+          class: targetStudent.class,
+          itemCount: targetStudentPayments.length
+        }
+      );
+    }
+
     const nextStudents = students.filter(s => s.id !== studentId);
     const nextPayments = payments.filter(p => p.studentId !== studentId);
     setStudents(nextStudents);
@@ -2442,7 +2686,115 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (storageMode !== 'cloud') {
       recordLocallyPendingEdit('student', 'delete', `Removed pupil: "${targetStudent?.name || 'Unknown'}" from active register`);
     }
-    logActivity('STUDENT_DELETED', 'students', `Permanently deleted pupil record for "${targetStudent?.name || 'Unknown'}"`, studentId, targetStudent?.name);
+    logActivity(
+      'STUDENT_DELETED',
+      'students',
+      `Permanently deleted pupil record for "${targetStudent?.name || 'Unknown'}"`,
+      studentId,
+      targetStudent?.name,
+      undefined,
+      targetStudent ? {
+        type: 'student',
+        student: targetStudent,
+        payments: targetStudentPayments
+      } : undefined
+    );
+  };
+
+  const mergeStudents = (primaryStudentId: string, duplicateStudentId: string): { success: boolean; message: string } => {
+    if (currentUser?.role !== 'Administrator') {
+      alert('Access Denied: Only Administrators are permitted to merge student records.');
+      return { success: false, message: 'Access Denied' };
+    }
+
+    const primary = students.find(s => s.id === primaryStudentId);
+    const duplicate = students.find(s => s.id === duplicateStudentId);
+
+    if (!primary || !duplicate) {
+      return { success: false, message: 'Student records not found.' };
+    }
+
+    // 1. Re-link regular daily payments
+    let movedPaymentsCount = 0;
+    const nextPayments = payments.map(p => {
+      if (p.studentId === duplicateStudentId) {
+        movedPaymentsCount++;
+        const remapped = {
+          ...p,
+          studentId: primaryStudentId,
+          studentName: primary.name,
+          class: primary.class
+        };
+        if (db.isActive()) {
+          db.savePayment(remapped);
+        }
+        return remapped;
+      }
+      return p;
+    });
+
+    // 2. Re-link exam fee payments
+    let movedExamsCount = 0;
+    const nextExamsPayments = examsPayments.map(ep => {
+      if (ep.studentId === duplicateStudentId) {
+        movedExamsCount++;
+        const remapped = {
+          ...ep,
+          studentId: primaryStudentId,
+          studentName: primary.name,
+          class: primary.class
+        };
+        if (db.isActive()) {
+          db.saveExamsPayment(remapped);
+        }
+        return remapped;
+      }
+      return ep;
+    });
+
+    // 3. Combine pupil profile metadata
+    const mergedStudent: Student = {
+      ...primary,
+      parentPhone: primary.parentPhone || duplicate.parentPhone || '',
+      parentName: primary.parentName || duplicate.parentName || '',
+      guardianName: primary.guardianName || duplicate.guardianName || '',
+      guardianPhone: primary.guardianPhone || duplicate.guardianPhone || '',
+      discount: Math.max(primary.discount || 0, duplicate.discount || 0),
+      legacyDebt: (primary.legacyDebt || 0) + (duplicate.legacyDebt || 0),
+      updatedAt: new Date().toISOString()
+    };
+
+    // 4. Update student list (keep primary, remove duplicate)
+    const nextStudents = students
+      .map(s => (s.id === primaryStudentId ? mergedStudent : s))
+      .filter(s => s.id !== duplicateStudentId);
+
+    setStudents(nextStudents);
+    setPayments(nextPayments);
+    setExamsPayments(nextExamsPayments);
+
+    idbEngine.setItem('s_students', nextStudents);
+    idbEngine.setItem('s_payments', nextPayments);
+    idbEngine.setItem('s_exams_payments', nextExamsPayments);
+
+    saveState(users, nextStudents, nextPayments);
+
+    if (db.isActive()) {
+      db.saveStudent(mergedStudent);
+      db.deleteStudent(duplicateStudentId);
+    }
+
+    const msg = `Merged duplicate pupil "${duplicate.name}" (${duplicate.class}) into primary record "${primary.name}" (${primary.class}). Reassigned ${movedPaymentsCount} daily payment(s) and ${movedExamsCount} exam payment(s).`;
+
+    logActivity(
+      'STUDENTS_MERGED',
+      'students',
+      msg,
+      primaryStudentId,
+      primary.name
+    );
+
+    return { success: true, message: msg };
   };
 
   const purgeDeactivatedStudents = () => {
@@ -2471,6 +2823,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const standardizePupilIds = (formatStyle?: PupilIdFormatStyle): { updatedCount: number; message: string } => {
+    const { updatedStudents, changedCount } = standardizeAllPupilIds(students, systemSettings, formatStyle);
+    if (changedCount > 0) {
+      setStudents(updatedStudents);
+      saveState(users, updatedStudents, payments);
+      if (db.isActive()) {
+        updatedStudents.forEach(s => db.saveStudent(s));
+      } else {
+        recordLocallyPendingEdit('student', 'update', `Standardized Pupil IDs across ${changedCount} pupils`);
+      }
+      logActivity('SYSTEM_BACKUP_CREATED', 'students', `Standardized Pupil IDs for ${changedCount} pupils in format: ${formatStyle || systemSettings?.pupilIdFormat || 'PREFIX_CLASS_NUM'}`);
+    }
+    return {
+      updatedCount: changedCount,
+      message: changedCount > 0
+        ? `Successfully formatted & standardized ${changedCount} Pupil IDs across the school roster!`
+        : `All pupil IDs are already formatted according to the selected standard.`
+    };
+  };
+
   const checkAndSendCheckInAlert = (studentId: string) => {
     if (!systemSettings?.autoSendCheckInAlert) return;
 
@@ -2489,10 +2861,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (alreadySentCheckIn) return;
 
     const timeString = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    const formattedId = formatPupilId(student, systemSettings);
     const message = `*${systemSettings.schoolName || 'SAAKO HOLY CHILD ACADEMY'}*\n` +
       `*ATTENDANCE GATE CHECK-IN*\n\n` +
       `Dear Parent/Guardian,\n` +
-      `Your ward *${student.name}* (Roll: ${student.rollNumber || 'N/A'}, Class: ${student.class}) has checked-in safely at school today on *${currentDate}* at *${timeString}*.\n\n` +
+      `Your ward *${student.name}* (Pupil ID: ${formattedId}, Class: ${student.class}) has checked-in safely at school today on *${currentDate}* at *${timeString}*.\n\n` +
       `Thank you for choosing ${systemSettings.schoolName || 'Saako Holy Child Academy'}!`;
 
     // Trigger asynchronously
@@ -2523,13 +2896,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (alreadySentArrears) return;
 
     const baseDailyFee = systemSettings?.baselineDailyFee ?? 5.00;
-    const debtInfo = calculateStudentFinancialState(student, payments, activeTerm, currentDate, baseDailyFee, systemSettings);
+    const debtInfo = calculateStudentFinancialState(student, payments, activeTerm, currentDate, baseDailyFee, systemSettings, terms);
 
     if (!debtInfo || debtInfo.totalDebt <= 0) return;
 
-    const rollNumber = student.rollNumber || 'SHC-' + student.id.substring(0, 5).toUpperCase();
+    const formattedPupilId = formatPupilId(student, systemSettings);
     const classGroup = `${student.class} (${student.category})`;
-    const isTerm = student.paymentType === 'Term';
+    const isTerm = isTermPayer(student);
     const totalArrears = debtInfo.totalDebt || 0;
     const daysCount = debtInfo.pastUnpaidDays?.length || 0;
 
@@ -2545,7 +2918,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       `Dear Guardian,\n\n` +
       `This is an official administrative notice regarding the financial account of your ward:\n` +
       `*Student Name:* ${student.name}\n` +
-      `*Roll ID:* ${rollNumber}\n` +
+      `*Pupil ID:* ${formattedPupilId}\n` +
       `*Class/Grade:* ${classGroup}\n\n` +
       `${detailsText}\n\n` +
       `Kindly make arrangements to settle this outstanding balance of *GHC ${totalArrears.toFixed(2)}* at the school gate check-in desk or make a direct transfer to avoid any interruption to your ward's daily registration and classroom entry.\n\n` +
@@ -2605,12 +2978,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
-    // Strict Public Holiday Guard: Gate check-ins and fee collections are disabled on public holidays
+    // Strict Public Holiday & Vacation Break Guard: Gate check-ins and fee collections are disabled on public holidays or vacation breaks
     const isPublicHoliday = activeTerm?.publicHolidays?.includes(currentDate);
-    if (isPublicHoliday) {
+    const isInVacationBreak = isDateInTermGap(currentDate, terms);
+    if (isPublicHoliday || isInVacationBreak) {
       playFeedbackSound('error');
-      console.warn(`Gate check-in / fee collection rejected on ${currentDate}: Today is a declared public holiday.`);
+      console.warn(`Gate check-in / fee collection rejected on ${currentDate}: Today is a declared holiday / vacation break.`);
+      alert(`Fee Collection Rejected:\n\nDate ${currentDate} is a Vacation / Holiday Break. Pupils are exempt from fees during vacation breaks.`);
       return;
+    }
+
+    // Strict Term Gate & Calendar Boundary Enforcement Guard
+    let targetPaymentDate = currentDate;
+    if (activeTerm && activeTerm.schoolDays && activeTerm.schoolDays.length > 0) {
+      const lastTermDay = activeTerm.schoolDays[activeTerm.schoolDays.length - 1];
+      const isPostTermDate = currentDate > lastTermDay;
+
+      if (activeTerm.isCompleted || isPostTermDate) {
+        playFeedbackSound('error');
+        const reasonStr = activeTerm.isCompleted 
+          ? `Term Gate Closed: ${activeTerm.name} is marked as COMPLETED / CLOSED.`
+          : `Term Calendar Boundary Reached: Active term ended on ${lastTermDay}. Selected date (${currentDate}) is outside the active term.`;
+
+        const proceed = window.confirm(
+          `${reasonStr}\n\n` +
+          `Fee entries during holiday/vacation breaks cannot be recorded on post-term dates like ${currentDate}.\n\n` +
+          `Would you like to assign this fee payment entry to the last official school day of the active term (${lastTermDay})?\n\n` +
+          `• Click OK to log under term date: ${lastTermDay}\n` +
+          `• Click Cancel to stop and create/activate the next term.`
+        );
+
+        if (!proceed) {
+          console.warn(`Payment record rejected: Term gate closed / post-term date ${currentDate}.`);
+          return;
+        }
+
+        targetPaymentDate = lastTermDay;
+        customNotes = customNotes 
+          ? `${customNotes} (Assigned to Term End Date ${lastTermDay})` 
+          : `Holiday payment assigned to Term End Date ${lastTermDay}`;
+      }
     }
 
     const student = students.find(s => s.id === studentId);
@@ -2632,24 +3039,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const baseDailyFee = systemSettings?.baselineDailyFee ?? 5.00;
     const finalAmount = customAmount !== undefined ? customAmount : Math.max(0, baseDailyFee - discountAmount);
 
-    // Duplicate check: if the same fee record is being submitted multiple times (same date, same amount)
-    const duplicatePayment = payments.find(p => 
-      p.studentId === studentId && 
-      p.date === currentDate && 
-      Math.abs(p.amount - finalAmount) < 0.01 && 
-      !p.isAbsent
-    );
-    if (duplicatePayment && !allowDuplicate) {
-      const proceed = window.confirm(`Warning: A payment of GHC ${finalAmount.toFixed(2)} has already been recorded for ${student.name} on ${currentDate}.\n\nSubmitting again will log a duplicate payment. Are you sure you want to log this duplicate payment?`);
-      if (!proceed) {
-        return;
-      }
-    }
-
     const dailyRate = Math.max(0.01, baseDailyFee - discountAmount);
 
     // 0. Handle Term Payers differently
-    if (student.paymentType === 'Term') {
+    if (isTermPayer(student)) {
       const isCustomFinancial = customAmount !== undefined && customAmount > 0;
       const existingIndex = (allowDuplicate || isCustomFinancial) 
         ? -1 
@@ -2698,7 +3091,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       setPayments(nextPayments);
       saveState(users, students, nextPayments);
-      if (db.isActive() && storageMode === 'cloud') {
+      if (db.isActive()) {
         db.savePayment(recordToSave);
       } else {
         recordLocallyPendingEdit('payment', 'create', `Logged term flat payment of GHC ${resolvedAmount.toFixed(2)} for pupil: "${student.name}"`);
@@ -2727,7 +3120,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const totalRequired = multiplyCurrency(billableDays.length, dailyRate);
     const totalPaid = studentPayments
-      .filter(p => !p.isAbsent)
+      .filter(p => !p.isAbsent && p.verified !== false && p.amount > 0)
       .reduce((sum, p) => addCurrency(sum, p.amount), 0);
 
     const totalDebt = Math.max(0, subtractCurrency(totalRequired, totalPaid));
@@ -2947,7 +3340,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setPayments(nextPayments);
       saveState(users, students, nextPayments);
 
-      if (db.isActive() && storageMode === 'cloud') {
+      if (db.isActive()) {
         recordsToSync.forEach(rec => {
           db.savePayment(rec);
         });
@@ -2959,44 +3352,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       checkAndSendCheckInAlert(studentId);
       checkAndSendArrearsAlert(studentId);
     } else {
-      // Standard payment with NO debt
-      const existingIndex = allowDuplicate ? -1 : payments.findIndex(p => p.studentId === studentId && p.date === currentDate && !p.id.endsWith('_debt'));
-      let nextPayments = [...payments];
-      let recordToSave: PaymentRecord;
+      // Standard payment override check: replace/delete ALL existing payment records on this date to prioritize the new entry and eliminate duplicates
+      const existingMatches = payments.filter(p => p.studentId === studentId && p.date === targetPaymentDate);
+      const paymentIdsToDelete: string[] = existingMatches.map(p => p.id);
 
-      if (existingIndex > -1) {
-        recordToSave = {
-          ...nextPayments[existingIndex],
-          amount: finalAmount,
-          isAbsent: false,
-          verified,
-          notes: customNotes !== undefined ? customNotes : (customAmount !== undefined ? `Custom amount GHC ${finalAmount.toFixed(2)} processed` : (discountAmount > 0 ? `Applied dynamic discount of GHC ${discountAmount.toFixed(2)}` : undefined)),
-          timestamp: new Date().toISOString()
-        };
-        recordToSave = applyLateFeeIfApplicable(student, recordToSave);
-        nextPayments[existingIndex] = recordToSave;
-      } else {
-        recordToSave = {
-          id: allowDuplicate ? `p_${studentId}_${currentDate}_dup_${Date.now()}` : `p_${studentId}_${currentDate}`,
-          studentId: student.id,
-          studentName: student.name,
-          class: student.class,
-          category: student.category,
-          amount: finalAmount,
-          date: currentDate,
-          timestamp: new Date().toISOString(),
-          collectedBy: currentUser ? currentUser.name : 'System Host',
-          verified,
-          isAbsent: false,
-          notes: customNotes !== undefined ? customNotes : (customAmount !== undefined ? `Custom amount GHC ${finalAmount.toFixed(2)} processed` : (discountAmount > 0 ? `Applied dynamic discount of GHC ${discountAmount.toFixed(2)}` : undefined))
-        };
-        recordToSave = applyLateFeeIfApplicable(student, recordToSave);
-        nextPayments.push(recordToSave);
-      }
+      const stdNextPayments = payments.filter(p => !(p.studentId === studentId && p.date === targetPaymentDate));
+      const canonicalId = `p_${studentId}_${targetPaymentDate}`;
+      
+      let recordToSave: PaymentRecord = {
+        id: canonicalId,
+        studentId: student.id,
+        studentName: student.name,
+        class: student.class,
+        category: student.category,
+        amount: finalAmount,
+        date: targetPaymentDate,
+        timestamp: new Date().toISOString(),
+        collectedBy: currentUser ? currentUser.name : 'System Host',
+        verified,
+        isAbsent: false,
+        notes: customNotes !== undefined ? customNotes : (customAmount !== undefined ? `Custom amount GHC ${finalAmount.toFixed(2)} processed` : (discountAmount > 0 ? `Applied dynamic discount of GHC ${discountAmount.toFixed(2)}` : undefined))
+      };
+      recordToSave = applyLateFeeIfApplicable(student, recordToSave);
+      stdNextPayments.push(recordToSave);
 
-      setPayments(nextPayments);
-      saveState(users, students, nextPayments);
-      if (db.isActive() && storageMode === 'cloud') {
+      setPayments(stdNextPayments);
+      saveState(users, students, stdNextPayments);
+      if (db.isActive()) {
+        paymentIdsToDelete.forEach(id => {
+          if (id !== canonicalId) db.deletePayment(id);
+        });
         db.savePayment(recordToSave);
       } else {
         recordLocallyPendingEdit('payment', 'create', `Logged GHC ${finalAmount.toFixed(2)} payment for pupil: "${student.name}"${discountAmount > 0 && customAmount === undefined ? ` (GHC ${discountAmount.toFixed(2)} Discount applied)` : ''}`);
@@ -3052,7 +3437,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setPayments(nextPayments);
     saveState(users, students, nextPayments);
 
-    if (db.isActive() && storageMode === 'cloud') {
+    if (db.isActive()) {
       db.savePayment(recordToSave);
     } else {
       recordLocallyPendingEdit('payment', 'create', `Simulated Mobile Money Payment of GHC ${amount.toFixed(2)} for ${student.name}`);
@@ -3073,40 +3458,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const student = students.find(s => s.id === studentId);
     if (!student) return;
 
-    const existingIndex = payments.findIndex(p => p.studentId === studentId && p.date === currentDate && !p.id.endsWith('_debt'));
-    let nextPayments = [...payments];
-    let recordToSave: PaymentRecord;
+    const existingMatches = payments.filter(p => p.studentId === studentId && p.date === currentDate);
+    const idsToDelete = existingMatches.map(p => p.id);
+    let nextPayments = payments.filter(p => !(p.studentId === studentId && p.date === currentDate));
+    const canonicalId = `p_${studentId}_${currentDate}`;
 
-    if (existingIndex > -1) {
-      recordToSave = {
-        ...nextPayments[existingIndex],
-        amount: 0,
-        isAbsent: true,
-        notes: 'Marked as Absent today',
-        timestamp: new Date().toISOString()
-      };
-      nextPayments[existingIndex] = recordToSave;
-    } else {
-      recordToSave = {
-        id: `p_${studentId}_${currentDate}`,
-        studentId: student.id,
-        studentName: student.name,
-        class: student.class,
-        category: student.category,
-        amount: 0,
-        date: currentDate,
-        timestamp: new Date().toISOString(),
-        collectedBy: currentUser ? currentUser.name : 'System Host',
-        verified: true,
-        isAbsent: true,
-        notes: 'Marked as Absent today'
-      };
-      nextPayments.push(recordToSave);
-    }
+    const recordToSave: PaymentRecord = {
+      id: canonicalId,
+      studentId: student.id,
+      studentName: student.name,
+      class: student.class,
+      category: student.category,
+      amount: 0,
+      date: currentDate,
+      timestamp: new Date().toISOString(),
+      collectedBy: currentUser ? currentUser.name : 'System Host',
+      verified: true,
+      isAbsent: true,
+      notes: 'Marked as Absent today'
+    };
+    nextPayments.push(recordToSave);
 
     setPayments(nextPayments);
     saveState(users, students, nextPayments);
-    if (db.isActive() && storageMode === 'cloud') {
+    if (db.isActive()) {
+      idsToDelete.forEach(id => {
+        if (id !== canonicalId) db.deletePayment(id);
+      });
       db.savePayment(recordToSave);
     } else {
       recordLocallyPendingEdit('payment', 'create', `Marked pupil: "${student?.name || 'Pupil'}" as Absent`);
@@ -3118,7 +3496,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!student) return;
 
     // If student is term payer, standard advance payment redirects to recordPayment
-    if (student.paymentType === 'Term') {
+    if (isTermPayer(student)) {
       recordPayment(studentId, verified, amount);
       return;
     }
@@ -3172,8 +3550,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // 2. Fallback: If some days couldn't be filled due to existing payments,
-    // let's grab the next available days from the term (even if already paid/override if necessary) 
-    // to complete the days count, so the teacher has their full credits applied.
+    // grab remaining available days strictly within the active term's schoolDays.
+    // NOTE: We do NOT generate auxiliary out-of-term days (like September) beyond the term's end date.
     if (datesToRecord.length < daysToCover) {
       let secondaryIndex = startIndex;
       while (datesToRecord.length < daysToCover && secondaryIndex < schoolDays.length) {
@@ -3182,23 +3560,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           datesToRecord.push(dStr);
         }
         secondaryIndex++;
-      }
-    }
-
-    // If there are still not enough days because the requested days exceed term size,
-    // we can generate auxiliary standard school days starting from the end of the term.
-    if (datesToRecord.length < daysToCover) {
-      const lastDay = schoolDays[schoolDays.length - 1] || currentDate;
-      // Let's generate auxiliary school days starting after the last day
-      const auxDays = generateSchoolDays(lastDay, daysToCover + 10);
-      // Exclude days that are already in schoolDays
-      let auxIndex = 1; // start from day after lastDay
-      while (datesToRecord.length < daysToCover && auxIndex < auxDays.length) {
-        const auxDStr = auxDays[auxIndex];
-        if (!schoolDays.includes(auxDStr) && !datesToRecord.includes(auxDStr)) {
-          datesToRecord.push(auxDStr);
-        }
-        auxIndex++;
       }
     }
 
@@ -3280,7 +3641,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setPayments(nextPayments);
     saveState(users, students, nextPayments);
 
-    if (db.isActive() && storageMode === 'cloud') {
+    if (db.isActive()) {
       recordsToCloudSync.forEach(rec => {
         db.savePayment(rec);
       });
@@ -3301,58 +3662,67 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
-    // Strict Public Holiday Guard: Gate check-ins and fee collections are disabled on public holidays
+    // Strict Public Holiday & Vacation Guard: Gate check-ins and fee collections are disabled on public holidays or vacation breaks
     const isPublicHoliday = activeTerm?.publicHolidays?.includes(currentDate);
-    if (isPublicHoliday) {
+    const isInVacationBreak = isDateInTermGap(currentDate, terms);
+    if (isPublicHoliday || isInVacationBreak) {
       playFeedbackSound('error');
-      console.warn(`Bulk check-in / fee collection rejected on ${currentDate}: Today is a declared public holiday.`);
+      console.warn(`Bulk check-in / fee collection rejected on ${currentDate}: Today is a declared holiday / vacation break.`);
+      alert(`Bulk Check-in Rejected:\n\nDate ${currentDate} is a Vacation / Holiday Break. Pupils are exempt from fees during vacation breaks.`);
       return;
     }
 
     let nextPayments = [...payments];
     const recordsToSync: PaymentRecord[] = [];
+    const paymentIdsToDelete: string[] = [];
+
     studentIds.forEach(id => {
       const student = students.find(s => s.id === id);
       if (!student) return;
 
-      const idx = nextPayments.findIndex(p => p.studentId === id && p.date === currentDate);
-      let record: PaymentRecord;
+      const existingMatches = nextPayments.filter(p => p.studentId === id && p.date === currentDate);
+      existingMatches.forEach(p => paymentIdsToDelete.push(p.id));
+      nextPayments = nextPayments.filter(p => !(p.studentId === id && p.date === currentDate));
+
       const discountAmount = student.discount || 0;
       const baseDailyFee = systemSettings?.baselineDailyFee ?? 5.00;
       const finalAmount = customAmount !== undefined ? customAmount : Math.max(0, baseDailyFee - discountAmount);
       
-      if (idx > -1) {
-        record = {
-          ...nextPayments[idx],
-          verified,
-          timestamp: new Date().toISOString()
-        };
-        record = applyLateFeeIfApplicable(student, record);
-        nextPayments[idx] = record;
-      } else {
-        record = {
-          id: `p_${id}_${currentDate}`,
-          studentId: id,
-          studentName: student.name,
-          class: student.class,
-          category: student.category,
-          amount: finalAmount,
-          date: currentDate,
-          timestamp: new Date().toISOString(),
-          collectedBy: currentUser ? currentUser.name : 'System Host',
-          verified,
-          notes: discountAmount > 0 ? `Applied dynamic discount of GHC ${discountAmount.toFixed(2)}` : undefined
-        };
-        record = applyLateFeeIfApplicable(student, record);
-        nextPayments.push(record);
-      }
+      const targetId = `p_${id}_${currentDate}`;
+      let record: PaymentRecord = {
+        id: targetId,
+        studentId: id,
+        studentName: student.name,
+        class: student.class,
+        category: student.category,
+        amount: finalAmount,
+        date: currentDate,
+        timestamp: new Date().toISOString(),
+        collectedBy: currentUser ? currentUser.name : 'System Host',
+        verified,
+        notes: customAmount !== undefined 
+          ? `Bulk payment GHC ${customAmount.toFixed(2)}` 
+          : (discountAmount > 0 ? `Applied dynamic discount of GHC ${discountAmount.toFixed(2)}` : undefined)
+      };
+      record = applyLateFeeIfApplicable(student, record);
+
+      const delIdx = paymentIdsToDelete.indexOf(targetId);
+      if (delIdx > -1) paymentIdsToDelete.splice(delIdx, 1);
+
+      nextPayments.push(record);
       recordsToSync.push(record);
     });
 
     setPayments(nextPayments);
     saveState(users, students, nextPayments);
-    if (db.isActive() && storageMode === 'cloud' && recordsToSync.length > 0) {
-      db.savePayments(recordsToSync);
+
+    if (db.isActive()) {
+      if (paymentIdsToDelete.length > 0) {
+        paymentIdsToDelete.forEach(pId => db.deletePayment(pId));
+      }
+      if (recordsToSync.length > 0) {
+        db.savePayments(recordsToSync);
+      }
     } else if (recordsToSync.length > 0) {
       recordLocallyPendingEdit('bulk', 'create', `Bulk logged standard day payments for ${recordsToSync.length} pupils`);
     }
@@ -3370,45 +3740,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const student = students.find(s => s.id === studentId);
     if (!student) return;
 
-    const existingIndex = payments.findIndex(p => p.studentId === studentId && p.date === currentDate && !p.id.endsWith('_debt'));
-    let nextPayments = [...payments];
-    let recordToSave: PaymentRecord;
+    const existingMatches = payments.filter(p => p.studentId === studentId && p.date === currentDate);
+    const idsToDelete = existingMatches.map(p => p.id);
+    let nextPayments = payments.filter(p => !(p.studentId === studentId && p.date === currentDate));
+    const targetId = `p_${studentId}_${currentDate}`;
 
-    if (existingIndex > -1) {
-      recordToSave = {
-        ...nextPayments[existingIndex],
-        amount: nextPayments[existingIndex].amount,
-        isAbsent: false,
-        verified: true,
-        notes: nextPayments[existingIndex].notes?.includes('Present or ¢0') 
-          ? nextPayments[existingIndex].notes 
-          : (nextPayments[existingIndex].notes ? `${nextPayments[existingIndex].notes} | Present or ¢0` : 'Present or ¢0'),
-        timestamp: new Date().toISOString()
-      };
-      recordToSave = applyLateFeeIfApplicable(student, recordToSave);
-      nextPayments[existingIndex] = recordToSave;
-    } else {
-      recordToSave = {
-        id: `p_${studentId}_${currentDate}`,
-        studentId: student.id,
-        studentName: student.name,
-        class: student.class,
-        category: student.category,
-        amount: 0,
-        date: currentDate,
-        timestamp: new Date().toISOString(),
-        collectedBy: currentUser ? currentUser.name : 'System Host',
-        verified: true,
-        isAbsent: false,
-        notes: 'Present or ¢0'
-      };
-      recordToSave = applyLateFeeIfApplicable(student, recordToSave);
-      nextPayments.push(recordToSave);
-    }
+    let recordToSave: PaymentRecord = {
+      id: targetId,
+      studentId: student.id,
+      studentName: student.name,
+      class: student.class,
+      category: student.category,
+      amount: 0,
+      date: currentDate,
+      timestamp: new Date().toISOString(),
+      collectedBy: currentUser ? currentUser.name : 'System Host',
+      verified: true,
+      isAbsent: false,
+      notes: 'Present or ¢0'
+    };
+    recordToSave = applyLateFeeIfApplicable(student, recordToSave);
+    nextPayments.push(recordToSave);
 
     setPayments(nextPayments);
     saveState(users, students, nextPayments);
-    if (db.isActive() && storageMode === 'cloud') {
+    if (db.isActive()) {
+      idsToDelete.forEach(id => {
+        if (id !== targetId) db.deletePayment(id);
+      });
       db.savePayment(recordToSave);
     } else {
       recordLocallyPendingEdit('payment', 'create', `Marked pupil: "${student.name}" as Present or ¢0`);
@@ -3431,16 +3790,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const paymentIdsToDelete: string[] = [];
 
     dates.forEach(dayStr => {
-      const idx = nextPayments.findIndex(p => p.studentId === studentId && p.date === dayStr && !p.id.endsWith('_debt'));
+      // Find ALL existing matching payment records on this date to override/purge them cleanly
+      const existingMatches = nextPayments.filter(p => p.studentId === studentId && p.date === dayStr);
+      existingMatches.forEach(p => {
+        paymentIdsToDelete.push(p.id);
+      });
+      // Remove all existing records on this date from the state list
+      nextPayments = nextPayments.filter(p => !(p.studentId === studentId && p.date === dayStr));
 
-      if (actionType === 'clear') {
-        if (idx > -1) {
-          const matched = nextPayments[idx];
-          paymentIdsToDelete.push(matched.id);
-          nextPayments.splice(idx, 1);
-        }
-      } else {
-        let record: PaymentRecord;
+      if (actionType !== 'clear') {
         const discountAmount = student.discount || 0;
         const baseDailyFee = systemSettings?.baselineDailyFee ?? 5.00;
         const finalAmount = actionType === 'paid' 
@@ -3454,33 +3812,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             ? 'Marked absent via bulk'
             : 'Present or ¢0 via bulk';
 
-        if (idx > -1) {
-          record = {
-            ...nextPayments[idx],
-            amount: finalAmount,
-            isAbsent,
-            verified: true,
-            notes: notesStr,
-            timestamp: new Date().toISOString()
-          };
-          nextPayments[idx] = record;
-        } else {
-          record = {
-            id: `p_${studentId}_${dayStr}`,
-            studentId,
-            studentName: student.name,
-            class: student.class,
-            category: student.category,
-            amount: finalAmount,
-            date: dayStr,
-            timestamp: new Date().toISOString(),
-            collectedBy: currentUser ? currentUser.name : 'System Host',
-            verified: true,
-            isAbsent,
-            notes: notesStr
-          };
-          nextPayments.push(record);
-        }
+        const targetId = `p_${studentId}_${dayStr}`;
+        const record: PaymentRecord = {
+          id: targetId,
+          studentId,
+          studentName: student.name,
+          class: student.class,
+          category: student.category,
+          amount: finalAmount,
+          date: dayStr,
+          timestamp: new Date().toISOString(),
+          collectedBy: currentUser ? currentUser.name : 'System Host',
+          verified: true,
+          isAbsent,
+          notes: notesStr
+        };
+        // Remove targetId from deletion list so we update it in place rather than deleting
+        const delIdx = paymentIdsToDelete.indexOf(targetId);
+        if (delIdx > -1) paymentIdsToDelete.splice(delIdx, 1);
+
+        nextPayments.push(record);
         recordsToSync.push(record);
       }
     });
@@ -3488,7 +3839,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setPayments(nextPayments);
     saveState(users, students, nextPayments);
 
-    if (db.isActive() && storageMode === 'cloud') {
+    if (db.isActive()) {
       if (recordsToSync.length > 0) {
         recordsToSync.forEach(rec => db.savePayment(rec));
       }
@@ -3516,7 +3867,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     setPayments(nextPayments);
     saveState(users, students, nextPayments);
-    if (db.isActive() && storageMode === 'cloud' && recordToSync) {
+    if (db.isActive() && recordToSync) {
       db.savePayment(recordToSync);
     } else if (recordToSync) {
       recordLocallyPendingEdit('payment', 'update', `Verified payment registration for: "${(recordToSync as PaymentRecord).studentName}"`);
@@ -3528,6 +3879,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!targetP) return;
 
     let clearedDatesToDelete: string[] = targetP.clearedDates || [];
+    const markerIds = clearedDatesToDelete.map(dStr => `p_${targetP.studentId}_${dStr}`);
+    registerDeletedIds([paymentId, ...markerIds]);
+
+    const relatedMarkers = payments.filter(p => p.studentId === targetP.studentId && p.amount === 0 && clearedDatesToDelete.includes(p.date));
+
+    // Move record to Trash collection (Soft Delete)
+    moveToTrash(
+      'payment',
+      paymentId,
+      { payment: targetP, relatedMarkers },
+      `Voided fee payment transaction of GHC ${(targetP.amount || 0).toFixed(2)} for pupil "${targetP.studentName || 'Pupil'}"`,
+      {
+        studentId: targetP.studentId,
+        studentName: targetP.studentName,
+        amount: targetP.amount,
+        class: targetP.class
+      }
+    );
 
     // Filter out both the main payment record, and any zero-amount markers on the cleared dates
     const nextPayments = payments.filter(p => {
@@ -3552,9 +3921,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (storageMode !== 'cloud') {
       recordLocallyPendingEdit('payment', 'delete', `Voided payment transaction entry for pupil: "${targetP?.studentName || 'Pupil'}"`);
     }
+    logActivity(
+      'PAYMENT_DELETED',
+      'payments',
+      `Voided fee payment transaction of GHC ${(targetP.amount || 0).toFixed(2)} for pupil "${targetP.studentName || 'Pupil'}"`,
+      targetP.studentId,
+      targetP.studentName,
+      targetP.amount,
+      {
+        type: 'payment',
+        payment: targetP,
+        relatedMarkers
+      }
+    );
   };
 
   const deleteStudentPayments = (studentId: string) => {
+    const deletedStudentPayments = payments.filter(p => p.studentId === studentId);
+    if (deletedStudentPayments.length === 0) return;
+
+    const targetS = students.find(s => s.id === studentId);
+    registerDeletedIds(deletedStudentPayments.map(p => p.id));
+
+    moveToTrash(
+      'bulk_payments',
+      `student_payments_${studentId}_${Date.now()}`,
+      deletedStudentPayments,
+      `Voided all ${deletedStudentPayments.length} payment transaction records for pupil "${targetS?.name || 'Pupil'}"`,
+      {
+        studentId,
+        studentName: targetS?.name,
+        itemCount: deletedStudentPayments.length,
+        class: targetS?.class
+      }
+    );
+
     const nextPayments = payments.filter(p => p.studentId !== studentId);
     setPayments(nextPayments);
     saveState(users, students, nextPayments);
@@ -3562,7 +3963,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       db.deleteStudentPayments(studentId);
     }
     if (storageMode !== 'cloud') {
-      const targetS = students.find(s => s.id === studentId);
       recordLocallyPendingEdit('payment', 'delete', `Voided all payment transaction history entries for pupil: "${targetS?.name || 'Pupil'}"`);
     }
   };
@@ -3581,6 +3981,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
       }
     });
+
+    registerDeletedIds([...paymentIdsToDelete, ...allMarkerIdsToDelete]);
+
+    moveToTrash(
+      'bulk_payments',
+      `class_clear_${classId}_${dateStr}`,
+      paymentsToDelete,
+      `Cleared all ${paymentsToDelete.length} daily payment records for class ${classId} on ${dateStr}`,
+      {
+        itemCount: paymentsToDelete.length,
+        class: classId
+      }
+    );
 
     const nextPayments = payments.filter(p => {
       if (paymentIdsToDelete.includes(p.id)) return false;
@@ -3602,6 +4015,222 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       recordLocallyPendingEdit('bulk', 'delete', `Bulk cleared ${paymentsToDelete.length} payment records for class ${classId} on ${dateStr}`);
     }
   };
+
+  const deleteClassFeeRecords = (options: DeleteClassFeesOptions): DeleteClassFeesResult => {
+    const { targetClass, scope, selectedWeeks, startDate, endDate, feeCategory = 'daily_only', studentIds } = options;
+
+    // 1. Identify target students in this class
+    const targetStudentMap = new Map<string, Student>();
+    students.forEach(s => {
+      if (targetClass === 'ALL' || s.class === targetClass) {
+        if (!studentIds || studentIds.length === 0 || studentIds.includes(s.id)) {
+          targetStudentMap.set(s.id, s);
+        }
+      }
+    });
+
+    const targetStudentIdsSet = new Set(targetStudentMap.keys());
+
+    // 2. Compute date filter logic and date summary
+    let targetDatesSet: Set<string> | null = null;
+    let dateSummary = 'All Dates';
+
+    if (scope === 'full_term') {
+      if (activeTerm) {
+        const termStart = activeTerm.startDate;
+        const termDays = activeTerm.schoolDays || [];
+        const termEnd = termDays.length > 0 ? termDays[termDays.length - 1] : (activeTerm.endDate || '2099-12-31');
+        dateSummary = `${activeTerm.name} (Week 1 to Final Week: ${termStart} to ${termEnd})`;
+        targetDatesSet = new Set(termDays.length > 0 ? termDays : []);
+      } else {
+        dateSummary = 'All Active Term Dates';
+      }
+    } else if (scope === 'specific_weeks') {
+      if (activeTerm && activeTerm.schoolDays && activeTerm.schoolDays.length > 0 && selectedWeeks && selectedWeeks.length > 0) {
+        const matchingDays: string[] = [];
+        selectedWeeks.forEach(w => {
+          const startIdx = (w - 1) * 5;
+          const endIdx = startIdx + 5;
+          const weekDays = activeTerm.schoolDays.slice(startIdx, endIdx);
+          matchingDays.push(...weekDays);
+        });
+        targetDatesSet = new Set(matchingDays);
+        dateSummary = `Weeks ${[...selectedWeeks].sort((a, b) => a - b).join(', ')} (${matchingDays[0] || 'Start'} to ${matchingDays[matchingDays.length - 1] || 'End'})`;
+      } else {
+        dateSummary = 'Selected Term Weeks';
+      }
+    } else if (scope === 'custom_range') {
+      const s = startDate || '1970-01-01';
+      const e = endDate || '2099-12-31';
+      dateSummary = `Custom Date Range: ${s} to ${e}`;
+    } else {
+      dateSummary = 'All Historical Dates (Full Time)';
+    }
+
+    const isDateMatch = (dStr: string): boolean => {
+      if (scope === 'all_time') return true;
+      if (scope === 'custom_range') {
+        const s = startDate || '1970-01-01';
+        const e = endDate || '2099-12-31';
+        return dStr >= s && dStr <= e;
+      }
+      if (scope === 'full_term' && activeTerm) {
+        const termStart = activeTerm.startDate;
+        const termDays = activeTerm.schoolDays || [];
+        const termEnd = termDays.length > 0 ? termDays[termDays.length - 1] : (activeTerm.endDate || '2099-12-31');
+        if (targetDatesSet && targetDatesSet.size > 0) {
+          return targetDatesSet.has(dStr) || (dStr >= termStart && dStr <= termEnd);
+        }
+        return dStr >= termStart && dStr <= termEnd;
+      }
+      if (targetDatesSet) {
+        return targetDatesSet.has(dStr);
+      }
+      return true;
+    };
+
+    // 3. Find matching daily payments to delete
+    const dailyPaymentsToDelete: PaymentRecord[] = [];
+    const dailyMarkerIdsToDelete: string[] = [];
+    let totalDailyAmount = 0;
+
+    if (feeCategory === 'daily_only' || feeCategory === 'both') {
+      payments.forEach(p => {
+        const matchesClass = targetClass === 'ALL' || p.class === targetClass || targetStudentIdsSet.has(p.studentId);
+        if (matchesClass && targetStudentIdsSet.has(p.studentId) && isDateMatch(p.date)) {
+          dailyPaymentsToDelete.push(p);
+          totalDailyAmount += (p.amount || 0);
+          if (p.clearedDates && p.clearedDates.length > 0) {
+            p.clearedDates.forEach(dStr => {
+              dailyMarkerIdsToDelete.push(`p_${p.studentId}_${dStr}`);
+            });
+          }
+        }
+      });
+    }
+
+    // 4. Find matching exams payments to delete (if applicable)
+    const examsPaymentsToDelete: ExamsPayment[] = [];
+    let totalExamsAmount = 0;
+
+    if (feeCategory === 'exams_only' || feeCategory === 'both') {
+      examsPayments.forEach(ep => {
+        const matchesClass = targetClass === 'ALL' || ep.class === targetClass || targetStudentIdsSet.has(ep.studentId);
+        const matchesTerm = !activeTerm || !ep.termId || ep.termId === activeTerm.id;
+        if (matchesClass && targetStudentIdsSet.has(ep.studentId) && (scope === 'all_time' || matchesTerm || isDateMatch(ep.datePaid))) {
+          examsPaymentsToDelete.push(ep);
+          totalExamsAmount += (ep.amountPaid || 0);
+        }
+      });
+    }
+
+    const totalRecordsToDelete = dailyPaymentsToDelete.length + examsPaymentsToDelete.length;
+    const totalAmountCleared = totalDailyAmount + totalExamsAmount;
+
+    const classLabel = targetClass === 'ALL' ? 'All Classes' : `Class ${targetClass}`;
+
+    if (totalRecordsToDelete === 0) {
+      return {
+        success: false,
+        deletedDailyPaymentsCount: 0,
+        deletedExamsPaymentsCount: 0,
+        totalAmountCleared: 0,
+        affectedStudentsCount: 0,
+        targetClass: classLabel,
+        dateSummary,
+        message: `No fee payment records found matching the criteria for ${classLabel} (${dateSummary}).`
+      };
+    }
+
+    // 5. Create automatic snapshot backup before purge
+    const backupLabel = `Pre-Clear ${classLabel} Fee Records (${dateSummary.slice(0, 35)})`;
+    createBackup(backupLabel, true);
+
+    // 6. Save deleted records to Trash Bin for 1-click restore capability
+    const affectedPupilNames = Array.from(new Set([
+      ...dailyPaymentsToDelete.map(p => p.studentName || 'Pupil'),
+      ...examsPaymentsToDelete.map(ep => ep.studentName || 'Pupil')
+    ]));
+
+    moveToTrash(
+      'bulk_payments',
+      `class_fee_clear_${targetClass}_${Date.now()}`,
+      {
+        dailyPayments: dailyPaymentsToDelete,
+        examsPayments: examsPaymentsToDelete
+      },
+      `Cleared ${dailyPaymentsToDelete.length} daily fee & ${examsPaymentsToDelete.length} exams fee records for ${classLabel} [${dateSummary}] (Total GHC ${totalAmountCleared.toFixed(2)})`,
+      {
+        class: targetClass,
+        amount: totalAmountCleared,
+        itemCount: totalRecordsToDelete
+      }
+    );
+
+    // 7. Register all deleted IDs to prevent synchronization resurrecting them
+    const dailyIdsToDelete = dailyPaymentsToDelete.map(p => p.id);
+    const allIdsToRegister = [...dailyIdsToDelete, ...dailyMarkerIdsToDelete];
+    registerDeletedIds(allIdsToRegister);
+
+    // 8. Update payments state and persistence
+    const dailyIdsSet = new Set(dailyIdsToDelete);
+    const nextPayments = payments.filter(p => !dailyIdsSet.has(p.id));
+    setPayments(nextPayments);
+    idbEngine.setItem('s_payments', nextPayments);
+
+    // 9. Update exams payments state if any deleted
+    let nextExamsPayments = examsPayments;
+    if (examsPaymentsToDelete.length > 0) {
+      const examIdsSet = new Set(examsPaymentsToDelete.map(ep => ep.id));
+      nextExamsPayments = examsPayments.filter(ep => !examIdsSet.has(ep.id));
+      setExamsPayments(nextExamsPayments);
+      idbEngine.setItem('s_exams_payments', nextExamsPayments);
+    }
+
+    saveState(users, students, nextPayments);
+
+    // 10. Propagate deletion to server & Cloud Firestore via batch endpoint
+    if (dailyIdsToDelete.length > 0) {
+      if ((rawDb as any).deletePaymentsBatch) {
+        (rawDb as any).deletePaymentsBatch(dailyIdsToDelete);
+      } else if (db.isActive()) {
+        dailyIdsToDelete.forEach(id => db.deletePayment(id));
+      }
+      if (dailyMarkerIdsToDelete.length > 0 && db.isActive()) {
+        dailyMarkerIdsToDelete.forEach(mId => db.deletePayment(mId));
+      }
+    }
+
+    if (examsPaymentsToDelete.length > 0 && db.isActive()) {
+      examsPaymentsToDelete.forEach(ep => {
+        if ((db as any).deleteExamsPayment) (db as any).deleteExamsPayment(ep.id);
+      });
+    }
+
+    if (storageMode !== 'cloud') {
+      recordLocallyPendingEdit(
+        'bulk',
+        'delete',
+        `Deleted ${dailyPaymentsToDelete.length} daily fee records and ${examsPaymentsToDelete.length} exams payments for ${classLabel} (${dateSummary})`
+      );
+    }
+
+    const resultMsg = `Successfully deleted ${dailyPaymentsToDelete.length} daily fee payment record(s)${examsPaymentsToDelete.length > 0 ? ` and ${examsPaymentsToDelete.length} exams payment record(s)` : ''} totaling GHC ${totalAmountCleared.toFixed(2)} for ${classLabel} across ${dateSummary}. Affected ${affectedPupilNames.length} pupils.`;
+
+    logActivity('payments', 'payments', resultMsg, undefined, classLabel, totalAmountCleared);
+
+    return {
+      success: true,
+      deletedDailyPaymentsCount: dailyPaymentsToDelete.length,
+      deletedExamsPaymentsCount: examsPaymentsToDelete.length,
+      totalAmountCleared,
+      affectedStudentsCount: affectedPupilNames.length,
+      targetClass: classLabel,
+      dateSummary,
+      message: resultMsg
+    };
+  };
+
 
   const adjustPayment = (paymentId: string, updatedAmount: number, updatedIsAbsent: boolean, notes: string, reason: string) => {
     let recordToSync: PaymentRecord | null = null;
@@ -3635,7 +4264,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setPayments(nextPayments);
     saveState(users, students, nextPayments);
     
-    if (db.isActive() && storageMode === 'cloud' && recordToSync) {
+    if (db.isActive() && recordToSync) {
       db.savePayment(recordToSync);
     } else if (recordToSync) {
       recordLocallyPendingEdit('payment', 'update', `Adjusted past payment for pupil: "${(recordToSync as PaymentRecord).studentName}"`);
@@ -3654,12 +4283,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const seedFirebaseFromLocal = async () => {
+  const seedFirebaseFromLocal = async (
+    customUsers?: UserAccount[],
+    customStudents?: Student[],
+    customPayments?: PaymentRecord[],
+    customTerms?: Term[]
+  ) => {
     if (!db.isActive()) {
       return { success: false, message: 'Server database configuration is missing!' };
     }
     try {
-      const success = await db.seedTables(users, students, payments);
+      const uToSeed = customUsers || users;
+      const sToSeed = customStudents || students;
+      const pToSeed = customPayments || payments;
+      const tToSeed = customTerms || terms;
+
+      const success = await db.seedTables(uToSeed, sToSeed, pToSeed, tToSeed);
       if (success) {
         setFirebaseConnected(true);
         clearPendingLocalEdits();
@@ -3843,9 +4482,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const activeStudentsCount = students.filter(s => s.active).length;
 
     // Categorization sums
-    const preSchoolTot = payments.filter(p => p.verified && p.category === 'Pre-school').reduce((s, p) => s + p.amount, 0);
-    const primaryTot = payments.filter(p => p.verified && p.category === 'Primary').reduce((s, p) => s + p.amount, 0);
-    const jhsTot = payments.filter(p => p.verified && p.category === 'JHS').reduce((s, p) => s + p.amount, 0);
+    const preSchoolTot = payments.filter(p => p.verified && !p.isAbsent && p.category === 'Pre-school' && p.amount > 0).reduce((s, p) => s + p.amount, 0);
+    const primaryTot = payments.filter(p => p.verified && !p.isAbsent && p.category === 'Primary' && p.amount > 0).reduce((s, p) => s + p.amount, 0);
+    const jhsTot = payments.filter(p => p.verified && !p.isAbsent && p.category === 'JHS' && p.amount > 0).reduce((s, p) => s + p.amount, 0);
 
     const draftContent = `
 === SECURE TRANSMISSION ===
@@ -3887,7 +4526,7 @@ School Administration Financial Audit System (MFA Secure)
     const healed = healTerms(newTerms);
     setTerms(healed);
     idbEngine.setItem('s_terms', healed);
-    if (storageMode === 'cloud') {
+    if (db.isActive()) {
       db.saveTerms(healed);
     }
   };
@@ -3962,6 +4601,21 @@ School Administration Financial Audit System (MFA Secure)
     recordLocallyPendingEdit('term', 'update', `Updated school term: "${name}" (${isActive ? 'Active' : 'Inactive'})`);
   };
 
+  const completeTerm = (termId: string, isCompleted = true) => {
+    const nextTerms = terms.map(t => {
+      if (t.id === termId) {
+        return {
+          ...t,
+          isCompleted
+        };
+      }
+      return t;
+    });
+    saveTerms(nextTerms);
+    const targetName = terms.find(t => t.id === termId)?.name || 'Term';
+    recordLocallyPendingEdit('term', 'update', `${isCompleted ? 'Closed gate / Completed' : 'Reopened'} school term: "${targetName}"`);
+  };
+
   const setActiveTerm = (termId: string) => {
     const nextTerms = terms.map(t => ({
       ...t,
@@ -3985,7 +4639,7 @@ School Administration Financial Audit System (MFA Secure)
       }
     }
     saveTerms(remaining);
-    if (storageMode === 'cloud') {
+    if (db.isActive()) {
       db.deleteTerm(termId);
     }
     recordLocallyPendingEdit('term', 'delete', `Deleted school term: "${targetTerm?.name || 'Term'}"`);
@@ -4051,10 +4705,11 @@ School Administration Financial Audit System (MFA Secure)
     
     const initialTerms = [{
       id: 'term_default',
-      name: 'Term 1 (April - August 2026)',
+      name: 'Term 3 (April - July 2026)',
       startDate: '2026-04-27',
-      daysCount: 75,
-      schoolDays: generateSchoolDays('2026-04-27', 75),
+      daysCount: 68,
+      schoolDays: generateSchoolDays('2026-04-27', 68),
+      publicHolidays: ['2026-05-01', '2026-05-25', '2026-07-01'],
       active: true
     }];
     setTerms(initialTerms);
@@ -4062,7 +4717,7 @@ School Administration Financial Audit System (MFA Secure)
 
     updateSystemSettings({ disableDemoData: false });
 
-    if (db.isActive() && storageMode === 'cloud') {
+    if (db.isActive()) {
       db.seedTables(INITIAL_USERS, INITIAL_STUDENTS, seedPays, initialTerms).catch(err => {
         console.error("Failed to seed fallback data on backend server:", err);
       });
@@ -4132,12 +4787,21 @@ School Administration Financial Audit System (MFA Secure)
 
   const clearAllPayments = () => {
     const clearedCount = payments.length;
+    if (clearedCount > 0) {
+      moveToTrash(
+        'bulk_payments',
+        `clear_all_${Date.now()}`,
+        payments,
+        `Cleared all ${clearedCount} fee and check-in payment entries while retaining all ${students.length} registered pupils`,
+        { itemCount: clearedCount }
+      );
+    }
     setPayments([]);
     idbEngine.setItem('s_payments', []);
     saveState(users, students, []);
     
     // If backend sync is active, clear payments collection on backend keeping everything else
-    if (db.isActive() && storageMode === 'cloud') {
+    if (db.isActive()) {
       db.seedTables(users, students, []).catch(err => {
         console.error("Failed to clear payments table on backend server:", err);
       });
@@ -4278,46 +4942,331 @@ School Administration Financial Audit System (MFA Secure)
     };
   };
 
-  const purgeDuplicatePayments = (): { count: number; message: string } => {
-    const map = new Map<string, PaymentRecord[]>();
+  const getDuplicatePaymentAudit = (): DuplicatePaymentAuditGroup[] => {
+    const studentMap = new Map<string, Student>();
+    students.forEach(s => studentMap.set(s.id, s));
+
+    const dateMap = new Map<string, PaymentRecord[]>();
     payments.forEach(p => {
+      if (!p.studentId || !p.date) return;
       const key = `${p.studentId}_${p.date}`;
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(p);
+      if (!dateMap.has(key)) dateMap.set(key, []);
+      dateMap.get(key)!.push(p);
     });
 
-    const idsToDelete = new Set<string>();
+    const auditGroups: DuplicatePaymentAuditGroup[] = [];
 
-    map.forEach((records) => {
-      if (records.length > 1) {
-        records.sort((a, b) => {
-          if (a.amount > 0 && b.amount === 0) return -1;
-          if (a.amount === 0 && b.amount > 0) return 1;
-          const timeA = new Date(a.timestamp || 0).getTime();
-          const timeB = new Date(b.timestamp || 0).getTime();
-          return timeB - timeA;
+    dateMap.forEach((records, key) => {
+      if (records.length <= 1) return;
+
+      const [studentId, date] = key.split('_');
+      const stud = studentMap.get(studentId);
+      const studentName = stud?.name || records[0].studentName || studentId;
+      const studentClass = stud?.class || records[0].class || ('Nursery' as StudentClass);
+
+      const hasNonZeroPaid = records.some(r => !r.isAbsent && Number(r.amount || 0) > 0 && r.verified !== false);
+
+      const items: DuplicatePaymentAuditItem[] = [];
+      const seenSignatures = new Set<string>();
+
+      records.forEach(r => {
+        const amt = Number(r.amount || 0);
+        const method = (r.paymentMethod || 'Cash').trim();
+        const notes = (r.notes || '').trim();
+        const isDebt = (r.id && r.id.endsWith('_debt')) || notes.toLowerCase().includes('debt') || notes.toLowerCase().includes('arrears');
+        const isTermPay = (r.id && r.id.includes('term_pay')) || notes.toLowerCase().includes('term fee') || notes.toLowerCase().includes('installment');
+        const signature = `${amt}_${method.toLowerCase()}_${notes.toLowerCase()}`;
+
+        let dupType: 'exact_ghost' | 'redundant_zero' | 'legitimate_installment' = 'legitimate_installment';
+
+        if (amt === 0 || r.isAbsent) {
+          if (hasNonZeroPaid) {
+            dupType = 'redundant_zero';
+          } else {
+            if (seenSignatures.has('zero_attendance')) {
+              dupType = 'redundant_zero';
+            } else {
+              seenSignatures.add('zero_attendance');
+              dupType = 'legitimate_installment';
+            }
+          }
+        } else if (seenSignatures.has(signature)) {
+          dupType = 'exact_ghost';
+        } else if (!isDebt && !isTermPay && !notes.toLowerCase().includes('momo') && seenSignatures.has(`${amt}_${method.toLowerCase()}`)) {
+          dupType = 'exact_ghost';
+        } else {
+          seenSignatures.add(signature);
+          seenSignatures.add(`${amt}_${method.toLowerCase()}`);
+          dupType = 'legitimate_installment';
+        }
+
+        items.push({
+          id: r.id,
+          studentId: r.studentId,
+          studentName,
+          class: studentClass,
+          date: r.date,
+          amount: amt,
+          paymentMethod: r.paymentMethod || 'Cash',
+          notes: r.notes || '',
+          timestamp: r.timestamp || r.date,
+          collectedBy: r.collectedBy || 'Staff',
+          verified: r.verified !== false,
+          isAbsent: r.isAbsent,
+          duplicateType: dupType
         });
+      });
 
+      const hasExactGhost = items.some(i => i.duplicateType === 'exact_ghost');
+      const hasRedundantZero = items.some(i => i.duplicateType === 'redundant_zero');
+      const hasLegitimateInstallment = items.some(i => i.duplicateType === 'legitimate_installment');
+      const totalAmount = items.reduce((sum, i) => !i.isAbsent && i.verified ? sum + i.amount : sum, 0);
+
+      auditGroups.push({
+        groupKey: key,
+        studentId,
+        studentName,
+        studentClass,
+        date,
+        records: items,
+        hasExactGhost,
+        hasRedundantZero,
+        hasLegitimateInstallment,
+        totalAmount
+      });
+    });
+
+    auditGroups.sort((a, b) => {
+      if ((a.hasExactGhost || a.hasRedundantZero) && !(b.hasExactGhost || b.hasRedundantZero)) return -1;
+      if (!(a.hasExactGhost || a.hasRedundantZero) && (b.hasExactGhost || b.hasRedundantZero)) return 1;
+      return b.date.localeCompare(a.date);
+    });
+
+    return auditGroups;
+  };
+
+  const deletePaymentRecord = (paymentId: string): { success: boolean; message: string } => {
+    const target = payments.find(p => p.id === paymentId);
+    if (!target) {
+      return { success: false, message: 'Payment record not found.' };
+    }
+    registerDeletedIds([paymentId]);
+    const nextPayments = payments.filter(p => p.id !== paymentId);
+    setPayments(nextPayments);
+    saveState(users, students, nextPayments);
+    if (db.isActive()) {
+      db.deletePayment(paymentId);
+    }
+    return { success: true, message: `Removed payment entry of GHS ${(target.amount || 0).toFixed(2)} on ${target.date}.` };
+  };
+
+  const purgeDuplicatePayments = (options?: {
+    onlyExactGhosts?: boolean;
+    deleteRedundantZero?: boolean;
+    preserveLegitimateInstallments?: boolean;
+  }): { count: number; ghostCount: number; redundantZeroCount: number; preservedCount: number; message: string } => {
+    createBackup('Pre-Smart Duplicate Payment Purge', true);
+
+    const audit = getDuplicatePaymentAudit();
+    const idsToDelete = new Set<string>();
+    let ghostCount = 0;
+    let redundantZeroCount = 0;
+    let preservedCount = 0;
+
+    audit.forEach(group => {
+      group.records.forEach(rec => {
+        if (rec.duplicateType === 'exact_ghost') {
+          idsToDelete.add(rec.id);
+          ghostCount++;
+        } else if (rec.duplicateType === 'redundant_zero') {
+          idsToDelete.add(rec.id);
+          redundantZeroCount++;
+        } else {
+          preservedCount++;
+        }
+      });
+    });
+
+    // Also detect duplicate exams payments (same student, date, term, amount)
+    const examsMap = new Map<string, ExamsPayment[]>();
+    examsPayments.forEach(ep => {
+      const key = `${ep.studentId}_${ep.datePaid}_${ep.termId || 'default'}_${ep.amountPaid}`;
+      if (!examsMap.has(key)) examsMap.set(key, []);
+      examsMap.get(key)!.push(ep);
+    });
+    const examIdsToDelete = new Set<string>();
+    examsMap.forEach(records => {
+      if (records.length > 1) {
         for (let i = 1; i < records.length; i++) {
-          idsToDelete.add(records[i].id);
+          examIdsToDelete.add(records[i].id);
         }
       }
     });
 
-    if (idsToDelete.size === 0) {
-      return { count: 0, message: "No duplicate payment records found." };
+    const totalDailyPurged = idsToDelete.size;
+    const totalExamPurged = examIdsToDelete.size;
+    const totalPurged = totalDailyPurged + totalExamPurged;
+
+    if (totalPurged === 0) {
+      return {
+        count: 0,
+        ghostCount: 0,
+        redundantZeroCount: 0,
+        preservedCount,
+        message: `✅ No duplicate errors found. All ${preservedCount} multi-payment entries represent legitimate receipts matching physical records.`
+      };
     }
 
-    const nextPayments = payments.filter(p => !idsToDelete.has(p.id));
+    if (idsToDelete.size > 0) {
+      registerDeletedIds(Array.from(idsToDelete));
+      const nextPayments = payments.filter(p => !idsToDelete.has(p.id));
+      setPayments(nextPayments);
+      saveState(users, students, nextPayments);
+      if (db.isActive()) {
+        idsToDelete.forEach(id => db.deletePayment(id));
+      }
+    }
+
+    if (examIdsToDelete.size > 0) {
+      const nextExams = examsPayments.filter(ep => !examIdsToDelete.has(ep.id));
+      setExamsPayments(nextExams);
+      idbEngine.setItem('s_exams_payments', nextExams);
+      if (db.isActive() && db.deleteExamsPayment) {
+        examIdsToDelete.forEach(id => db.deleteExamsPayment!(id));
+      }
+    }
+
+    const msg = `✅ Purged ${totalPurged} duplicate record(s) (${ghostCount} ghost sync duplicates, ${redundantZeroCount} redundant 0-markers, ${totalExamPurged} exam duplicates). Preserved ${preservedCount} legitimate installments matching teachers' hard copies.`;
+    return {
+      count: totalPurged,
+      ghostCount,
+      redundantZeroCount,
+      preservedCount,
+      message: msg
+    };
+  };
+
+  const sanitizeDatabaseIntegrity = (): { orphanedPaymentsCount: number; orphanedExamsCount: number; message: string } => {
+    createBackup('Pre-Database Integrity Sanitization', true);
+
+    const validStudentIds = new Set(students.map(s => s.id));
+
+    const orphanedPayments = payments.filter(p => p.studentId && !validStudentIds.has(p.studentId));
+    const orphanedExams = examsPayments.filter(ep => ep.studentId && !validStudentIds.has(ep.studentId));
+
+    // Also deduplicate examsPayments by unique ID and unique key
+    const seenExams = new Set<string>();
+    const duplicateExamIds = new Set<string>();
+    examsPayments.forEach(ep => {
+      const key = `${ep.studentId}_${ep.datePaid}_${ep.termId || 'default'}_${ep.amountPaid}`;
+      if (seenExams.has(key) || seenExams.has(ep.id)) {
+        duplicateExamIds.add(ep.id);
+      } else {
+        seenExams.add(key);
+        seenExams.add(ep.id);
+      }
+    });
+
+    if (orphanedPayments.length === 0 && orphanedExams.length === 0 && duplicateExamIds.size === 0) {
+      return {
+        orphanedPaymentsCount: 0,
+        orphanedExamsCount: 0,
+        message: "Database Integrity Verified: No orphaned financial or duplicate exam records found."
+      };
+    }
+
+    const nextPayments = payments.filter(p => !p.studentId || validStudentIds.has(p.studentId));
+    const nextExamsPayments = examsPayments.filter(ep => (!ep.studentId || validStudentIds.has(ep.studentId)) && !duplicateExamIds.has(ep.id));
+
     setPayments(nextPayments);
+    setExamsPayments(nextExamsPayments);
+
+    idbEngine.setItem('s_payments', nextPayments);
+    idbEngine.setItem('s_exams_payments', nextExamsPayments);
+
     saveState(users, students, nextPayments);
 
     if (db.isActive()) {
-      idsToDelete.forEach(id => db.deletePayment(id));
+      orphanedPayments.forEach(p => db.deletePayment(p.id));
+      orphanedExams.forEach(ep => db.deleteExamsPayment(ep.id));
+      if (db.deleteExamsPayment) {
+        duplicateExamIds.forEach(id => db.deleteExamsPayment!(id));
+      }
     }
 
-    const msg = `Successfully purged ${idsToDelete.size} duplicate/repeated payment record(s).`;
-    return { count: idsToDelete.size, message: msg };
+    const msg = `Database Integrity Sanitized: Removed ${orphanedPayments.length} orphaned payment(s), ${orphanedExams.length} orphaned exam(s), and ${duplicateExamIds.size} duplicate exam payment(s). System backup saved automatically.`;
+    
+    logActivity('DATABASE_SANITIZED', 'other', msg);
+
+    return {
+      orphanedPaymentsCount: orphanedPayments.length,
+      orphanedExamsCount: orphanedExams.length,
+      message: msg
+    };
+  };
+
+  const carryForwardTermBalances = (options?: { resetPaymentsForNewTerm?: boolean }): { updatedStudentsCount: number; totalCarriedDebt: number; message: string } => {
+    createBackup('Pre-Term Carry Forward Transition', true);
+
+    let updatedStudentsCount = 0;
+    let totalCarriedDebt = 0;
+
+    const nextStudents = students.map(s => {
+      const discountInfo = getDiscountedTermFee(s, payments, activeTerm, currentDate, systemSettings);
+      const termFee = s.termFee || discountInfo.termFee;
+      const currentLegacy = s.legacyDebt || 0;
+      
+      const totalPaid = payments
+        .filter(p => p.studentId === s.id && !p.isAbsent && p.verified !== false && p.amount > 0)
+        .reduce((sum, p) => sum + p.amount, 0);
+
+      const totalTarget = termFee + currentLegacy;
+      const unpaidBalance = Math.max(0, Math.round((totalTarget - totalPaid) * 100) / 100);
+
+      if (unpaidBalance !== currentLegacy) {
+        updatedStudentsCount++;
+      }
+      totalCarriedDebt += unpaidBalance;
+
+      const updatedStudent: Student = {
+        ...s,
+        legacyDebt: unpaidBalance,
+        updatedAt: new Date().toISOString()
+      };
+
+      if (db.isActive()) {
+        db.saveStudent(updatedStudent);
+      }
+
+      return updatedStudent;
+    });
+
+    setStudents(nextStudents);
+    idbEngine.setItem('s_students', nextStudents);
+    saveState(users, nextStudents, payments);
+
+    let extraMsg = '';
+    if (options?.resetPaymentsForNewTerm) {
+      const emptyPayments: PaymentRecord[] = [];
+      setPayments(emptyPayments);
+      idbEngine.setItem('s_payments', emptyPayments);
+      saveState(users, nextStudents, emptyPayments);
+      extraMsg = ' Payment logs cleared for the new academic term.';
+    }
+
+    const msg = `Automated Term Carry-Forward Complete: Processed ${updatedStudentsCount} pupil balance(s). Carried forward GHC ${totalCarriedDebt.toFixed(2)} total debt across all cohorts.${extraMsg}`;
+
+    logActivity(
+      'STUDENTS_MERGED',
+      'students',
+      msg
+    );
+
+    return {
+      updatedStudentsCount,
+      totalCarriedDebt,
+      message: msg
+    };
   };
 
   const purgeAdvancePayments = (studentIdFilter?: string): { count: number; message: string } => {
@@ -4341,6 +5290,7 @@ School Administration Financial Audit System (MFA Secure)
     }
 
     const idsToDelete = new Set<string>(toDelete.map(p => p.id));
+    registerDeletedIds(Array.from(idsToDelete));
     const nextPayments = payments.filter(p => !idsToDelete.has(p.id));
 
     setPayments(nextPayments);
@@ -4354,7 +5304,88 @@ School Administration Financial Audit System (MFA Secure)
     return { count: toDelete.length, message: msg };
   };
 
-  const purgeRepeatedAndAdvancePayments = (options: { duplicates?: boolean; advance?: boolean; studentId?: string }): { count: number; message: string } => {
+  const purgeOutOfTermPayments = (studentIdFilter?: string): { count: number; message: string } => {
+    return purgeClassOutOfTermAndDuplicates(undefined);
+  };
+
+  const purgeClassOutOfTermAndDuplicates = (targetClass?: StudentClass): { count: number; message: string } => {
+    if (!activeTerm || !activeTerm.schoolDays || activeTerm.schoolDays.length === 0) {
+      return { count: 0, message: "No active term found to establish term boundaries." };
+    }
+
+    const termSchoolDays = activeTerm.schoolDays;
+    const lastTermDay = termSchoolDays[termSchoolDays.length - 1];
+    const maxTermDays = termSchoolDays.length; // Max days in active term
+    const allTermSchoolDays = new Set(terms.flatMap(t => t.schoolDays || []));
+    const publicHolidays = new Set(activeTerm.publicHolidays || []);
+
+    const targetStudentIds = targetClass 
+      ? new Set(students.filter(s => s.class === targetClass).map(s => s.id))
+      : null;
+
+    const idsToDelete = new Set<string>();
+    const studentPaymentsMap = new Map<string, PaymentRecord[]>();
+
+    payments.forEach(p => {
+      if (targetStudentIds && !targetStudentIds.has(p.studentId)) return;
+
+      // 1. Check out-of-term date (> lastTermDay or outside any term calendar after startDate or on public holiday)
+      if (p.date > lastTermDay || (!allTermSchoolDays.has(p.date) && p.date > activeTerm.startDate) || publicHolidays.has(p.date)) {
+        idsToDelete.add(p.id);
+        return;
+      }
+
+      if (!studentPaymentsMap.has(p.studentId)) {
+        studentPaymentsMap.set(p.studentId, []);
+      }
+      studentPaymentsMap.get(p.studentId)!.push(p);
+    });
+
+    // 2. Duplicate check per student per date & cap at maxTermDays
+    studentPaymentsMap.forEach((pList) => {
+      pList.sort((a, b) => (a.date + (a.timestamp || '')).localeCompare(b.date + (b.timestamp || '')));
+
+      const seenDates = new Set<string>();
+      const validRecords: PaymentRecord[] = [];
+
+      pList.forEach(p => {
+        if (idsToDelete.has(p.id)) return;
+
+        if (seenDates.has(p.date) && !p.isAbsent) {
+          idsToDelete.add(p.id); // Duplicate on same date
+        } else {
+          if (!p.isAbsent) seenDates.add(p.date);
+          validRecords.push(p);
+        }
+      });
+
+      // Cap valid records at maxTermDays (e.g., 68 days maximum for this term)
+      if (validRecords.length > maxTermDays) {
+        const excess = validRecords.slice(maxTermDays);
+        excess.forEach(p => idsToDelete.add(p.id));
+      }
+    });
+
+    if (idsToDelete.size === 0) {
+      const classStr = targetClass ? `for Class ${targetClass}` : 'across all classes';
+      return { count: 0, message: `No out-of-term, duplicate, or excess payments found ${classStr}. All records comply with term maximum (${maxTermDays} days).` };
+    }
+
+    registerDeletedIds(Array.from(idsToDelete));
+    const nextPayments = payments.filter(p => !idsToDelete.has(p.id));
+    setPayments(nextPayments);
+    saveState(users, students, nextPayments);
+
+    if (db.isActive()) {
+      idsToDelete.forEach((id: string) => db.deletePayment(id));
+    }
+
+    const classLabel = targetClass ? `Class ${targetClass}` : 'All Classes';
+    const msg = `Successfully cleaned ${idsToDelete.size} excess / future / duplicate payment entry(ies) for ${classLabel}. Total valid payments capped at term maximum (${maxTermDays} days).`;
+    return { count: idsToDelete.size, message: msg };
+  };
+
+  const purgeRepeatedAndAdvancePayments = (options: { duplicates?: boolean; advance?: boolean; outOfTerm?: boolean; studentId?: string }): { count: number; message: string } => {
     let totalPurged = 0;
     const msgs: string[] = [];
 
@@ -4371,6 +5402,14 @@ School Administration Financial Audit System (MFA Secure)
       if (resAdv.count > 0) {
         totalPurged += resAdv.count;
         msgs.push(`${resAdv.count} advance/prepaid payment(s)`);
+      }
+    }
+
+    if (options.outOfTerm) {
+      const resOut = purgeOutOfTermPayments(options.studentId);
+      if (resOut.count > 0) {
+        totalPurged += resOut.count;
+        msgs.push(`${resOut.count} out-of-term payment(s)`);
       }
     }
 
@@ -4393,7 +5432,8 @@ School Administration Financial Audit System (MFA Secure)
       return { count: 0, message: "No attendance or fee entries found on public holiday dates." };
     }
 
-    const idsToDelete = new Set(invalidHolidayPayments.map(p => p.id));
+    const idsToDelete = new Set<string>(invalidHolidayPayments.map(p => p.id));
+    registerDeletedIds(Array.from(idsToDelete));
     const nextPayments = payments.filter(p => !idsToDelete.has(p.id));
 
     setPayments(nextPayments);
@@ -4408,6 +5448,58 @@ School Administration Financial Audit System (MFA Secure)
     return {
       count: idsToDelete.size,
       message: `Successfully purged ${idsToDelete.size} entry(ies) recorded on public holiday dates.`
+    };
+  };
+
+  const purgePaymentsExceptYesterdayAndToday = (): { count: number; retainedCount: number; yesterdayStr: string; todayStr: string; message: string } => {
+    createBackup('Pre-Purge Non-Yesterday/Today Payments', true);
+
+    const todayStr = currentDate;
+    const d = new Date(currentDate + 'T12:00:00Z');
+    d.setDate(d.getDate() - 1);
+    const yesterdayStr = d.toISOString().split('T')[0];
+
+    const toKeep: PaymentRecord[] = [];
+    const toDelete: PaymentRecord[] = [];
+
+    payments.forEach(p => {
+      if (p.date === todayStr || p.date === yesterdayStr) {
+        toKeep.push(p);
+      } else {
+        toDelete.push(p);
+      }
+    });
+
+    if (toDelete.length === 0) {
+      return {
+        count: 0,
+        retainedCount: toKeep.length,
+        yesterdayStr,
+        todayStr,
+        message: `No older fee entries found to purge. All ${toKeep.length} fee record(s) belong to yesterday (${yesterdayStr}) or today (${todayStr}).`
+      };
+    }
+
+    const idsToDelete = new Set(toDelete.map(p => p.id));
+    registerDeletedIds(Array.from(idsToDelete));
+    setPayments(toKeep);
+    idbEngine.setItem('s_payments', toKeep);
+    saveState(users, students, toKeep);
+
+    if (db.isActive()) {
+      idsToDelete.forEach(id => db.deletePayment(id));
+    }
+
+    const msg = `Payment Audit Clean-up Complete: Successfully deleted ${toDelete.length} fee entry(ies) recorded before yesterday. Retained ${toKeep.length} fee record(s) logged on yesterday (${yesterdayStr}) and today (${todayStr}).`;
+
+    logActivity('payments', 'payments', msg);
+
+    return {
+      count: toDelete.length,
+      retainedCount: toKeep.length,
+      yesterdayStr,
+      todayStr,
+      message: msg
     };
   };
 
@@ -4552,7 +5644,7 @@ School Administration Financial Audit System (MFA Secure)
     setStudents(updatedStudents);
     saveState(users, updatedStudents, payments);
 
-    if (db.isActive() && storageMode === 'cloud') {
+    if (db.isActive()) {
       db.saveStudentsBulk(updatedStudents).catch(err => {
         console.error("Failed to save bulk promoted students to cloud:", err);
       });
@@ -4581,7 +5673,7 @@ School Administration Financial Audit System (MFA Secure)
       setPromotionBackups(updatedBackups);
       idbEngine.setItem('s_promotion_backups', updatedBackups);
 
-      if (db.isActive() && storageMode === 'cloud') {
+      if (db.isActive()) {
         db.saveStudentsBulk(revertedStudents).catch(err => {
           console.error("Failed to restore bulk student list to cloud:", err);
         });
@@ -4611,7 +5703,7 @@ School Administration Financial Audit System (MFA Secure)
     setExpenses(updated);
     idbEngine.setItem('s_expenses', updated);
 
-    if (db.isActive() && storageMode === 'cloud') {
+    if (db.isActive()) {
       db.saveExpense(newExpense).catch(err => {
         console.error("Failed to save expense to cloud:", err);
       });
@@ -4619,14 +5711,40 @@ School Administration Financial Audit System (MFA Secure)
   };
 
   const deleteExpense = (expenseId: string) => {
+    const targetExp = expenses.find(e => e.id === expenseId);
+    if (targetExp) {
+      moveToTrash(
+        'expense',
+        expenseId,
+        targetExp,
+        `Deleted expense item "${targetExp.description}" (GHC ${targetExp.amount.toFixed(2)}) under ${targetExp.category}`,
+        { amount: targetExp.amount }
+      );
+    }
+
     const updated = expenses.filter(e => e.id !== expenseId);
     setExpenses(updated);
     idbEngine.setItem('s_expenses', updated);
 
-    if (db.isActive() && storageMode === 'cloud') {
+    if (db.isActive()) {
       db.deleteExpense(expenseId).catch(err => {
         console.error("Failed to delete expense from cloud:", err);
       });
+    }
+
+    if (targetExp) {
+      logActivity(
+        'EXPENSE_DELETED',
+        'expenses',
+        `Deleted expense item "${targetExp.description}" (GHC ${targetExp.amount.toFixed(2)}) under ${targetExp.category}`,
+        undefined,
+        undefined,
+        targetExp.amount,
+        {
+          type: 'expense',
+          expense: targetExp
+        }
+      );
     }
   };
 
@@ -4647,7 +5765,7 @@ School Administration Financial Audit System (MFA Secure)
     setBudgetTargets(updated);
     idbEngine.setItem('s_budget_targets', updated);
 
-    if (db.isActive() && storageMode === 'cloud') {
+    if (db.isActive()) {
       try {
         await db.saveBudgetTarget(newTarget);
       } catch (err) {
@@ -4661,7 +5779,7 @@ School Administration Financial Audit System (MFA Secure)
     setBudgetTargets(updated);
     idbEngine.setItem('s_budget_targets', updated);
 
-    if (db.isActive() && storageMode === 'cloud') {
+    if (db.isActive()) {
       try {
         await db.saveBudgetTarget(target);
       } catch (err) {
@@ -4675,7 +5793,7 @@ School Administration Financial Audit System (MFA Secure)
     setBudgetTargets(updated);
     idbEngine.setItem('s_budget_targets', updated);
 
-    if (db.isActive() && storageMode === 'cloud') {
+    if (db.isActive()) {
       try {
         await db.deleteBudgetTarget(targetId);
       } catch (err) {
@@ -4743,7 +5861,7 @@ School Administration Financial Audit System (MFA Secure)
     setExamsPayments(updated);
     idbEngine.setItem('s_exams_payments', updated);
 
-    if (db.isActive() && storageMode === 'cloud') {
+    if (db.isActive()) {
       try {
         await db.saveExamsPayment(newPayment);
       } catch (err) {
@@ -4757,7 +5875,7 @@ School Administration Financial Audit System (MFA Secure)
     setExamsPayments(updated);
     idbEngine.setItem('s_exams_payments', updated);
 
-    if (db.isActive() && storageMode === 'cloud') {
+    if (db.isActive()) {
       try {
         await db.deleteExamsPayment(paymentId);
       } catch (err) {
@@ -4795,7 +5913,7 @@ School Administration Financial Audit System (MFA Secure)
     setExamsExpenses(updated);
     idbEngine.setItem('s_exams_expenses', updated);
 
-    if (db.isActive() && storageMode === 'cloud') {
+    if (db.isActive()) {
       try {
         await db.saveExamsExpense(newExpense);
       } catch (err) {
@@ -4809,7 +5927,7 @@ School Administration Financial Audit System (MFA Secure)
     setExamsExpenses(updated);
     idbEngine.setItem('s_exams_expenses', updated);
 
-    if (db.isActive() && storageMode === 'cloud') {
+    if (db.isActive()) {
       try {
         await db.deleteExamsExpense(expenseId);
       } catch (err) {
@@ -4823,7 +5941,7 @@ School Administration Financial Audit System (MFA Secure)
     setExamsExpenses(updated);
     idbEngine.setItem('s_exams_expenses', updated);
 
-    if (db.isActive() && storageMode === 'cloud') {
+    if (db.isActive()) {
       try {
         await db.saveExamsExpense(updatedExpense);
       } catch (err) {
@@ -4836,7 +5954,7 @@ School Administration Financial Audit System (MFA Secure)
     setExamsSettings(settings);
     idbEngine.setItem('s_exams_settings', settings);
 
-    if (db.isActive() && storageMode === 'cloud') {
+    if (db.isActive()) {
       try {
         await db.saveExamsSettings(settings);
       } catch (err) {
@@ -4901,7 +6019,7 @@ School Administration Financial Audit System (MFA Secure)
     setSalaries(updated);
     idbEngine.setItem('s_salaries', updated);
 
-    if (db.isActive() && storageMode === 'cloud') {
+    if (db.isActive()) {
       db.saveSalary(newSalary).catch(err => {
         console.error("Failed to save salary to cloud:", err);
       });
@@ -4913,7 +6031,7 @@ School Administration Financial Audit System (MFA Secure)
     setSalaries(updated);
     idbEngine.setItem('s_salaries', updated);
 
-    if (db.isActive() && storageMode === 'cloud') {
+    if (db.isActive()) {
       db.deleteSalary(salaryId).catch(err => {
         console.error("Failed to delete salary from cloud:", err);
       });
@@ -4930,7 +6048,7 @@ School Administration Financial Audit System (MFA Secure)
     setTeacherEvaluations(updated);
     idbEngine.setItem('s_teacher_evaluations', updated);
 
-    if (db.isActive() && storageMode === 'cloud') {
+    if (db.isActive()) {
       try {
         const success = await db.saveTeacherEvaluation(newEval);
         return success;
@@ -4947,7 +6065,7 @@ School Administration Financial Audit System (MFA Secure)
     setTeacherEvaluations(updated);
     idbEngine.setItem('s_teacher_evaluations', updated);
 
-    if (db.isActive() && storageMode === 'cloud') {
+    if (db.isActive()) {
       try {
         const success = await db.deleteTeacherEvaluation(id);
         return success;
@@ -4969,7 +6087,7 @@ School Administration Financial Audit System (MFA Secure)
     setJournalEntries(updated);
     idbEngine.setItem('s_journal_entries', updated);
 
-    if (db.isActive() && storageMode === 'cloud') {
+    if (db.isActive()) {
       try {
         const success = await db.saveJournalEntry(newEntry);
         return success;
@@ -4986,7 +6104,7 @@ School Administration Financial Audit System (MFA Secure)
     setJournalEntries(updated);
     idbEngine.setItem('s_journal_entries', updated);
 
-    if (db.isActive() && storageMode === 'cloud') {
+    if (db.isActive()) {
       try {
         const success = await db.deleteJournalEntry(id);
         return success;
@@ -5028,7 +6146,8 @@ School Administration Financial Audit System (MFA Secure)
     details: string,
     studentId?: string,
     studentName?: string,
-    amount?: number
+    amount?: number,
+    snapshotData?: any
   ) => {
     try {
       const res = await fetch('/api/audit-logs', {
@@ -5044,7 +6163,8 @@ School Administration Financial Audit System (MFA Secure)
           details,
           studentId,
           studentName,
-          amount
+          amount,
+          snapshotData
         })
       });
       const data = await res.json();
@@ -5054,6 +6174,295 @@ School Administration Financial Audit System (MFA Secure)
     } catch (err) {
       console.error('Failed to log activity via API:', err);
     }
+  };
+
+  const fetchTrashItems = async () => {
+    try {
+      const res = await fetch('/api/trash');
+      if (res.ok) {
+        const data = await res.json();
+        setTrashItems(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch Trash items state:', err);
+    }
+  };
+
+  const moveToTrash = async (
+    itemType: 'payment' | 'student' | 'expense' | 'bulk_payments',
+    originalId: string,
+    recordData: any,
+    reason: string,
+    meta?: { studentId?: string; studentName?: string; amount?: number; itemCount?: number; class?: string }
+  ): Promise<TrashItem> => {
+    const deletedAt = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    const deletedBy = currentUser ? `${currentUser.name} (${currentUser.role})` : 'System Automation';
+
+    const newItem: TrashItem = {
+      id: `trash_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      originalId,
+      itemType,
+      recordData,
+      deletedAt,
+      expiresAt,
+      deletedBy,
+      reason,
+      studentId: meta?.studentId,
+      studentName: meta?.studentName,
+      amount: meta?.amount,
+      itemCount: meta?.itemCount,
+      class: meta?.class
+    };
+
+    setTrashItems(prev => [newItem, ...prev.filter(t => t.id !== newItem.id)]);
+
+    try {
+      await fetch('/api/trash', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newItem)
+      });
+    } catch (err) {
+      console.error('Failed to save soft-deleted trash item:', err);
+    }
+
+    return newItem;
+  };
+
+  const restoreTrashItem = async (trashId: string): Promise<{ success: boolean; message: string }> => {
+    if (currentUser?.role !== 'Administrator') {
+      return { success: false, message: 'Access Denied: Only Administrators can perform soft delete restoration operations.' };
+    }
+
+    const item = trashItems.find(t => t.id === trashId);
+    if (item) {
+      if (item.itemType === 'payment') {
+        const paymentToRestore: PaymentRecord = item.recordData.payment || item.recordData;
+        if (paymentToRestore && paymentToRestore.id) {
+          let nextPayments = [...payments];
+          if (!nextPayments.some(p => p.id === paymentToRestore.id)) {
+            nextPayments.unshift(paymentToRestore);
+          }
+          if (Array.isArray(item.recordData.relatedMarkers)) {
+            item.recordData.relatedMarkers.forEach((m: PaymentRecord) => {
+              if (!nextPayments.some(p => p.id === m.id)) {
+                nextPayments.unshift(m);
+                if (rawDb.isActive()) rawDb.savePayment(m);
+              }
+            });
+          }
+          setPayments(nextPayments);
+          saveState(users, students, nextPayments);
+          if (rawDb.isActive()) rawDb.savePayment(paymentToRestore);
+        }
+      } else if (item.itemType === 'bulk_payments') {
+        const paymentsArray: PaymentRecord[] = Array.isArray(item.recordData) 
+          ? item.recordData 
+          : (item.recordData?.payments || []);
+        let nextPayments = [...payments];
+        paymentsArray.forEach(p => {
+          if (p && p.id && !nextPayments.some(existing => existing.id === p.id)) {
+            nextPayments.unshift(p);
+            if (rawDb.isActive()) rawDb.savePayment(p);
+          }
+        });
+        setPayments(nextPayments);
+        saveState(users, students, nextPayments);
+      } else if (item.itemType === 'student') {
+        const pupilToRestore: Student = item.recordData.student || item.recordData;
+        if (pupilToRestore && pupilToRestore.id) {
+          let nextStudents = [...students];
+          const sIdx = nextStudents.findIndex(s => s.id === pupilToRestore.id);
+          if (sIdx >= 0) nextStudents[sIdx] = pupilToRestore;
+          else nextStudents.unshift(pupilToRestore);
+
+          let nextPayments = [...payments];
+          if (Array.isArray(item.recordData.payments)) {
+            item.recordData.payments.forEach((p: PaymentRecord) => {
+              if (!nextPayments.some(existing => existing.id === p.id)) {
+                nextPayments.unshift(p);
+                if (rawDb.isActive()) rawDb.savePayment(p);
+              }
+            });
+          }
+          setStudents(nextStudents);
+          setPayments(nextPayments);
+          saveState(users, nextStudents, nextPayments);
+          if (rawDb.isActive()) rawDb.saveStudent(pupilToRestore);
+        }
+      } else if (item.itemType === 'expense') {
+        const expenseToRestore: Expense = item.recordData.expense || item.recordData;
+        if (expenseToRestore && expenseToRestore.id) {
+          let nextExpenses = [...expenses];
+          if (!nextExpenses.some(e => e.id === expenseToRestore.id)) {
+            nextExpenses.unshift(expenseToRestore);
+          }
+          setExpenses(nextExpenses);
+          if (rawDb.isActive()) rawDb.saveExpense(expenseToRestore);
+        }
+      }
+    }
+
+    setTrashItems(prev => prev.filter(t => t.id !== trashId));
+    const res = await rawDb.restoreTrashItem(trashId, currentUser ? `${currentUser.name} (${currentUser.role})` : 'System Admin');
+    await fetchAuditLogs();
+    await fetchTrashItems();
+    return res;
+  };
+
+  const permanentlyDeleteTrashItem = async (trashId: string): Promise<boolean> => {
+    setTrashItems(prev => prev.filter(t => t.id !== trashId));
+    const res = await rawDb.deleteTrashItem(trashId);
+    return res;
+  };
+
+  const emptyTrash = async (): Promise<{ success: boolean; message: string }> => {
+    if (currentUser?.role !== 'Administrator') {
+      return { success: false, message: 'Access Denied: Only Administrators can empty the soft delete trash bin.' };
+    }
+    setTrashItems([]);
+    const res = await rawDb.emptyTrash(currentUser ? `${currentUser.name} (${currentUser.role})` : 'System Admin');
+    await fetchAuditLogs();
+    return res;
+  };
+
+  const restoreDeletedRecord = async (logOrSnapshot: any): Promise<{ success: boolean; message: string }> => {
+    if (currentUser?.role !== 'Administrator') {
+      return { success: false, message: 'Access Denied: Only Administrators can perform data recovery operations.' };
+    }
+
+    // Check if it's a TrashItem directly
+    if (logOrSnapshot && logOrSnapshot.expiresAt && logOrSnapshot.itemType) {
+      return restoreTrashItem(logOrSnapshot.id);
+    }
+
+    let snapshot = logOrSnapshot?.snapshotData || logOrSnapshot;
+    if (!snapshot) {
+      return { success: false, message: 'No recovery snapshot data available for this record.' };
+    }
+
+    // Handle restoring a Pupil
+    if (snapshot.type === 'student' && snapshot.student) {
+      const pupilToRestore: Student = snapshot.student;
+      const existingIndex = students.findIndex(s => s.id === pupilToRestore.id);
+      let nextStudents = [...students];
+      if (existingIndex >= 0) {
+        nextStudents[existingIndex] = pupilToRestore;
+      } else {
+        nextStudents.unshift(pupilToRestore);
+      }
+
+      let nextPayments = [...payments];
+      if (Array.isArray(snapshot.payments) && snapshot.payments.length > 0) {
+        snapshot.payments.forEach((p: PaymentRecord) => {
+          if (!nextPayments.some(existingP => existingP.id === p.id)) {
+            nextPayments.unshift(p);
+            if (db.isActive()) db.savePayment(p);
+          }
+        });
+      }
+
+      setStudents(nextStudents);
+      setPayments(nextPayments);
+      saveState(users, nextStudents, nextPayments);
+
+      if (db.isActive()) {
+        await db.saveStudent(pupilToRestore);
+      }
+
+      await logActivity(
+        'PUPIL_RECOVERY_REVERT',
+        'students',
+        `Reverted accidental deletion: Restored pupil record for "${pupilToRestore.name}" (${pupilToRestore.class})`,
+        pupilToRestore.id,
+        pupilToRestore.name
+      );
+
+      return {
+        success: true,
+        message: `Successfully restored pupil record "${pupilToRestore.name}" and associated transaction history!`
+      };
+    }
+
+    // Handle restoring a Payment Record
+    if (snapshot.type === 'payment' && snapshot.payment) {
+      const paymentToRestore: PaymentRecord = snapshot.payment;
+      let nextPayments = [...payments];
+      if (!nextPayments.some(p => p.id === paymentToRestore.id)) {
+        nextPayments.unshift(paymentToRestore);
+      }
+
+      if (Array.isArray(snapshot.relatedMarkers)) {
+        snapshot.relatedMarkers.forEach((m: PaymentRecord) => {
+          if (!nextPayments.some(p => p.id === m.id)) {
+            nextPayments.unshift(m);
+            if (db.isActive()) db.savePayment(m);
+          }
+        });
+      }
+
+      setPayments(nextPayments);
+      saveState(users, students, nextPayments);
+
+      if (db.isActive()) {
+        await db.savePayment(paymentToRestore);
+      }
+
+      await logActivity(
+        'PAYMENT_RECOVERY_REVERT',
+        'payments',
+        `Reverted accidental payment void: Restored transaction of GHC ${(paymentToRestore.amount || 0).toFixed(2)} for pupil "${paymentToRestore.studentName || 'Pupil'}"`,
+        paymentToRestore.studentId,
+        paymentToRestore.studentName,
+        paymentToRestore.amount
+      );
+
+      return {
+        success: true,
+        message: `Successfully restored fee payment entry of GHC ${(paymentToRestore.amount || 0).toFixed(2)} for ${paymentToRestore.studentName || 'Pupil'}!`
+      };
+    }
+
+    // Handle restoring an Expense
+    if (snapshot.type === 'expense' && snapshot.expense) {
+      const expenseToRestore: Expense = snapshot.expense;
+      let nextExpenses = [...expenses];
+      if (!nextExpenses.some(e => e.id === expenseToRestore.id)) {
+        nextExpenses.unshift(expenseToRestore);
+      }
+      setExpenses(nextExpenses);
+      await idbEngine.setItem('s_expenses', nextExpenses);
+
+      if (db.isActive()) {
+        await db.saveExpense(expenseToRestore);
+      }
+
+      await logActivity(
+        'EXPENSE_RECOVERY_REVERT',
+        'expenses',
+        `Reverted accidental expense deletion: Restored expense item "${expenseToRestore.description}" (GHC ${expenseToRestore.amount.toFixed(2)})`,
+        undefined,
+        undefined,
+        expenseToRestore.amount
+      );
+
+      return {
+        success: true,
+        message: `Successfully restored expense entry "${expenseToRestore.description}"!`
+      };
+    }
+
+    // Handle restoring from a system backup snapshot
+    if (snapshot.type === 'backup' && snapshot.backupId) {
+      restoreBackup(snapshot.backupId);
+      return {
+        success: true,
+        message: `Successfully reverted database state to system recovery snapshot!`
+      };
+    }
+
+    return { success: false, message: 'Unrecognized snapshot type or corrupt recovery payload.' };
   };
 
   const sendautomatedWhatsApp = async (
@@ -5110,10 +6519,11 @@ School Administration Financial Audit System (MFA Secure)
     }
   };
 
-  // Initially fetch whatsapp logs and audit logs on storage mode shifts or startup
+  // Initially fetch whatsapp logs, audit logs, and trash items on storage mode shifts or startup
   useEffect(() => {
     fetchWhatsappLogs();
     fetchAuditLogs();
+    fetchTrashItems();
   }, [storageMode]);
 
   // Monitor budget progressive targets & trigger automated WhatsApp alerts for thresholds 50%, 75%, 100%
@@ -5123,7 +6533,7 @@ School Administration Financial Audit System (MFA Secure)
     const adminPhone = systemSettings?.adminWhatsAppPhone;
     if (!adminPhone || adminPhone.trim() === '') return;
     
-    const totalFeesReceived = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
+    const totalFeesReceived = payments.filter(p => !p.isAbsent && p.verified !== false && p.amount > 0).reduce((sum, p) => sum + (p.amount || 0), 0);
     let needsUpdate = false;
     
     const updatedTargets = budgetTargets.map(target => {
@@ -5178,7 +6588,7 @@ School Administration Financial Audit System (MFA Secure)
       setBudgetTargets(updatedTargets);
       idbEngine.setItem('s_budget_targets', updatedTargets);
       
-      if (db.isActive() && storageMode === 'cloud') {
+      if (db.isActive()) {
         updatedTargets.forEach(async (target, idx) => {
           const oldTarget = budgetTargets[idx];
           if (JSON.stringify(target.notifiedThresholds) !== JSON.stringify(oldTarget?.notifiedThresholds)) {
@@ -5206,6 +6616,7 @@ School Administration Financial Audit System (MFA Secure)
       setViewingTermId,
       addTerm,
       editTerm,
+      completeTerm,
       setActiveTerm,
       deleteTerm,
       addPublicHoliday,
@@ -5220,7 +6631,9 @@ School Administration Financial Audit System (MFA Secure)
       addStudent,
       updateStudent,
       deleteStudent,
+      mergeStudents,
       purgeDeactivatedStudents,
+      standardizePupilIds,
       promoteAllStudents,
       promotionBackups,
       revertLastPromotion,
@@ -5236,6 +6649,7 @@ School Administration Financial Audit System (MFA Secure)
       deletePayment,
       clearDailyPaymentsForClass,
       deleteStudentPayments,
+      deleteClassFeeRecords,
       adjustPayment,
       registerStaff,
       updateStaff,
@@ -5253,9 +6667,16 @@ School Administration Financial Audit System (MFA Secure)
       clearAllPayments,
       administrativePurge,
       purgeDuplicatePayments,
+      getDuplicatePaymentAudit,
+      deletePaymentRecord,
+      sanitizeDatabaseIntegrity,
+      carryForwardTermBalances,
       purgeAdvancePayments,
+      purgeOutOfTermPayments,
+      purgeClassOutOfTermAndDuplicates,
       purgeRepeatedAndAdvancePayments,
       purgePublicHolidayPayments,
+      purgePaymentsExceptYesterdayAndToday,
       deleteAllAutomaticEntries,
       firebaseConnected,
       firebaseError,
@@ -5268,7 +6689,7 @@ School Administration Financial Audit System (MFA Secure)
       bgSyncStatus,
       saveStatus,
       lastBgSyncTime,
-      pendingLocalEdits: storageMode === 'cloud' ? [] : pendingLocalEdits,
+      pendingLocalEdits,
       clearPendingLocalEdits,
       backups,
       createBackup,
@@ -5299,6 +6720,13 @@ School Administration Financial Audit System (MFA Secure)
       auditLogs,
       fetchAuditLogs,
       logActivity,
+      restoreDeletedRecord,
+      trashItems,
+      fetchTrashItems,
+      moveToTrash,
+      restoreTrashItem,
+      permanentlyDeleteTrashItem,
+      emptyTrash,
       systemSettings,
       updateSystemSettings,
       autoSendCheckInAlert: systemSettings?.autoSendCheckInAlert ?? false,
