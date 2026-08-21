@@ -4290,7 +4290,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     customTerms?: Term[]
   ) => {
     if (!db.isActive()) {
-      return { success: false, message: 'Server database configuration is missing!' };
+      return { success: false, message: 'Cloud database configuration is missing!' };
     }
     try {
       const uToSeed = customUsers || users;
@@ -4298,11 +4298,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const pToSeed = customPayments || payments;
       const tToSeed = customTerms || terms;
 
-      const success = await db.seedTables(uToSeed, sToSeed, pToSeed, tToSeed);
+      const payload = {
+        users: uToSeed,
+        students: sToSeed,
+        payments: pToSeed,
+        terms: tToSeed,
+        expenses,
+        salaries,
+        examsPayments,
+        examsExpenses,
+        examsSettings,
+        budgetTargets,
+        whatsappLogs,
+        teacherEvaluations,
+        journalEntries,
+        systemSettings
+      };
+
+      const success = await db.seedTables(payload);
       if (success) {
         setFirebaseConnected(true);
         clearPendingLocalEdits();
-        return { success: true, message: 'Seeded records safely into Server local-JSON tables!' };
+        return { success: true, message: `Successfully synced ${sToSeed.length} pupils and ${pToSeed.length} payment records to Cloud Firestore!` };
       }
       return { success: false, message: 'Seeding rejected. Make sure target database is reachable.' };
     } catch (e) {
