@@ -10,7 +10,7 @@ import {
   FileSpreadsheet, Save, Sparkles, Download, Upload, RefreshCw, 
   CheckCircle2, AlertCircle, ArrowUpDown, ChevronDown, ChevronRight,
   TrendingUp, Award, HelpCircle, Filter, BookOpen, Users, Check,
-  Sliders, Medal, X
+  Sliders, Medal, X, Lock, Unlock, ShieldCheck, ShieldAlert, KeyRound, Shield
 } from 'lucide-react';
 import { 
   getSubjectsForClass, 
@@ -20,6 +20,7 @@ import {
   DEFAULT_GHANA_SUBJECTS,
   getRankMedal
 } from '../../utils/ghanaCurriculum';
+import { canUserEditClassMarks, isHeadOrAdmin, getTeacherAssignedClasses } from '../../utils/rbacUtils';
 import * as XLSX from 'xlsx';
 
 interface MarkEntrySpreadsheetProps {
@@ -51,6 +52,7 @@ export const MarkEntrySpreadsheet: React.FC<MarkEntrySpreadsheetProps> = ({
     batchSaveAcademicAssessments, 
     activeTerm,
     currentUser,
+    users = [],
     academicSettings,
     updateAcademicSettings,
     teacherAllocations = [],
@@ -67,6 +69,52 @@ export const MarkEntrySpreadsheet: React.FC<MarkEntrySpreadsheetProps> = ({
     }
     return classSubjects[0]?.id || 'sub_pri_eng';
   });
+
+  // Role-Based Security evaluation
+  const accessCheck = useMemo(() => {
+    return canUserEditClassMarks(currentUser, selectedClass, selectedSubjectId, teacherAllocations);
+  }, [currentUser, selectedClass, selectedSubjectId, teacherAllocations]);
+
+  // Admin / Headmaster temporary override state
+  const [isOverrideActive, setIsOverrideActive] = useState(false);
+  const [showOverrideModal, setShowOverrideModal] = useState(false);
+  const [overrideAdminEmail, setOverrideAdminEmail] = useState('');
+  const [overridePassword, setOverridePassword] = useState('');
+  const [overrideError, setOverrideError] = useState<string | null>(null);
+
+  // Reset override when class changes
+  useEffect(() => {
+    setIsOverrideActive(false);
+  }, [selectedClass]);
+
+  const effectiveAllowed = accessCheck.allowed || isOverrideActive;
+
+  // Handle Admin Override verification
+  const handleVerifyOverride = (e: React.FormEvent) => {
+    e.preventDefault();
+    setOverrideError(null);
+
+    const adminUser = users.find(u => 
+      u.email.toLowerCase() === overrideAdminEmail.trim().toLowerCase() && 
+      (isHeadOrAdmin(u) || u.permissions?.canManageExams)
+    );
+
+    if (!adminUser) {
+      setOverrideError('No Administrator or Headmaster account found with this email.');
+      return;
+    }
+
+    if (adminUser.password && adminUser.password !== overridePassword) {
+      setOverrideError('Invalid password. Authorization denied.');
+      return;
+    }
+
+    setIsOverrideActive(true);
+    setShowOverrideModal(false);
+    setOverrideAdminEmail('');
+    setOverridePassword('');
+    if (playFeedbackSound) playFeedbackSound('success');
+  };
 
   // Ensure selectedSubjectId is valid when class changes
   useEffect(() => {
@@ -486,19 +534,34 @@ export const MarkEntrySpreadsheet: React.FC<MarkEntrySpreadsheetProps> = ({
             <span className="text-xs font-mono font-bold uppercase text-amber-400 mr-2 flex items-center gap-1.5">
               <Users size={14} /> Class Gate:
             </span>
-            {ALL_CLASSES.map(cls => (
-              <button
-                key={cls}
-                onClick={() => setSelectedClass(cls)}
-                className={`px-3 py-1 text-xs font-mono font-bold transition-all cursor-pointer ${
-                  selectedClass === cls
-                    ? 'bg-amber-400 text-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]'
-                    : isLight ? 'bg-white text-neutral-700 hover:bg-neutral-200' : 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700'
-                }`}
-              >
-                {cls}
-              </button>
-            ))}
+            {ALL_CLASSES.map(cls => {
+              const isAssigned = accessCheck.assignedClasses.includes(cls) || isHeadOrAdmin(currentUser);
+              const isPrimary = accessCheck.primaryClass === cls;
+              const isCurrent = selectedClass === cls;
+
+              return (
+                <button
+                  key={cls}
+                  onClick={() => setSelectedClass(cls)}
+                  className={`px-3 py-1 text-xs font-mono font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    isCurrent
+                      ? 'bg-amber-400 text-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]'
+                      : isLight 
+                        ? 'bg-white text-neutral-700 hover:bg-neutral-200 border border-neutral-300' 
+                        : 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700 border border-neutral-700'
+                  }`}
+                  title={isAssigned ? `You are authorized for ${cls}` : `Restricted: Read-Only access for ${cls}`}
+                >
+                  <span>{cls}</span>
+                  {!isAssigned && (
+                    <Lock size={11} className={isCurrent ? 'text-black' : 'text-neutral-500'} />
+                  )}
+                  {isPrimary && (
+                    <span className={`text-[10px] ${isCurrent ? 'text-black' : 'text-amber-400'}`}>★</span>
+                  )}
+                </button>
+              );
+            })}
           </div>
 
           <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-neutral-800">
@@ -529,8 +592,13 @@ export const MarkEntrySpreadsheet: React.FC<MarkEntrySpreadsheetProps> = ({
         <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto justify-end">
           <button
             onClick={handleAutoGenerateRemarks}
-            className="bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-700 px-3 py-2 text-xs font-mono font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
-            title="Auto generate remarks based on standard GES grade scale"
+            disabled={!effectiveAllowed}
+            className={`border px-3 py-2 text-xs font-mono font-bold flex items-center gap-1.5 transition-colors ${
+              !effectiveAllowed 
+                ? 'opacity-40 cursor-not-allowed bg-neutral-900 border-neutral-800 text-neutral-500' 
+                : 'bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border-neutral-700 cursor-pointer'
+            }`}
+            title={!effectiveAllowed ? 'Editing locked: Restricted access' : 'Auto generate remarks based on standard GES grade scale'}
           >
             <Sparkles size={14} className="text-amber-400" />
             <span>Auto Remarks</span>
@@ -545,13 +613,18 @@ export const MarkEntrySpreadsheet: React.FC<MarkEntrySpreadsheetProps> = ({
             <span>Excel Export</span>
           </button>
 
-          <label className="bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-700 px-3 py-2 text-xs font-mono font-bold flex items-center gap-1.5 transition-colors cursor-pointer">
+          <label className={`border px-3 py-2 text-xs font-mono font-bold flex items-center gap-1.5 transition-colors ${
+            !effectiveAllowed 
+              ? 'opacity-40 cursor-not-allowed bg-neutral-900 border-neutral-800 text-neutral-500' 
+              : 'bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border-neutral-700 cursor-pointer'
+          }`}>
             <Upload size={14} className="text-blue-400" />
             <span>Import</span>
             <input
               ref={fileInputRef}
               type="file"
               accept=".xlsx, .xls, .csv"
+              disabled={!effectiveAllowed}
               onChange={handleFileUpload}
               className="hidden"
             />
@@ -559,18 +632,78 @@ export const MarkEntrySpreadsheet: React.FC<MarkEntrySpreadsheetProps> = ({
 
           <button
             onClick={handleSaveSpreadsheet}
-            disabled={isSaving}
-            className={`px-5 py-2 text-xs font-mono font-black uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] ${
-              hasUnsavedChanges
-                ? 'bg-amber-400 hover:bg-amber-300 text-black animate-pulse'
-                : 'bg-emerald-500 hover:bg-emerald-400 text-black'
+            disabled={isSaving || !effectiveAllowed}
+            className={`px-5 py-2 text-xs font-mono font-black uppercase tracking-wider flex items-center gap-2 transition-all shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] ${
+              !effectiveAllowed
+                ? 'opacity-40 cursor-not-allowed bg-neutral-800 text-neutral-500 border border-neutral-700'
+                : hasUnsavedChanges
+                ? 'bg-amber-400 hover:bg-amber-300 text-black animate-pulse cursor-pointer'
+                : 'bg-emerald-500 hover:bg-emerald-400 text-black cursor-pointer'
             }`}
+            title={!effectiveAllowed ? 'Editing locked: Restricted access' : 'Save all marks to cloud database'}
           >
             <Save size={15} />
             <span>{isSaving ? 'Saving Cloud...' : hasUnsavedChanges ? 'Save Changes *' : 'Save All Marks'}</span>
           </button>
         </div>
       </div>
+
+      {/* Security & Access Authorization Banner */}
+      {!effectiveAllowed ? (
+        <div className="bg-amber-950/40 border-2 border-amber-500/80 p-4 font-mono text-xs text-amber-200 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-lg">
+          <div className="flex items-start gap-3">
+            <div className="p-2 bg-amber-500 text-black font-black mt-0.5 shrink-0 shadow-md">
+              <ShieldAlert size={20} />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="bg-amber-500 text-black text-[10px] font-black uppercase px-2 py-0.5 tracking-wider">
+                  🔒 Read-Only Security Mode
+                </span>
+                <span className="font-bold text-white uppercase tracking-wide">
+                  Class {selectedClass} Marks Editing Restricted
+                </span>
+              </div>
+              <p className="text-xs text-amber-300/90 mt-1">
+                {accessCheck.reason}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 w-full md:w-auto shrink-0">
+            {accessCheck.primaryClass && accessCheck.primaryClass !== selectedClass && (
+              <button
+                onClick={() => setSelectedClass(accessCheck.primaryClass!)}
+                className="px-3.5 py-1.5 bg-amber-400 hover:bg-amber-300 text-black font-black text-xs uppercase tracking-wider flex items-center gap-1.5 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] cursor-pointer"
+              >
+                <span>⚡ Switch to My Class ({accessCheck.primaryClass})</span>
+              </button>
+            )}
+            <button
+              onClick={() => setShowOverrideModal(true)}
+              className="px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-600 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <KeyRound size={13} className="text-amber-400" />
+              <span>Headmaster Override...</span>
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="bg-emerald-950/30 border border-emerald-500/50 p-3 font-mono text-xs text-emerald-300 flex flex-wrap items-center justify-between gap-2 shadow-sm">
+          <div className="flex items-center gap-2">
+            <ShieldCheck size={16} className="text-emerald-400 shrink-0" />
+            <span className="font-bold text-emerald-200">{accessCheck.reason}</span>
+            {isOverrideActive && (
+              <span className="bg-amber-400 text-black font-black text-[10px] px-2 py-0.5 uppercase tracking-wider ml-1">
+                Temporary Admin Override Active
+              </span>
+            )}
+          </div>
+          <div className="text-[11px] text-neutral-400">
+            Marks entry & cloud sync active for <span className="text-white font-bold">{selectedClass}</span>
+          </div>
+        </div>
+      )}
 
       {/* Flexible SBA : Exam Weighting Ratio Selector */}
       <div className={`${isLight ? 'bg-neutral-100 border-neutral-300' : 'bg-neutral-900 border-neutral-800'} border p-3.5 flex flex-wrap items-center justify-between gap-3 text-xs font-mono`}>
@@ -747,10 +880,15 @@ export const MarkEntrySpreadsheet: React.FC<MarkEntrySpreadsheetProps> = ({
                           step="0.5"
                           placeholder="-"
                           value={item.row.classExercises}
+                          disabled={!effectiveAllowed}
+                          readOnly={!effectiveAllowed}
                           onChange={e => handleCellChange(item.studentId, 'classExercises', e.target.value)}
                           className={`w-full py-1 px-1.5 text-center text-xs font-mono font-bold border focus:outline-none focus:border-blue-400 ${
-                            isLight ? 'bg-white border-neutral-300 text-black' : 'bg-neutral-950 border-neutral-700 text-white'
+                            !effectiveAllowed 
+                              ? 'cursor-not-allowed bg-neutral-900/60 text-neutral-500 border-neutral-800 opacity-60'
+                              : isLight ? 'bg-white border-neutral-300 text-black' : 'bg-neutral-950 border-neutral-700 text-white'
                           }`}
+                          title={!effectiveAllowed ? `Editing locked: ${accessCheck.reason}` : undefined}
                         />
                       </td>
 
@@ -762,10 +900,15 @@ export const MarkEntrySpreadsheet: React.FC<MarkEntrySpreadsheetProps> = ({
                           step="0.5"
                           placeholder="-"
                           value={item.row.homework}
+                          disabled={!effectiveAllowed}
+                          readOnly={!effectiveAllowed}
                           onChange={e => handleCellChange(item.studentId, 'homework', e.target.value)}
                           className={`w-full py-1 px-1.5 text-center text-xs font-mono font-bold border focus:outline-none focus:border-blue-400 ${
-                            isLight ? 'bg-white border-neutral-300 text-black' : 'bg-neutral-950 border-neutral-700 text-white'
+                            !effectiveAllowed 
+                              ? 'cursor-not-allowed bg-neutral-900/60 text-neutral-500 border-neutral-800 opacity-60'
+                              : isLight ? 'bg-white border-neutral-300 text-black' : 'bg-neutral-950 border-neutral-700 text-white'
                           }`}
+                          title={!effectiveAllowed ? `Editing locked: ${accessCheck.reason}` : undefined}
                         />
                       </td>
 
@@ -777,10 +920,15 @@ export const MarkEntrySpreadsheet: React.FC<MarkEntrySpreadsheetProps> = ({
                           step="0.5"
                           placeholder="-"
                           value={item.row.classTest}
+                          disabled={!effectiveAllowed}
+                          readOnly={!effectiveAllowed}
                           onChange={e => handleCellChange(item.studentId, 'classTest', e.target.value)}
                           className={`w-full py-1 px-1.5 text-center text-xs font-mono font-bold border focus:outline-none focus:border-blue-400 ${
-                            isLight ? 'bg-white border-neutral-300 text-black' : 'bg-neutral-950 border-neutral-700 text-white'
+                            !effectiveAllowed 
+                              ? 'cursor-not-allowed bg-neutral-900/60 text-neutral-500 border-neutral-800 opacity-60'
+                              : isLight ? 'bg-white border-neutral-300 text-black' : 'bg-neutral-950 border-neutral-700 text-white'
                           }`}
+                          title={!effectiveAllowed ? `Editing locked: ${accessCheck.reason}` : undefined}
                         />
                       </td>
 
@@ -793,10 +941,15 @@ export const MarkEntrySpreadsheet: React.FC<MarkEntrySpreadsheetProps> = ({
                           step="0.5"
                           placeholder="SBA"
                           value={item.row.sbaRaw}
+                          disabled={!effectiveAllowed}
+                          readOnly={!effectiveAllowed}
                           onChange={e => handleCellChange(item.studentId, 'sbaRaw', e.target.value)}
                           className={`w-full py-1 px-1.5 text-center text-xs font-mono font-black border focus:outline-none focus:border-blue-400 ${
-                            isLight ? 'bg-blue-50 border-blue-300 text-blue-900' : 'bg-neutral-950 border-blue-900 text-blue-300'
+                            !effectiveAllowed 
+                              ? 'cursor-not-allowed bg-neutral-900/60 text-neutral-500 border-neutral-800 opacity-60'
+                              : isLight ? 'bg-blue-50 border-blue-300 text-blue-900' : 'bg-neutral-950 border-blue-900 text-blue-300'
                           }`}
+                          title={!effectiveAllowed ? `Editing locked: ${accessCheck.reason}` : undefined}
                         />
                       </td>
 
@@ -814,10 +967,15 @@ export const MarkEntrySpreadsheet: React.FC<MarkEntrySpreadsheetProps> = ({
                           step="0.5"
                           placeholder="Exam"
                           value={item.row.examRaw}
+                          disabled={!effectiveAllowed}
+                          readOnly={!effectiveAllowed}
                           onChange={e => handleCellChange(item.studentId, 'examRaw', e.target.value)}
                           className={`w-full py-1 px-1.5 text-center text-xs font-mono font-black border focus:outline-none focus:border-amber-400 ${
-                            isLight ? 'bg-amber-50 border-amber-300 text-amber-900' : 'bg-neutral-950 border-amber-900 text-amber-300'
+                            !effectiveAllowed 
+                              ? 'cursor-not-allowed bg-neutral-900/60 text-neutral-500 border-neutral-800 opacity-60'
+                              : isLight ? 'bg-amber-50 border-amber-300 text-amber-900' : 'bg-neutral-950 border-amber-900 text-amber-300'
                           }`}
+                          title={!effectiveAllowed ? `Editing locked: ${accessCheck.reason}` : undefined}
                         />
                       </td>
 
@@ -881,10 +1039,15 @@ export const MarkEntrySpreadsheet: React.FC<MarkEntrySpreadsheetProps> = ({
                             type="text"
                             placeholder="Teacher's remark..."
                             value={item.row.teacherRemark}
+                            disabled={!effectiveAllowed}
+                            readOnly={!effectiveAllowed}
                             onChange={e => handleCellChange(item.studentId, 'teacherRemark', e.target.value)}
                             className={`w-full py-1 px-2 text-xs font-mono border focus:outline-none focus:border-amber-400 ${
-                              isLight ? 'bg-white border-neutral-300 text-black' : 'bg-neutral-950 border-neutral-700 text-white'
+                              !effectiveAllowed 
+                                ? 'cursor-not-allowed bg-neutral-900/60 text-neutral-500 border-neutral-800 opacity-60'
+                                : isLight ? 'bg-white border-neutral-300 text-black' : 'bg-neutral-950 border-neutral-700 text-white'
                             }`}
+                            title={!effectiveAllowed ? `Editing locked: ${accessCheck.reason}` : undefined}
                           />
                         </div>
                       </td>
@@ -896,6 +1059,93 @@ export const MarkEntrySpreadsheet: React.FC<MarkEntrySpreadsheetProps> = ({
           </table>
         </div>
       </div>
+
+      {/* Headmaster / Admin Security Override Modal */}
+      {showOverrideModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+          <div className={`${isLight ? 'bg-white text-neutral-900 border-neutral-300' : 'bg-neutral-900 text-white border-neutral-700'} border p-6 max-w-md w-full shadow-2xl space-y-4 font-mono`}>
+            <div className="flex items-center justify-between border-b border-neutral-700 pb-3">
+              <div className="flex items-center gap-2">
+                <Shield className="text-amber-400" size={18} />
+                <h3 className="font-bold uppercase tracking-wider text-sm">Headmaster Authorization Override</h3>
+              </div>
+              <button
+                onClick={() => {
+                  setShowOverrideModal(false);
+                  setOverrideError(null);
+                }}
+                className="text-neutral-400 hover:text-white p-1 cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="bg-amber-950/30 border border-amber-500/40 p-3 text-xs text-amber-200 space-y-1">
+              <p className="font-bold">🔐 Supervisory Permission Required</p>
+              <p className="text-[11px] text-amber-300/80">
+                You are currently viewing <strong className="text-white">Class {selectedClass}</strong> which is restricted for your user profile. Enter Headmaster or Administrator credentials to temporarily unlock editing for this session.
+              </p>
+            </div>
+
+            {overrideError && (
+              <div className="bg-rose-950/40 border border-rose-500/50 p-2.5 text-xs text-rose-300 flex items-center gap-2">
+                <AlertCircle size={14} className="shrink-0 text-rose-400" />
+                <span>{overrideError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleVerifyOverride} className="space-y-3.5">
+              <div>
+                <label className="block text-xs uppercase font-bold text-neutral-300 mb-1">
+                  Administrator / Headmaster Email
+                </label>
+                <input
+                  type="email"
+                  required
+                  placeholder="e.g. admin@alsiratschool.edu.gh"
+                  value={overrideAdminEmail}
+                  onChange={e => setOverrideAdminEmail(e.target.value)}
+                  className={`w-full p-2 text-xs border font-mono ${isLight ? 'bg-white border-neutral-300 text-black' : 'bg-neutral-950 border-neutral-700 text-white'}`}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs uppercase font-bold text-neutral-300 mb-1">
+                  Authorization Password / Key
+                </label>
+                <input
+                  type="password"
+                  required
+                  placeholder="••••••••"
+                  value={overridePassword}
+                  onChange={e => setOverridePassword(e.target.value)}
+                  className={`w-full p-2 text-xs border font-mono ${isLight ? 'bg-white border-neutral-300 text-black' : 'bg-neutral-950 border-neutral-700 text-white'}`}
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-neutral-800">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowOverrideModal(false);
+                    setOverrideError(null);
+                  }}
+                  className="px-3.5 py-2 text-xs font-bold border border-neutral-700 hover:bg-neutral-800 text-neutral-300 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 text-xs font-black bg-amber-400 hover:bg-amber-300 text-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] uppercase tracking-wider flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Unlock size={13} />
+                  <span>Authorize & Unlock</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Custom Weighting Modal */}
       {showCustomWeightModal && (
