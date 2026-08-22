@@ -38,10 +38,14 @@ export const AcademicSettingsModal: React.FC<AcademicSettingsModalProps> = ({
   const [vacationDate, setVacationDate] = useState<string>(academicSettings?.vacationDate || '2026-07-24');
   const [headName, setHeadName] = useState<string>(academicSettings?.headteacherName || 'Yakubu Hakeem');
   const [headTitle, setHeadTitle] = useState<string>(academicSettings?.headteacherTitle || 'Headmaster');
-  const [schoolMotto, setSchoolMotto] = useState<string>(academicSettings?.schoolMotto || 'Knowledge is Light & Truth');
+  const [schoolMotto, setSchoolMotto] = useState<string>(academicSettings?.schoolMotto || 'Holiness is our Key');
+  const [schoolAddress, setSchoolAddress] = useState<string>(academicSettings?.schoolAddress || 'P. O. Box LS 15, Sawla-Savannah Region, Ghana.');
+  const [schoolPhone, setSchoolPhone] = useState<string>(academicSettings?.schoolPhone || '0545029200 / 0507274133');
   const [showPos, setShowPos] = useState<boolean>(academicSettings?.showPositionOnReport ?? true);
   const [showAtt, setShowAtt] = useState<boolean>(academicSettings?.showAttendanceOnReport ?? true);
   const [showCond, setShowCond] = useState<boolean>(academicSettings?.showConductOnReport ?? true);
+  const [showFeeStatus, setShowFeeStatus] = useState<boolean>(academicSettings?.showFeeStatusOnReport ?? true);
+  const [showMedals, setShowMedals] = useState<boolean>(academicSettings?.showMedalsOnReport ?? true);
   
   const [isSaving, setIsSaving] = useState(false);
   const [isSeeding, setIsSeeding] = useState(false);
@@ -50,7 +54,7 @@ export const AcademicSettingsModal: React.FC<AcademicSettingsModalProps> = ({
   if (!isOpen) return null;
 
   const handleSbaWeightChange = (val: number) => {
-    const safeSba = Math.max(10, Math.min(90, val));
+    const safeSba = Math.max(0, Math.min(100, val));
     setSbaWeight(safeSba);
     setExamWeight(100 - safeSba);
   };
@@ -69,9 +73,13 @@ export const AcademicSettingsModal: React.FC<AcademicSettingsModalProps> = ({
         headteacherName: headName,
         headteacherTitle: headTitle,
         schoolMotto,
+        schoolAddress,
+        schoolPhone,
         showPositionOnReport: showPos,
         showAttendanceOnReport: showAtt,
         showConductOnReport: showCond,
+        showFeeStatusOnReport: showFeeStatus,
+        showMedalsOnReport: showMedals,
         showTeacherRemarks: true,
         showHeadteacherRemarks: true,
         gradingScale: 'GES_9_POINT'
@@ -159,7 +167,7 @@ export const AcademicSettingsModal: React.FC<AcademicSettingsModalProps> = ({
                 />
               </div>
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={() => handleSbaWeightChange(50)}
@@ -167,7 +175,7 @@ export const AcademicSettingsModal: React.FC<AcademicSettingsModalProps> = ({
                   sbaWeight === 50 ? 'bg-amber-400 text-black border-amber-400' : 'bg-neutral-900 text-neutral-400 border-neutral-700'
                 }`}
               >
-                Standard (50% SBA / 50% Exam)
+                Standard (50:50)
               </button>
               <button
                 type="button"
@@ -176,7 +184,7 @@ export const AcademicSettingsModal: React.FC<AcademicSettingsModalProps> = ({
                   sbaWeight === 30 ? 'bg-amber-400 text-black border-amber-400' : 'bg-neutral-900 text-neutral-400 border-neutral-700'
                 }`}
               >
-                JHS Core (30% SBA / 70% Exam)
+                NaCCA / JHS (30:70)
               </button>
               <button
                 type="button"
@@ -185,13 +193,61 @@ export const AcademicSettingsModal: React.FC<AcademicSettingsModalProps> = ({
                   sbaWeight === 40 ? 'bg-amber-400 text-black border-amber-400' : 'bg-neutral-900 text-neutral-400 border-neutral-700'
                 }`}
               >
-                40% SBA / 60% Exam
+                Primary (40:60)
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSbaWeightChange(20)}
+                className={`px-2.5 py-1 text-[11px] border font-bold ${
+                  sbaWeight === 20 ? 'bg-amber-400 text-black border-amber-400' : 'bg-neutral-900 text-neutral-400 border-neutral-700'
+                }`}
+              >
+                Exam-Heavy (20:80)
               </button>
             </div>
           </div>
 
+          {/* School Contact & Branding */}
+          <div className="p-4 bg-neutral-950 border border-neutral-800 space-y-3">
+            <label className="font-bold text-amber-400 block uppercase">
+              School Details & Report Branding:
+            </label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="text-neutral-400 block mb-1">School Motto:</label>
+                <input
+                  type="text"
+                  value={schoolMotto}
+                  onChange={e => setSchoolMotto(e.target.value)}
+                  placeholder="Holiness is our Key"
+                  className="w-full bg-neutral-900 border border-neutral-700 text-white px-3 py-2 font-bold"
+                />
+              </div>
+              <div>
+                <label className="text-neutral-400 block mb-1">School Phone / Tel:</label>
+                <input
+                  type="text"
+                  value={schoolPhone}
+                  onChange={e => setSchoolPhone(e.target.value)}
+                  placeholder="0545029200 / 0507274133"
+                  className="w-full bg-neutral-900 border border-neutral-700 text-white px-3 py-2 font-bold"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="text-neutral-400 block mb-1">School Address & Postal Info:</label>
+              <input
+                type="text"
+                value={schoolAddress}
+                onChange={e => setSchoolAddress(e.target.value)}
+                placeholder="P. O. Box LS 15, Sawla-Savannah Region, Ghana."
+                className="w-full bg-neutral-900 border border-neutral-700 text-white px-3 py-2 font-bold"
+              />
+            </div>
+          </div>
+
           {/* Academic Term Dates */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label className="text-neutral-400 block mb-1">Academic Year:</label>
               <input
@@ -203,20 +259,7 @@ export const AcademicSettingsModal: React.FC<AcademicSettingsModalProps> = ({
               />
             </div>
             <div>
-              <label className="text-neutral-400 block mb-1">School Motto:</label>
-              <input
-                type="text"
-                value={schoolMotto}
-                onChange={e => setSchoolMotto(e.target.value)}
-                placeholder="Knowledge is Light & Truth"
-                className="w-full bg-neutral-950 border border-neutral-700 text-white px-3 py-2 font-bold"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="text-neutral-400 block mb-1">Current Term Vacation Date:</label>
+              <label className="text-neutral-400 block mb-1">Vacation Date:</label>
               <input
                 type="date"
                 value={vacationDate}
@@ -225,7 +268,7 @@ export const AcademicSettingsModal: React.FC<AcademicSettingsModalProps> = ({
               />
             </div>
             <div>
-              <label className="text-neutral-400 block mb-1">Next Term Reopening Date:</label>
+              <label className="text-neutral-400 block mb-1">Reopening Date:</label>
               <input
                 type="date"
                 value={nextTermReopeningDate}
@@ -264,7 +307,7 @@ export const AcademicSettingsModal: React.FC<AcademicSettingsModalProps> = ({
           {/* Report Display Toggles */}
           <div className="p-3 bg-neutral-950 border border-neutral-800 space-y-2">
             <span className="font-bold text-neutral-300 block uppercase text-[11px]">Report Card Display Elements:</span>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
                   type="checkbox"
@@ -273,6 +316,24 @@ export const AcademicSettingsModal: React.FC<AcademicSettingsModalProps> = ({
                   className="accent-amber-400"
                 />
                 <span className="text-neutral-300">Class Positions</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showMedals}
+                  onChange={e => setShowMedals(e.target.checked)}
+                  className="accent-amber-400"
+                />
+                <span className="text-amber-400 font-bold">🥇 Top 3 Medals</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showFeeStatus}
+                  onChange={e => setShowFeeStatus(e.target.checked)}
+                  className="accent-amber-400"
+                />
+                <span className="text-emerald-400 font-bold">💳 Fee Status Balance</span>
               </label>
               <label className="flex items-center gap-2 cursor-pointer">
                 <input

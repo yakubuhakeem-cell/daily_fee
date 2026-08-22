@@ -9,14 +9,16 @@ import { StudentClass, ALL_CLASSES, Student, AcademicAssessment, TerminalReport 
 import { 
   Printer, Download, Edit3, CheckCircle2, ChevronLeft, ChevronRight, 
   Sparkles, Award, User, Calendar, BookOpen, Layers, Users, 
-  Search, ShieldCheck, Check, Save, Sliders
+  Search, ShieldCheck, Check, Save, Sliders, DollarSign, CreditCard,
+  AlertCircle, Star, BadgeCheck, CheckCircle
 } from 'lucide-react';
 import { 
   getSubjectsForClass, 
   formatOrdinal, 
   calculateGESGrade,
   generateClassTeacherRemark,
-  generateHeadteacherRemark 
+  generateHeadteacherRemark,
+  getRankMedal
 } from '../../utils/ghanaCurriculum';
 
 interface TerminalReportGeneratorProps {
@@ -31,6 +33,7 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
     academicAssessments = [], 
     terminalReports = [],
     saveTerminalReport,
+    payments = [],
     activeTerm,
     systemSettings,
     academicSettings,
@@ -49,6 +52,7 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
   const [searchFilter, setSearchFilter] = useState('');
   const [isBatchMode, setIsBatchMode] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [showFeeStatusLocal, setShowFeeStatusLocal] = useState<boolean>(academicSettings?.showFeeStatusOnReport ?? true);
 
   // Editable report fields state
   const [editConduct, setEditConduct] = useState('');
@@ -130,6 +134,39 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
     return map;
   }, [classPupils, academicAssessments, activeTermId]);
 
+  // Helper to calculate student fee status
+  const getPupilFeeStatus = (pupilId: string, pupilClass: StudentClass) => {
+    const pupilPayments = payments.filter(
+      p => p.studentId === pupilId && !p.id.endsWith('_debt') && (p.termId === activeTermId || (activeTerm?.startDate && p.date >= activeTerm.startDate))
+    );
+    const totalPaid = pupilPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+    
+    let termFee = systemSettings?.baselineTermFee || 350;
+    if (['Nursery', 'KG1', 'KG2'].includes(pupilClass)) {
+      termFee = systemSettings?.baselineTermFeePreSchool || 250;
+    } else if (['B1', 'B2', 'B3', 'B4', 'B5', 'B6'].includes(pupilClass)) {
+      termFee = systemSettings?.baselineTermFeePrimary || 350;
+    } else {
+      termFee = systemSettings?.baselineTermFeeJhs || 450;
+    }
+
+    const balance = Math.max(0, termFee - totalPaid);
+    const isCleared = balance <= 0 || totalPaid >= termFee;
+    
+    let status: 'Cleared' | 'Partially Paid' | 'Arrears Outstanding' = 'Cleared';
+    if (!isCleared) {
+      status = totalPaid > 0 ? 'Partially Paid' : 'Arrears Outstanding';
+    }
+
+    return {
+      termFee,
+      totalPaid,
+      balance,
+      isCleared,
+      status
+    };
+  };
+
   // Get marks for active student
   const studentMarks = useMemo(() => {
     if (!activeStudent) return [];
@@ -197,6 +234,7 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
     if (!activeStudent) return;
     setIsSaving(true);
     try {
+      const feeInfo = getPupilFeeStatus(activeStudent.id, activeStudent.class);
       const reportData: TerminalReport = {
         id: currentSavedReport?.id || `rep_${activeStudent.id}_${activeTermId}`,
         studentId: activeStudent.id,
@@ -221,6 +259,12 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
         aggregateGrade: activeStats.aggregate,
         reopeningDate: academicSettings?.nextTermReopeningDate || '2026-09-08',
         vacationDate: academicSettings?.vacationDate || '2026-07-24',
+        feeStatus: {
+          termFee: feeInfo.termFee,
+          amountPaid: feeInfo.totalPaid,
+          balance: feeInfo.balance,
+          status: feeInfo.status
+        },
         verified: true,
         updatedAt: new Date().toISOString()
       };
@@ -259,16 +303,18 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
 
   const isLight = theme === 'daylight';
   const schoolName = systemSettings?.schoolName || 'SAAKO HOLY CHILD ACADEMY';
-  const schoolMotto = academicSettings?.schoolMotto || 'Knowledge is Light & Truth';
-  const schoolPhone = systemSettings?.contactPhone || '0244123456 / 0209876543';
+  const schoolMotto = academicSettings?.schoolMotto || systemSettings?.customMotto || 'Holiness is our Key';
+  const schoolAddress = academicSettings?.schoolAddress || 'P. O. Box LS 15, Sawla-Savannah Region, Ghana.';
+  const schoolPhone = academicSettings?.schoolPhone || '0545029200 / 0507274133';
   const headName = academicSettings?.headteacherName || 'Yakubu Hakeem';
   const headTitle = academicSettings?.headteacherTitle || 'Headmaster';
+  const showFeeStatus = showFeeStatusLocal;
 
   return (
     <div className="space-y-6">
       {/* Top Control Bar (Hidden in Print) */}
       <div className={`print:hidden ${isLight ? 'bg-neutral-100 border-neutral-300' : 'bg-neutral-900 border-neutral-800'} border p-4 flex flex-col lg:flex-row gap-4 justify-between items-start lg:items-center`}>
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs font-mono font-bold uppercase text-amber-400">Class:</span>
           {ALL_CLASSES.map(cls => (
             <button
@@ -289,8 +335,8 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
           ))}
         </div>
 
-        {/* Pupil Selector & Print Actions */}
-        <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto justify-between lg:justify-end">
+        {/* Pupil Selector, Fee Toggle & Print Actions */}
+        <div className="flex flex-wrap items-center gap-2.5 w-full lg:w-auto justify-between lg:justify-end">
           <div className="flex items-center gap-1 bg-neutral-800 border border-neutral-700 p-1">
             <button
               onClick={handlePrevStudent}
@@ -304,7 +350,7 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
             <select
               value={activeStudent?.id || ''}
               onChange={e => setSelectedStudentId(e.target.value)}
-              className="bg-transparent text-xs font-mono font-bold text-white px-2 py-1 focus:outline-none max-w-[200px]"
+              className="bg-transparent text-xs font-mono font-bold text-white px-2 py-1 focus:outline-none max-w-[180px]"
             >
               {classPupils.map(p => (
                 <option key={p.id} value={p.id} className="bg-neutral-900 text-white">
@@ -322,6 +368,20 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
               <ChevronRight size={16} />
             </button>
           </div>
+
+          {/* Fee Status Toggle */}
+          <button
+            onClick={() => setShowFeeStatusLocal(!showFeeStatusLocal)}
+            className={`px-3 py-2 text-xs font-mono font-bold border transition-colors flex items-center gap-1.5 cursor-pointer ${
+              showFeeStatusLocal
+                ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500'
+                : 'bg-neutral-800 text-neutral-400 border-neutral-700 hover:text-neutral-200'
+            }`}
+            title="Toggle fee balance & payment clearance display on report card"
+          >
+            <CreditCard size={14} className={showFeeStatusLocal ? 'text-emerald-400' : 'text-neutral-400'} />
+            <span>Fees on Report: {showFeeStatusLocal ? 'ON' : 'OFF'}</span>
+          </button>
 
           <button
             onClick={handleOpenEditModal}
@@ -402,48 +462,65 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
           const reopenDate = savedRep?.reopeningDate || academicSettings?.nextTermReopeningDate || '2026-09-08';
           const vacDate = savedRep?.vacationDate || academicSettings?.vacationDate || '2026-07-24';
 
+          const medalInfo = getRankMedal(pupilStats.position);
+          const feeStatusInfo = getPupilFeeStatus(pupil.id, pupil.class);
+
           return (
             <div 
               key={pupil.id}
-              className="bg-white text-black p-8 sm:p-10 border-2 border-black max-w-4xl mx-auto shadow-xl print:shadow-none print:border-black print:p-6 print:m-0 print:max-w-none print:w-full break-after-page"
-              style={{ minHeight: '1050px' }}
+              className="bg-white text-slate-900 p-7 sm:p-9 border-4 border-slate-900 max-w-4xl mx-auto shadow-2xl print:shadow-none print:border-2 print:border-black print:p-5 print:m-0 print:max-w-none print:w-full break-after-page rounded-sm relative overflow-hidden"
+              style={{ minHeight: '1080px' }}
             >
-              {/* Official Ghanaian School Header */}
-              <div className="border-b-2 border-black pb-4 text-center relative">
+              {/* Top Decorative Gold/Navy Accent Stripe */}
+              <div className="h-2.5 bg-gradient-to-r from-slate-900 via-amber-500 to-slate-900 -mx-9 -mt-9 mb-6 print:hidden" />
+
+              {/* Official Ghanaian School Header with Logo */}
+              <div className="border-b-2 border-slate-900 pb-4 text-center relative">
                 <div className="flex items-center justify-between gap-4">
-                  {/* Left Logo / Crest */}
-                  <div className="w-20 h-20 border border-black p-1 flex items-center justify-center bg-neutral-50 shrink-0">
+                  {/* Left School Logo */}
+                  <div className="w-24 h-24 sm:w-28 sm:h-28 border-2 border-slate-800 p-1 flex items-center justify-center bg-amber-50/50 shrink-0 shadow-xs rounded-sm">
                     <img 
-                      src="/fee_tracker_logo.png" 
-                      alt="Crest" 
+                      src="/school_logo.jpg" 
+                      alt="School Crest" 
                       referrerPolicy="no-referrer"
                       className="max-h-full max-w-full object-contain"
                       onError={(e) => {
-                        // fallback to styled crest
-                        (e.target as HTMLElement).style.display = 'none';
+                        // try fee_tracker_logo fallback
+                        const target = e.target as HTMLImageElement;
+                        if (!target.src.includes('fee_tracker_logo.png')) {
+                          target.src = '/fee_tracker_logo.png';
+                        }
                       }}
                     />
-                    <Award size={36} className="text-black" />
                   </div>
 
-                  {/* Center School Details */}
-                  <div className="flex-1">
-                    <h1 className="text-2xl sm:text-3xl font-black tracking-tight font-serif uppercase text-black">
+                  {/* Center School Identity */}
+                  <div className="flex-1 text-center">
+                    <h1 className="text-2xl sm:text-3xl font-black tracking-tight font-serif uppercase text-slate-950">
                       {schoolName}
                     </h1>
-                    <p className="text-xs font-mono italic font-bold text-neutral-800 mt-0.5">
-                      "{schoolMotto}"
+                    
+                    {/* Official Motto */}
+                    <div className="inline-flex items-center gap-1.5 my-0.5">
+                      <span className="text-xs font-mono font-bold text-amber-800 bg-amber-100/90 px-3 py-0.5 border border-amber-300 rounded-full italic shadow-2xs">
+                        Motto: "{schoolMotto}"
+                      </span>
+                    </div>
+
+                    <p className="text-[11px] font-mono font-semibold text-slate-700 mt-1">
+                      {schoolAddress}
                     </p>
-                    <p className="text-[11px] font-mono text-neutral-700 mt-0.5">
-                      P.O. Box 123, Kumasi - Ghana • Tel: {schoolPhone}
+                    <p className="text-[11px] font-mono font-bold text-slate-900">
+                      Tel: {schoolPhone}
                     </p>
-                    <div className="inline-block mt-2 bg-black text-white px-4 py-1 text-xs font-mono font-black uppercase tracking-wider">
+
+                    <div className="inline-block mt-2 bg-slate-900 text-amber-300 px-5 py-1 text-xs font-mono font-black uppercase tracking-wider border border-amber-400/40 shadow-xs">
                       GHANA BASIC EDUCATION TERMINAL REPORT CARD
                     </div>
                   </div>
 
-                  {/* Pupil Photo Box */}
-                  <div className="w-20 h-24 border border-black p-0.5 bg-neutral-100 flex flex-col items-center justify-center shrink-0">
+                  {/* Right Pupil Photo Box */}
+                  <div className="w-22 h-28 border-2 border-slate-800 p-0.5 bg-slate-50 flex flex-col items-center justify-center shrink-0 shadow-xs">
                     {pupil.photoUrl ? (
                       <img 
                         src={pupil.photoUrl} 
@@ -453,105 +530,141 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
                       />
                     ) : (
                       <div className="text-center p-1">
-                        <User size={28} className="mx-auto text-neutral-400" />
-                        <span className="text-[8px] font-mono uppercase text-neutral-500 block leading-tight mt-1">Pupil Photo</span>
+                        <User size={30} className="mx-auto text-slate-400" />
+                        <span className="text-[8px] font-mono uppercase font-bold text-slate-500 block leading-tight mt-1">Pupil Photo</span>
                       </div>
                     )}
                   </div>
                 </div>
               </div>
 
+              {/* MEDAL & RANKING CITATION BANNER (For Top 3 Pupils) */}
+              {medalInfo && (
+                <div className={`mt-3 p-2 border-2 ${medalInfo.borderColor} ${medalInfo.bgColor} flex items-center justify-between gap-3 text-xs font-mono shadow-xs`}>
+                  <div className="flex items-center gap-2">
+                    <span className="text-2xl">{medalInfo.medal}</span>
+                    <div>
+                      <span className={`font-black uppercase tracking-wider block ${medalInfo.textColor}`}>
+                        {medalInfo.title}
+                      </span>
+                      <span className="text-[10px] text-slate-700 font-semibold block">
+                        Ranked {formatOrdinal(pupilStats.position)} of {pupilStats.totalPupils} in {pupil.class} • Terminal Average: {pupilStats.avg}%
+                      </span>
+                    </div>
+                  </div>
+                  <span className={`px-2.5 py-1 text-[10px] font-black uppercase tracking-wider border ${medalInfo.borderColor} bg-white shadow-2xs`}>
+                    {medalInfo.badgeLabel}
+                  </span>
+                </div>
+              )}
+
               {/* Pupil Bio Information Grid */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono border-b border-black py-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono border-b border-slate-800 py-3 bg-slate-50/60 px-2 mt-2">
                 <div>
-                  <span className="text-neutral-500 text-[10px] block uppercase">Pupil Name:</span>
-                  <span className="font-black text-black text-sm uppercase">{pupil.name}</span>
+                  <span className="text-slate-500 text-[10px] block uppercase font-semibold">Pupil Full Name:</span>
+                  <span className="font-black text-slate-950 text-sm uppercase">{pupil.name}</span>
                 </div>
                 <div>
-                  <span className="text-neutral-500 text-[10px] block uppercase">Roll / ID Number:</span>
-                  <span className="font-bold text-black">{pupil.rollNumber || 'SHCA-00' + (pupilIdx + 1)}</span>
+                  <span className="text-slate-500 text-[10px] block uppercase font-semibold">Roll / ID Number:</span>
+                  <span className="font-bold text-slate-900">{pupil.rollNumber || 'SHCA-00' + (pupilIdx + 1)}</span>
                 </div>
                 <div>
-                  <span className="text-neutral-500 text-[10px] block uppercase">Class / Grade:</span>
-                  <span className="font-black text-black">{pupil.class}</span>
+                  <span className="text-slate-500 text-[10px] block uppercase font-semibold">Class / Grade:</span>
+                  <span className="font-black text-slate-950">{pupil.class}</span>
                 </div>
                 <div>
-                  <span className="text-neutral-500 text-[10px] block uppercase">Academic Term:</span>
-                  <span className="font-bold text-black">{activeTerm?.name || 'Term 1'} ({academicYear})</span>
+                  <span className="text-slate-500 text-[10px] block uppercase font-semibold">Academic Term & Year:</span>
+                  <span className="font-bold text-slate-900">{activeTerm?.name || 'Term 1'} ({academicYear})</span>
                 </div>
 
                 <div>
-                  <span className="text-neutral-500 text-[10px] block uppercase">Gender:</span>
-                  <span className="font-bold text-black">{pupil.gender || 'Not specified'}</span>
+                  <span className="text-slate-500 text-[10px] block uppercase font-semibold">Gender:</span>
+                  <span className="font-bold text-slate-900">{pupil.gender || 'Not specified'}</span>
                 </div>
                 <div>
-                  <span className="text-neutral-500 text-[10px] block uppercase">Attendance Ratio:</span>
-                  <span className="font-bold text-black">{daysPres} / {daysTot} Days ({Math.round((daysPres/daysTot)*100)}%)</span>
+                  <span className="text-slate-500 text-[10px] block uppercase font-semibold">Attendance Record:</span>
+                  <span className="font-bold text-slate-900">{daysPres} / {daysTot} Days ({Math.round((daysPres/daysTot)*100)}%)</span>
                 </div>
                 <div>
-                  <span className="text-neutral-500 text-[10px] block uppercase">Vacation Date:</span>
-                  <span className="font-bold text-black">{vacDate}</span>
+                  <span className="text-slate-500 text-[10px] block uppercase font-semibold">Vacation Date:</span>
+                  <span className="font-bold text-slate-900">{vacDate}</span>
                 </div>
                 <div>
-                  <span className="text-neutral-500 text-[10px] block uppercase">Next Term Reopening:</span>
-                  <span className="font-black text-black">{reopenDate}</span>
+                  <span className="text-slate-500 text-[10px] block uppercase font-semibold">Next Term Reopening:</span>
+                  <span className="font-black text-amber-700">{reopenDate}</span>
                 </div>
               </div>
 
               {/* Main Subjects Assessment Table */}
-              <div className="mt-4">
-                <table className="w-full text-left border-collapse text-[11px] font-mono border border-black">
+              <div className="mt-3">
+                <table className="w-full text-left border-collapse text-[11px] font-mono border-2 border-slate-900">
                   <thead>
-                    <tr className="bg-neutral-200 border-b border-black text-black">
-                      <th className="py-2 px-2.5 font-black uppercase border-r border-black">Subject Title</th>
-                      <th className="py-2 px-2 text-center font-bold border-r border-black w-14" title={`Continuous Assessment (${sbaWeight}%)`}>
+                    <tr className="bg-slate-900 text-amber-300 border-b-2 border-slate-900">
+                      <th className="py-2 px-2.5 font-black uppercase border-r border-slate-700">Subject Title</th>
+                      <th className="py-2 px-2 text-center font-bold border-r border-slate-700 w-16" title={`Continuous Assessment (${sbaWeight}%)`}>
                         SBA ({sbaWeight}%)
                       </th>
-                      <th className="py-2 px-2 text-center font-bold border-r border-black w-14" title={`Terminal Exam (${examWeight}%)`}>
+                      <th className="py-2 px-2 text-center font-bold border-r border-slate-700 w-16" title={`Terminal Examination (${examWeight}%)`}>
                         Exam ({examWeight}%)
                       </th>
-                      <th className="py-2 px-2 text-center font-black border-r border-black w-16 bg-neutral-300">
+                      <th className="py-2 px-2 text-center font-black border-r border-slate-700 w-16 bg-slate-800 text-white">
                         Total (100%)
                       </th>
-                      <th className="py-2 px-2 text-center font-black border-r border-black w-12">
+                      <th className="py-2 px-2 text-center font-black border-r border-slate-700 w-12">
                         Grade
                       </th>
-                      <th className="py-2 px-2 text-center font-bold border-r border-black w-14">
+                      <th className="py-2 px-2 text-center font-bold border-r border-slate-700 w-14">
                         Rank
                       </th>
-                      <th className="py-2 px-2 text-center font-bold border-r border-black w-24">
+                      <th className="py-2 px-2 text-center font-bold border-r border-slate-700 w-24">
                         Level
                       </th>
                       <th className="py-2 px-2.5 font-bold">Subject Teacher's Remarks</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-neutral-300">
+                  <tbody className="divide-y divide-slate-300">
                     {pMarks.map((mItem, sIdx) => {
                       const isEven = sIdx % 2 === 0;
+                      const numGrade = typeof mItem.grade === 'number' ? mItem.grade : 9;
                       return (
-                        <tr key={mItem.subject.id} className={isEven ? 'bg-white' : 'bg-neutral-50'}>
-                          <td className="py-1.5 px-2.5 font-bold border-r border-black text-black">
+                        <tr key={mItem.subject.id} className={isEven ? 'bg-white' : 'bg-slate-50/80'}>
+                          <td className="py-1.5 px-2.5 font-bold border-r border-slate-800 text-slate-950">
                             {mItem.subject.name}
                           </td>
-                          <td className="py-1.5 px-2 text-center border-r border-black font-semibold">
+                          <td className="py-1.5 px-2 text-center border-r border-slate-800 font-semibold text-slate-800">
                             {mItem.sba}
                           </td>
-                          <td className="py-1.5 px-2 text-center border-r border-black font-semibold">
+                          <td className="py-1.5 px-2 text-center border-r border-slate-800 font-semibold text-slate-800">
                             {mItem.exam}
                           </td>
-                          <td className="py-1.5 px-2 text-center border-r border-black font-black bg-neutral-100 text-black">
+                          <td className="py-1.5 px-2 text-center border-r border-slate-800 font-black bg-slate-100/80 text-slate-950">
                             {mItem.total !== '-' ? `${mItem.total}%` : '-'}
                           </td>
-                          <td className="py-1.5 px-2 text-center border-r border-black font-black">
-                            {mItem.grade}
+                          <td className="py-1.5 px-2 text-center border-r border-slate-800 font-black">
+                            {mItem.grade !== '-' ? (
+                              <span className={`inline-block px-1.5 py-0.5 text-center font-black text-xs ${
+                                numGrade === 1 ? 'bg-emerald-100 text-emerald-800 border border-emerald-400' :
+                                numGrade <= 4 ? 'bg-blue-100 text-blue-800 border border-blue-400' :
+                                numGrade <= 6 ? 'bg-amber-100 text-amber-800 border border-amber-400' :
+                                'bg-rose-100 text-rose-800 border border-rose-400'
+                              }`}>
+                                {mItem.grade}
+                              </span>
+                            ) : '-'}
                           </td>
-                          <td className="py-1.5 px-2 text-center border-r border-black font-bold">
+                          <td className="py-1.5 px-2 text-center border-r border-slate-800 font-bold text-slate-800">
                             {mItem.pos}
                           </td>
-                          <td className="py-1.5 px-2 text-center border-r border-black text-[10px] font-bold">
-                            {mItem.level}
+                          <td className="py-1.5 px-2 text-center border-r border-slate-800 text-[10px] font-bold">
+                            <span className={`px-1 py-0.5 rounded-2xs ${
+                              mItem.level === 'Advanced' ? 'text-emerald-700 bg-emerald-50' :
+                              mItem.level === 'Proficient' ? 'text-blue-700 bg-blue-50' :
+                              mItem.level === 'Developing' ? 'text-amber-700 bg-amber-50' : 'text-rose-700 bg-rose-50'
+                            }`}>
+                              {mItem.level}
+                            </span>
                           </td>
-                          <td className="py-1.5 px-2.5 text-[10px] text-neutral-800">
+                          <td className="py-1.5 px-2.5 text-[10px] text-slate-700 font-medium">
                             {mItem.remark}
                           </td>
                         </tr>
@@ -561,69 +674,115 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
                 </table>
               </div>
 
-              {/* Terminal Summary Metrics Bar */}
-              <div className="mt-3 grid grid-cols-4 border border-black bg-neutral-100 text-center text-xs font-mono divide-x divide-black py-2">
+              {/* Terminal Summary Metrics Bar (Rank, Average, Aggregate) */}
+              <div className="mt-3 grid grid-cols-4 border-2 border-slate-900 bg-slate-100 text-center text-xs font-mono divide-x-2 divide-slate-900 py-2.5">
                 <div>
-                  <span className="text-[10px] text-neutral-600 block uppercase">Aggregate Total Score</span>
-                  <span className="font-black text-sm text-black">{pupilStats.total} marks</span>
+                  <span className="text-[10px] text-slate-600 block uppercase font-bold">Aggregate Total Score</span>
+                  <span className="font-black text-sm text-slate-950">{pupilStats.total} marks</span>
                 </div>
                 <div>
-                  <span className="text-[10px] text-neutral-600 block uppercase">Terminal Overall Average</span>
-                  <span className="font-black text-sm text-black">{pupilStats.avg}%</span>
+                  <span className="text-[10px] text-slate-600 block uppercase font-bold">Terminal Overall Average</span>
+                  <span className="font-black text-sm text-slate-950">{pupilStats.avg}%</span>
                 </div>
-                <div>
-                  <span className="text-[10px] text-neutral-600 block uppercase">Position in Class</span>
-                  <span className="font-black text-sm text-black">
-                    {formatOrdinal(pupilStats.position)} out of {pupilStats.totalPupils}
+                <div className="bg-amber-100/50">
+                  <span className="text-[10px] text-amber-900 block uppercase font-black">Position in Class</span>
+                  <span className="font-black text-sm text-slate-950 flex items-center justify-center gap-1">
+                    {medalInfo && <span>{medalInfo.medal}</span>}
+                    <span>{formatOrdinal(pupilStats.position)} of {pupilStats.totalPupils}</span>
                   </span>
                 </div>
                 <div>
-                  <span className="text-[10px] text-neutral-600 block uppercase">Best 6 Grade Aggregate</span>
-                  <span className="font-black text-sm text-black">{pupilStats.aggregate}</span>
+                  <span className="text-[10px] text-slate-600 block uppercase font-bold">Best 6 Grade Aggregate</span>
+                  <span className="font-black text-sm text-slate-950">{pupilStats.aggregate}</span>
                 </div>
               </div>
 
+              {/* FINANCIAL FEE STATUS & CLEARANCE SECTION (When Option is ON) */}
+              {showFeeStatus && (
+                <div className="mt-3 border-2 border-slate-900 p-3 bg-amber-50/30 text-xs font-mono">
+                  <div className="flex items-center justify-between border-b border-slate-300 pb-1.5 mb-2">
+                    <span className="font-black uppercase tracking-wider text-[11px] text-slate-900 flex items-center gap-1.5">
+                      <CreditCard size={14} className="text-amber-700" />
+                      Pupil School Fees & Financial Clearance Status:
+                    </span>
+                    <span className={`px-2.5 py-0.5 text-[10px] font-black uppercase tracking-wider border ${
+                      feeStatusInfo.isCleared
+                        ? 'bg-emerald-100 text-emerald-900 border-emerald-500'
+                        : feeStatusInfo.totalPaid > 0
+                        ? 'bg-amber-100 text-amber-900 border-amber-500'
+                        : 'bg-rose-100 text-rose-900 border-rose-500'
+                    }`}>
+                      {feeStatusInfo.isCleared ? '✓ FULLY CLEARED' : feeStatusInfo.totalPaid > 0 ? 'PARTIALLY PAID' : '! UNPAID ARREARS'}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 text-center divide-y sm:divide-y-0 sm:divide-x divide-slate-300 pt-1">
+                    <div>
+                      <span className="text-[10px] text-slate-600 block uppercase">Total Term Fee:</span>
+                      <span className="font-bold text-slate-900">GHC {feeStatusInfo.termFee.toFixed(2)}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-slate-600 block uppercase">Amount Paid:</span>
+                      <span className="font-black text-emerald-800">GHC {feeStatusInfo.totalPaid.toFixed(2)}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-slate-600 block uppercase">Outstanding Balance:</span>
+                      <span className={`font-black ${feeStatusInfo.balance > 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
+                        GHC {feeStatusInfo.balance.toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="text-left pl-2">
+                      <span className="text-[9px] text-slate-600 italic block leading-tight">
+                        {feeStatusInfo.isCleared
+                          ? 'All academic & facility fees for this term are fully settled.'
+                          : `Please settle balance of GHC ${feeStatusInfo.balance.toFixed(2)} before reopening.`}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Character, Attitude & Developmental Ratings */}
-              <div className="mt-3 border border-black p-3 text-xs font-mono space-y-2">
+              <div className="mt-3 border-2 border-slate-900 p-3 text-xs font-mono space-y-2 bg-white">
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   <div>
-                    <span className="font-bold uppercase text-[10px] text-neutral-600 block">Conduct & Discipline:</span>
-                    <span className="text-black font-semibold text-[11px]">{conductTxt}</span>
+                    <span className="font-bold uppercase text-[10px] text-slate-600 block">Conduct & Discipline:</span>
+                    <span className="text-slate-900 font-semibold text-[11px]">{conductTxt}</span>
                   </div>
                   <div>
-                    <span className="font-bold uppercase text-[10px] text-neutral-600 block">Attitude to Learning:</span>
-                    <span className="text-black font-semibold text-[11px]">{attitudeTxt}</span>
+                    <span className="font-bold uppercase text-[10px] text-slate-600 block">Attitude to Learning:</span>
+                    <span className="text-slate-900 font-semibold text-[11px]">{attitudeTxt}</span>
                   </div>
                   <div>
-                    <span className="font-bold uppercase text-[10px] text-neutral-600 block">Special Interest & Talents:</span>
-                    <span className="text-black font-semibold text-[11px]">{interestTxt}</span>
+                    <span className="font-bold uppercase text-[10px] text-slate-600 block">Special Interest & Talents:</span>
+                    <span className="text-slate-900 font-semibold text-[11px]">{interestTxt}</span>
                   </div>
                 </div>
 
-                {/* Teacher and Headmaster Remarks */}
-                <div className="pt-2 border-t border-neutral-300 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* Teacher and Headmaster Remarks & Endorsements */}
+                <div className="pt-2 border-t border-slate-300 grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <span className="font-bold uppercase text-[10px] text-neutral-600 block">Class Teacher's General Remarks:</span>
-                    <p className="text-black font-semibold text-[11px] mt-0.5 italic">
+                    <span className="font-bold uppercase text-[10px] text-slate-600 block">Class Teacher's General Remarks:</span>
+                    <p className="text-slate-950 font-semibold text-[11px] mt-0.5 italic">
                       "{teacherRem}"
                     </p>
-                    <div className="mt-4 flex items-center justify-between border-t border-dotted border-black pt-1">
-                      <span className="text-[9px] uppercase text-neutral-500">Class Teacher Signature</span>
-                      <span className="text-[10px] font-bold">Verified ✓</span>
+                    <div className="mt-4 flex items-center justify-between border-t border-dotted border-slate-900 pt-1">
+                      <span className="text-[9px] uppercase text-slate-500 font-bold">Class Teacher Signature</span>
+                      <span className="text-[10px] font-bold text-emerald-800">Verified ✓</span>
                     </div>
                   </div>
 
                   <div>
-                    <span className="font-bold uppercase text-[10px] text-neutral-600 block">Headteacher's Overall Remarks:</span>
-                    <p className="text-black font-semibold text-[11px] mt-0.5 italic">
+                    <span className="font-bold uppercase text-[10px] text-slate-600 block">Headteacher's Final Endorsement:</span>
+                    <p className="text-slate-950 font-semibold text-[11px] mt-0.5 italic">
                       "{headRem}"
                     </p>
-                    <div className="mt-4 flex items-center justify-between border-t border-dotted border-black pt-1">
+                    <div className="mt-4 flex items-center justify-between border-t border-dotted border-slate-900 pt-1">
                       <div>
-                        <span className="text-[10px] font-black uppercase text-black block">{headName}</span>
-                        <span className="text-[9px] uppercase text-neutral-500">{headTitle}</span>
+                        <span className="text-[10px] font-black uppercase text-slate-950 block">{headName}</span>
+                        <span className="text-[9px] uppercase text-slate-600 font-bold">{headTitle}</span>
                       </div>
-                      <div className="w-14 h-8 border border-black/50 text-[8px] flex items-center justify-center text-neutral-400 uppercase font-mono">
+                      <div className="w-16 h-8 border-2 border-dashed border-slate-800 text-[7px] flex items-center justify-center text-slate-500 uppercase font-mono font-bold">
                         OFFICIAL SEAL
                       </div>
                     </div>
@@ -631,16 +790,16 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
                 </div>
 
                 {savedRep?.promotedTo && (
-                  <div className="pt-2 border-t border-neutral-300 text-center font-black text-sm uppercase text-black">
+                  <div className="pt-2 border-t border-slate-300 text-center font-black text-sm uppercase text-slate-950 bg-amber-100 py-1">
                     Promotion Status: {savedRep.promotedTo}
                   </div>
                 )}
               </div>
 
               {/* GES Grading Standard Key Footer */}
-              <div className="mt-3 pt-2 border-t border-black/40 text-[9px] font-mono text-neutral-600 flex flex-wrap items-center justify-between gap-1">
+              <div className="mt-3 pt-2 border-t border-slate-400 text-[9px] font-mono text-slate-600 flex flex-wrap items-center justify-between gap-1">
                 <span><strong>GES 9-Point Scale:</strong> 1: 80-100% (Advanced) • 2: 75-79% (Proficient) • 3: 70-74% • 4: 65-69% • 5: 60-64% (Developing) • 6: 50-59% • 7: 45-49% • 8: 35-44% (Beginning) • 9: 0-34%</span>
-                <span className="text-neutral-500">NaCCA Curriculum Standard System</span>
+                <span className="text-slate-500 font-bold">NaCCA Curriculum Standard</span>
               </div>
             </div>
           );
@@ -764,3 +923,4 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
     </div>
   );
 };
+

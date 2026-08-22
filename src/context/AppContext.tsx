@@ -660,12 +660,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     vacationDate: '2026-07-24',
     headteacherName: 'Yakubu Hakeem',
     headteacherTitle: 'Headmaster',
-    schoolMotto: 'Knowledge is Light & Truth',
+    schoolMotto: 'Holiness is our Key',
+    schoolAddress: 'P. O. Box LS 15, Sawla-Savannah Region, Ghana.',
+    schoolPhone: '0545029200 / 0507274133',
+    customSchoolCrestUrl: '/school_logo.jpg',
     showPositionOnReport: true,
     showAttendanceOnReport: true,
     showConductOnReport: true,
     showTeacherRemarks: true,
     showHeadteacherRemarks: true,
+    showFeeStatusOnReport: true,
+    showMedalsOnReport: true,
     gradingScale: 'GES_9_POINT'
   };
 

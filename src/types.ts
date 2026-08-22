@@ -541,6 +541,12 @@ export interface TerminalReport {
   vacationDate?: string;        // Current term closure date
   headteacherSignatureUrl?: string;
   classTeacherSignatureUrl?: string;
+  feeStatus?: {
+    termFee: number;
+    amountPaid: number;
+    balance: number;
+    status: 'Cleared' | 'Partially Paid' | 'Arrears Outstanding';
+  };
   verified?: boolean;
   updatedAt?: string;
 }
@@ -557,8 +563,8 @@ export interface TeacherAllocation {
 }
 
 export interface AcademicSettings {
-  sbaWeight: number;            // default 50 (50% SBA + 50% Exam) or 30 (30% SBA + 70% Exam)
-  examWeight: number;           // default 50 or 70
+  sbaWeight: number;            // default 50 (50% SBA + 50% Exam) or 30 (30% SBA + 70% Exam) or 40 (40:60)
+  examWeight: number;           // default 50 or 70 or 60
   academicYear: string;         // e.g. "2025/2026"
   activeTermNumber: 1 | 2 | 3;
   nextTermReopeningDate: string;
@@ -567,12 +573,16 @@ export interface AcademicSettings {
   headteacherTitle: string;     // "Headmaster" | "Headmistress" | "Principal"
   headteacherSignatureUrl?: string;
   schoolMotto: string;
+  schoolAddress?: string;
+  schoolPhone?: string;
   customSchoolCrestUrl?: string;
   showPositionOnReport: boolean;
   showAttendanceOnReport: boolean;
   showConductOnReport: boolean;
   showTeacherRemarks: boolean;
   showHeadteacherRemarks: boolean;
+  showFeeStatusOnReport: boolean;
+  showMedalsOnReport?: boolean;
   gradingScale: 'GES_9_POINT' | 'STANDARD_PERCENT';
 }
 

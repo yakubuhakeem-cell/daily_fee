@@ -293,15 +293,73 @@ export const DEFAULT_ACADEMIC_SETTINGS: AcademicSettings = {
   headteacherName: 'Yakubu Hakeem',
   headteacherTitle: 'Headmaster',
   headteacherSignatureUrl: '',
-  schoolMotto: 'Knowledge is Light & Truth',
-  customSchoolCrestUrl: '',
+  schoolMotto: 'Holiness is our Key',
+  schoolAddress: 'P. O. Box LS 15, Sawla-Savannah Region, Ghana.',
+  schoolPhone: '0545029200 / 0507274133',
+  customSchoolCrestUrl: '/school_logo.jpg',
   showPositionOnReport: true,
   showAttendanceOnReport: true,
   showConductOnReport: true,
   showTeacherRemarks: true,
   showHeadteacherRemarks: true,
+  showFeeStatusOnReport: true,
+  showMedalsOnReport: true,
   gradingScale: 'GES_9_POINT'
 };
+
+export interface RankMedalInfo {
+  medal: string;
+  title: string;
+  badgeLabel: string;
+  colorHex: string;
+  textColor: string;
+  bgColor: string;
+  borderColor: string;
+  glowColor: string;
+}
+
+/**
+ * Returns medal decoration & honorific for top-ranked pupils
+ */
+export function getRankMedal(position: number): RankMedalInfo | null {
+  if (position === 1) {
+    return {
+      medal: '🥇',
+      title: 'Gold Medalist (1st Place • Dux of the Class)',
+      badgeLabel: '1st • Gold Medal',
+      colorHex: '#eab308',
+      textColor: 'text-amber-700 dark:text-amber-300',
+      bgColor: 'bg-gradient-to-r from-amber-200 via-yellow-100 to-amber-300 dark:from-amber-950 dark:to-yellow-900',
+      borderColor: 'border-amber-500',
+      glowColor: 'shadow-amber-500/20'
+    };
+  }
+  if (position === 2) {
+    return {
+      medal: '🥈',
+      title: 'Silver Medalist (2nd Place)',
+      badgeLabel: '2nd • Silver Medal',
+      colorHex: '#94a3b8',
+      textColor: 'text-slate-700 dark:text-slate-300',
+      bgColor: 'bg-gradient-to-r from-slate-200 via-gray-100 to-slate-300 dark:from-slate-900 dark:to-gray-800',
+      borderColor: 'border-slate-400',
+      glowColor: 'shadow-slate-500/20'
+    };
+  }
+  if (position === 3) {
+    return {
+      medal: '🥉',
+      title: 'Bronze Medalist (3rd Place)',
+      badgeLabel: '3rd • Bronze Medal',
+      colorHex: '#b45309',
+      textColor: 'text-amber-900 dark:text-amber-400',
+      bgColor: 'bg-gradient-to-r from-amber-100 via-orange-100 to-amber-200 dark:from-amber-950/80 dark:to-orange-950/80',
+      borderColor: 'border-amber-700',
+      glowColor: 'shadow-orange-500/20'
+    };
+  }
+  return null;
+}
 
 export function getSubjectsForClass(className: StudentClass, allSubjects: CurriculumSubject[] = DEFAULT_GHANA_SUBJECTS): CurriculumSubject[] {
   let level: 'KG' | 'Primary' | 'JHS';

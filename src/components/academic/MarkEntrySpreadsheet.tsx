@@ -9,14 +9,16 @@ import { StudentClass, Student, AcademicAssessment, CurriculumSubject, ALL_CLASS
 import { 
   FileSpreadsheet, Save, Sparkles, Download, Upload, RefreshCw, 
   CheckCircle2, AlertCircle, ArrowUpDown, ChevronDown, ChevronRight,
-  TrendingUp, Award, HelpCircle, Filter, BookOpen, Users, Check
+  TrendingUp, Award, HelpCircle, Filter, BookOpen, Users, Check,
+  Sliders, Medal, X
 } from 'lucide-react';
 import { 
   getSubjectsForClass, 
   computeTotalAssessment, 
   calculateGESGrade, 
   formatOrdinal,
-  DEFAULT_GHANA_SUBJECTS
+  DEFAULT_GHANA_SUBJECTS,
+  getRankMedal
 } from '../../utils/ghanaCurriculum';
 import * as XLSX from 'xlsx';
 
@@ -50,6 +52,7 @@ export const MarkEntrySpreadsheet: React.FC<MarkEntrySpreadsheetProps> = ({
     activeTerm,
     currentUser,
     academicSettings,
+    updateAcademicSettings,
     teacherAllocations = [],
     playFeedbackSound,
     theme
@@ -80,8 +83,35 @@ export const MarkEntrySpreadsheet: React.FC<MarkEntrySpreadsheetProps> = ({
 
   const activeTermId = activeTerm?.id || 'term_1_2026';
   const academicYear = academicSettings?.academicYear || '2025/2026';
-  const sbaWeight = academicSettings?.sbaWeight ?? 50;
-  const examWeight = academicSettings?.examWeight ?? 50;
+
+  // Flexible weighting state with quick presets
+  const [sbaWeight, setSbaWeight] = useState<number>(academicSettings?.sbaWeight ?? 50);
+  const [examWeight, setExamWeight] = useState<number>(academicSettings?.examWeight ?? 50);
+  const [showCustomWeightModal, setShowCustomWeightModal] = useState(false);
+  const [tempSba, setTempSba] = useState<number>(sbaWeight);
+  const [tempExam, setTempExam] = useState<number>(examWeight);
+
+  // Sync weights when academicSettings changes externally
+  useEffect(() => {
+    if (academicSettings?.sbaWeight !== undefined && academicSettings?.examWeight !== undefined) {
+      setSbaWeight(academicSettings.sbaWeight);
+      setExamWeight(academicSettings.examWeight);
+      setTempSba(academicSettings.sbaWeight);
+      setTempExam(academicSettings.examWeight);
+    }
+  }, [academicSettings?.sbaWeight, academicSettings?.examWeight]);
+
+  const handleApplyWeightPreset = async (sba: number, exam: number) => {
+    setSbaWeight(sba);
+    setExamWeight(exam);
+    if (updateAcademicSettings) {
+      try {
+        await updateAcademicSettings({ sbaWeight: sba, examWeight: exam });
+      } catch (err) {
+        console.error("Failed to update global academic settings:", err);
+      }
+    }
+  };
 
   // Filter students in this class
   const classPupils = useMemo(() => {
@@ -542,6 +572,61 @@ export const MarkEntrySpreadsheet: React.FC<MarkEntrySpreadsheetProps> = ({
         </div>
       </div>
 
+      {/* Flexible SBA : Exam Weighting Ratio Selector */}
+      <div className={`${isLight ? 'bg-neutral-100 border-neutral-300' : 'bg-neutral-900 border-neutral-800'} border p-3.5 flex flex-wrap items-center justify-between gap-3 text-xs font-mono`}>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-amber-400 font-bold uppercase flex items-center gap-1.5">
+            <Sliders size={14} /> Marks Weighting Ratio:
+          </span>
+          <span className="text-neutral-400 text-[11px] mr-2">Choose assessment proportion:</span>
+
+          <div className="flex flex-wrap gap-1.5">
+            {[
+              { sba: 50, exam: 50, label: '50 : 50 (Standard)' },
+              { sba: 30, exam: 70, label: '30 : 70 (NaCCA / JHS)' },
+              { sba: 40, exam: 60, label: '40 : 60 (Primary)' },
+              { sba: 20, exam: 80, label: '20 : 80 (Exam Heavy)' },
+              { sba: 60, exam: 40, label: '60 : 40 (Project Heavy)' }
+            ].map(preset => {
+              const isSelected = sbaWeight === preset.sba && examWeight === preset.exam;
+              return (
+                <button
+                  key={`${preset.sba}-${preset.exam}`}
+                  onClick={() => handleApplyWeightPreset(preset.sba, preset.exam)}
+                  className={`px-3 py-1 text-xs font-mono font-bold transition-all cursor-pointer border ${
+                    isSelected
+                      ? 'bg-amber-400 text-black border-amber-400 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]'
+                      : isLight ? 'bg-white text-neutral-700 border-neutral-300 hover:bg-neutral-200' : 'bg-neutral-800 text-neutral-300 border-neutral-700 hover:bg-neutral-700'
+                  }`}
+                >
+                  {preset.label}
+                </button>
+              );
+            })}
+
+            <button
+              onClick={() => setShowCustomWeightModal(true)}
+              className={`px-3 py-1 text-xs font-mono font-bold transition-all cursor-pointer border ${
+                ![50, 30, 40, 20, 60].includes(sbaWeight) || examWeight !== 100 - sbaWeight
+                  ? 'bg-amber-400 text-black border-amber-400 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]'
+                  : 'bg-neutral-800 text-neutral-300 border-neutral-700 hover:bg-neutral-700'
+              }`}
+            >
+              Custom ({sbaWeight}:{examWeight})...
+            </button>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 bg-neutral-950/80 px-3 py-1 border border-neutral-800 text-neutral-300">
+          <span>Active:</span>
+          <span className="text-blue-400 font-bold">SBA {sbaWeight}%</span>
+          <span>+</span>
+          <span className="text-amber-400 font-bold">Exam {examWeight}%</span>
+          <span>=</span>
+          <span className="text-emerald-400 font-black">100% Total</span>
+        </div>
+      </div>
+
       {/* Real-time Subject Analytics Pill Strip */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         <div className={`${isLight ? 'bg-neutral-50 border-neutral-200' : 'bg-neutral-900/90 border-neutral-800'} border p-3`}>
@@ -769,9 +854,24 @@ export const MarkEntrySpreadsheet: React.FC<MarkEntrySpreadsheetProps> = ({
                         {item.hasEntries ? item.level : '-'}
                       </td>
 
-                      {/* Position */}
-                      <td className="py-2.5 px-2 text-center font-bold font-mono text-xs text-amber-400">
-                        {item.position ? formatOrdinal(item.position) : '-'}
+                      {/* Position with Medal Badges */}
+                      <td className="py-2.5 px-2 text-center font-mono text-xs">
+                        {item.position ? (() => {
+                          const medal = getRankMedal(item.position);
+                          if (medal) {
+                            return (
+                              <span className={`inline-flex items-center gap-1 px-2 py-0.5 font-black text-xs border shadow-sm ${medal.bgColor} ${medal.borderColor} ${medal.textColor}`}>
+                                <span>{medal.medal}</span>
+                                <span>{formatOrdinal(item.position)}</span>
+                              </span>
+                            );
+                          }
+                          return (
+                            <span className="font-bold text-neutral-400">
+                              {formatOrdinal(item.position)}
+                            </span>
+                          );
+                        })() : '-'}
                       </td>
 
                       {/* Teacher Remarks Input */}
@@ -796,6 +896,124 @@ export const MarkEntrySpreadsheet: React.FC<MarkEntrySpreadsheetProps> = ({
           </table>
         </div>
       </div>
+
+      {/* Custom Weighting Modal */}
+      {showCustomWeightModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+          <div className={`${isLight ? 'bg-white text-neutral-900 border-neutral-300' : 'bg-neutral-900 text-white border-neutral-700'} border p-6 max-w-md w-full shadow-2xl space-y-5 font-mono`}>
+            <div className="flex items-center justify-between border-b border-neutral-700 pb-3">
+              <div className="flex items-center gap-2">
+                <Sliders size={18} className="text-amber-400" />
+                <h3 className="font-bold uppercase tracking-wider text-sm">Configure Assessment Weighting</h3>
+              </div>
+              <button
+                onClick={() => setShowCustomWeightModal(false)}
+                className="text-neutral-400 hover:text-white p-1"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <p className="text-xs text-neutral-400">
+              Set custom percentage split for Continuous Assessment (SBA) and End of Term Examination. Must sum to 100%.
+            </p>
+
+            <div className="space-y-4">
+              <div>
+                <div className="flex justify-between text-xs mb-1.5 font-bold">
+                  <span className="text-blue-400">SBA Weight: {tempSba}%</span>
+                  <span className="text-amber-400">Exam Weight: {tempExam}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="5"
+                  value={tempSba}
+                  onChange={(e) => {
+                    const s = parseInt(e.target.value, 10);
+                    setTempSba(s);
+                    setTempExam(100 - s);
+                  }}
+                  className="w-full h-2 bg-neutral-800 rounded-lg appearance-none cursor-pointer accent-amber-400"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] uppercase font-bold text-blue-400 mb-1">
+                    SBA Weight (%)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={tempSba}
+                    onChange={(e) => {
+                      const s = Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0));
+                      setTempSba(s);
+                      setTempExam(100 - s);
+                    }}
+                    className={`w-full p-2 text-sm font-bold border ${isLight ? 'bg-white border-neutral-300' : 'bg-neutral-950 border-neutral-700'}`}
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] uppercase font-bold text-amber-400 mb-1">
+                    Exam Weight (%)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={tempExam}
+                    onChange={(e) => {
+                      const ex = Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0));
+                      setTempExam(ex);
+                      setTempSba(100 - ex);
+                    }}
+                    className={`w-full p-2 text-sm font-bold border ${isLight ? 'bg-white border-neutral-300' : 'bg-neutral-950 border-neutral-700'}`}
+                  />
+                </div>
+              </div>
+
+              <div className="bg-neutral-950/60 p-3 border border-neutral-800 text-[11px] space-y-1 text-neutral-300">
+                <div className="flex justify-between">
+                  <span>Class Exercises + HW + Project (SBA):</span>
+                  <span className="font-bold text-blue-400">{tempSba}%</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>End of Term Examination:</span>
+                  <span className="font-bold text-amber-400">{tempExam}%</span>
+                </div>
+                <div className="flex justify-between border-t border-neutral-800 pt-1 font-bold">
+                  <span>Total Calculated Grade:</span>
+                  <span className="text-emerald-400">100%</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-3 border-t border-neutral-800">
+              <button
+                type="button"
+                onClick={() => setShowCustomWeightModal(false)}
+                className="px-4 py-2 text-xs font-bold border border-neutral-700 hover:bg-neutral-800 text-neutral-300"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  handleApplyWeightPreset(tempSba, tempExam);
+                  setShowCustomWeightModal(false);
+                }}
+                className="px-4 py-2 text-xs font-black bg-amber-400 hover:bg-amber-300 text-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] uppercase tracking-wider"
+              >
+                Apply Weighting ({tempSba}:{tempExam})
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
