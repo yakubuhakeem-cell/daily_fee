@@ -24,7 +24,7 @@ import {
   memoryLocalCache
 } from 'firebase/firestore';
 import rawFirebaseConfig from '../../firebase-applet-config.json';
-import { Student, PaymentRecord, UserAccount, Term, Expense, WorkerSalary, SystemSettings, BudgetTarget, AuditLog, TeacherEvaluation, JournalEntry, TrashItem, ExamsPayment, ExamsExpense, ExamsSettings } from '../types';
+import { Student, PaymentRecord, UserAccount, Term, Expense, WorkerSalary, SystemSettings, BudgetTarget, AuditLog, TeacherEvaluation, JournalEntry, TrashItem, ExamsPayment, ExamsExpense, ExamsSettings, AcademicAssessment, TerminalReport, TeacherAllocation, AcademicSettings } from '../types';
 
 export { onAuthStateChanged };
 
@@ -1168,6 +1168,190 @@ export const db = {
     } catch (e: any) {
       console.error("emptyTrash error: ", e);
       return { success: false, message: e.message || "Failed to empty trash." };
+    }
+  },
+
+  async getAcademicAssessments(): Promise<AcademicAssessment[] | null> {
+    try {
+      const list = await getCollectionDocs<AcademicAssessment>("academic_assessments");
+      if (list && list.length > 0) return list;
+      const res = await fetch("/api/academic_assessments").catch(() => null);
+      if (res && res.ok) return await res.json();
+      return list || [];
+    } catch (e) {
+      console.error("getAcademicAssessments error: ", e);
+      return null;
+    }
+  },
+
+  async saveAcademicAssessment(assessment: AcademicAssessment): Promise<boolean> {
+    try {
+      const id = safeDocId(assessment.id);
+      const clean = sanitizeFirestoreDoc(assessment);
+      await withTimeout(setDoc(doc(firestoreDb, "academic_assessments", id), clean, { merge: true }), 8000, "saveAcademicAssessment");
+      fetch("/api/academic_assessments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(clean),
+      }).catch(() => {});
+      return true;
+    } catch (e) {
+      console.error("saveAcademicAssessment error: ", e);
+      return false;
+    }
+  },
+
+  async batchSaveAcademicAssessments(assessments: AcademicAssessment[]): Promise<boolean> {
+    try {
+      const batch = writeBatch(firestoreDb);
+      const sanitizedList: any[] = [];
+      assessments.forEach(a => {
+        const id = safeDocId(a.id);
+        const clean = sanitizeFirestoreDoc(a);
+        sanitizedList.push(clean);
+        batch.set(doc(firestoreDb, "academic_assessments", id), clean, { merge: true });
+      });
+      await withTimeout(batch.commit(), 10000, "batchSaveAcademicAssessments");
+      fetch("/api/academic_assessments/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(sanitizedList),
+      }).catch(() => {});
+      return true;
+    } catch (e) {
+      console.error("batchSaveAcademicAssessments error: ", e);
+      return false;
+    }
+  },
+
+  async deleteAcademicAssessment(id: string): Promise<boolean> {
+    try {
+      const docId = safeDocId(id);
+      await withTimeout(deleteDoc(doc(firestoreDb, "academic_assessments", docId)), 8000, "deleteAcademicAssessment");
+      fetch(`/api/academic_assessments/${docId}`, { method: "DELETE" }).catch(() => {});
+      return true;
+    } catch (e) {
+      console.error("deleteAcademicAssessment error: ", e);
+      return false;
+    }
+  },
+
+  async getTerminalReports(): Promise<TerminalReport[] | null> {
+    try {
+      const list = await getCollectionDocs<TerminalReport>("terminal_reports");
+      if (list && list.length > 0) return list;
+      const res = await fetch("/api/terminal_reports").catch(() => null);
+      if (res && res.ok) return await res.json();
+      return list || [];
+    } catch (e) {
+      console.error("getTerminalReports error: ", e);
+      return null;
+    }
+  },
+
+  async saveTerminalReport(report: TerminalReport): Promise<boolean> {
+    try {
+      const id = safeDocId(report.id);
+      const clean = sanitizeFirestoreDoc(report);
+      await withTimeout(setDoc(doc(firestoreDb, "terminal_reports", id), clean, { merge: true }), 8000, "saveTerminalReport");
+      fetch("/api/terminal_reports", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(clean),
+      }).catch(() => {});
+      return true;
+    } catch (e) {
+      console.error("saveTerminalReport error: ", e);
+      return false;
+    }
+  },
+
+  async deleteTerminalReport(reportId: string): Promise<boolean> {
+    try {
+      const id = safeDocId(reportId);
+      await withTimeout(deleteDoc(doc(firestoreDb, "terminal_reports", id)), 8000, "deleteTerminalReport");
+      fetch(`/api/terminal_reports/${id}`, { method: "DELETE" }).catch(() => {});
+      return true;
+    } catch (e) {
+      console.error("deleteTerminalReport error: ", e);
+      return false;
+    }
+  },
+
+  async getTeacherAllocations(): Promise<TeacherAllocation[] | null> {
+    try {
+      const list = await getCollectionDocs<TeacherAllocation>("teacher_allocations");
+      if (list && list.length > 0) return list;
+      const res = await fetch("/api/teacher_allocations").catch(() => null);
+      if (res && res.ok) return await res.json();
+      return list || [];
+    } catch (e) {
+      console.error("getTeacherAllocations error: ", e);
+      return null;
+    }
+  },
+
+  async saveTeacherAllocation(allocation: TeacherAllocation): Promise<boolean> {
+    try {
+      const id = safeDocId(allocation.id);
+      const clean = sanitizeFirestoreDoc(allocation);
+      await withTimeout(setDoc(doc(firestoreDb, "teacher_allocations", id), clean, { merge: true }), 8000, "saveTeacherAllocation");
+      fetch("/api/teacher_allocations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(clean),
+      }).catch(() => {});
+      return true;
+    } catch (e) {
+      console.error("saveTeacherAllocation error: ", e);
+      return false;
+    }
+  },
+
+  async deleteTeacherAllocation(allocationId: string): Promise<boolean> {
+    try {
+      const id = safeDocId(allocationId);
+      await withTimeout(deleteDoc(doc(firestoreDb, "teacher_allocations", id)), 8000, "deleteTeacherAllocation");
+      fetch(`/api/teacher_allocations/${id}`, { method: "DELETE" }).catch(() => {});
+      return true;
+    } catch (e) {
+      console.error("deleteTeacherAllocation error: ", e);
+      return false;
+    }
+  },
+
+  async getAcademicSettings(): Promise<AcademicSettings | null> {
+    try {
+      const snapshot = await withTimeout(
+        getDocFromServer(doc(firestoreDb, "settings", "academic")),
+        5000,
+        "getAcademicSettings"
+      ).catch(() => null);
+      if (snapshot && snapshot.exists()) {
+        return snapshot.data() as AcademicSettings;
+      }
+      const res = await fetch("/api/settings/academic").catch(() => null);
+      if (res && res.ok) return await res.json();
+      return null;
+    } catch (e) {
+      console.error("getAcademicSettings error: ", e);
+      return null;
+    }
+  },
+
+  async saveAcademicSettings(settings: AcademicSettings): Promise<boolean> {
+    try {
+      const clean = sanitizeFirestoreDoc(settings);
+      await withTimeout(setDoc(doc(firestoreDb, "settings", "academic"), clean, { merge: true }), 8000, "saveAcademicSettings");
+      fetch("/api/settings/academic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(clean),
+      }).catch(() => {});
+      return true;
+    } catch (e) {
+      console.error("saveAcademicSettings error: ", e);
+      return false;
     }
   }
 };

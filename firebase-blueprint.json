@@ -201,6 +201,66 @@
         "details": { "type": "string", "description": "Full details of mutation" }
       },
       "required": ["id", "timestamp", "action", "category", "operatorName", "operatorRole", "details"]
+    },
+    "AcademicAssessment": {
+      "title": "AcademicAssessment",
+      "description": "Ghana standard-based curriculum continuous assessment (SBA) and exam mark entries",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Assessment mark ID" },
+        "studentId": { "type": "string", "description": "Pupil ID reference" },
+        "studentName": { "type": "string", "description": "Pupil full name" },
+        "class": { "type": "string", "description": "Class grade" },
+        "termId": { "type": "string", "description": "School term identifier" },
+        "academicYear": { "type": "string", "description": "Academic year e.g. 2025/2026" },
+        "subjectId": { "type": "string", "description": "Subject reference code" },
+        "subjectName": { "type": "string", "description": "Subject title" },
+        "sbaScore": { "type": "number", "description": "Continuous assessment weighted score" },
+        "examScore": { "type": "number", "description": "Terminal examination weighted score" },
+        "totalScore": { "type": "number", "description": "Aggregated overall 100% score" },
+        "grade": { "type": "number", "description": "GES 9-point grade scale value" },
+        "achievementLevel": { "type": "string", "enum": ["Advanced", "Proficient", "Developing", "Beginning"], "description": "NaCCA 4-tier achievement level" },
+        "enteredBy": { "type": "string", "description": "Teacher/Admin who recorded mark" },
+        "enteredAt": { "type": "string", "description": "Timestamp of entry" }
+      },
+      "required": ["id", "studentId", "class", "termId", "subjectId", "sbaScore", "examScore", "totalScore", "grade", "enteredBy", "enteredAt"]
+    },
+    "TerminalReport": {
+      "title": "TerminalReport",
+      "description": "Compiled Ghanaian terminal report summaries and remarks",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Report ID" },
+        "studentId": { "type": "string", "description": "Pupil ID reference" },
+        "studentName": { "type": "string", "description": "Pupil name" },
+        "class": { "type": "string", "description": "Class grade" },
+        "termId": { "type": "string", "description": "Term reference" },
+        "academicYear": { "type": "string", "description": "Academic year" },
+        "daysPresent": { "type": "number", "description": "Days present in term" },
+        "totalDays": { "type": "number", "description": "Total active school days in term" },
+        "conduct": { "type": "string", "description": "Character and conduct rating" },
+        "attitude": { "type": "string", "description": "Attitude towards studies" },
+        "classTeacherRemarks": { "type": "string", "description": "Class teacher summary remark" },
+        "headteacherRemarks": { "type": "string", "description": "Headmaster/Principal final remark" },
+        "totalScore": { "type": "number", "description": "Sum of all subject marks" },
+        "averageScore": { "type": "number", "description": "Terminal average percentage" }
+      },
+      "required": ["id", "studentId", "class", "termId", "daysPresent", "totalDays", "totalScore", "averageScore"]
+    },
+    "TeacherAllocation": {
+      "title": "TeacherAllocation",
+      "description": "Teacher subject and class assignment pairings",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Allocation ID" },
+        "teacherId": { "type": "string", "description": "Teacher ID" },
+        "teacherName": { "type": "string", "description": "Teacher full name" },
+        "subjectId": { "type": "string", "description": "Subject reference ID" },
+        "subjectName": { "type": "string", "description": "Subject title" },
+        "class": { "type": "string", "description": "Target class" },
+        "academicYear": { "type": "string", "description": "Target academic year" }
+      },
+      "required": ["id", "teacherId", "subjectId", "class", "academicYear"]
     }
   },
   "firestore": {
@@ -239,6 +299,18 @@
     "/exams_settings/{settingsId}": {
       "schema": "ExamsSettings",
       "description": "Collection of default assessment standard prices"
+    },
+    "/academic_assessments/{assessmentId}": {
+      "schema": "AcademicAssessment",
+      "description": "Collection of Ghana standard-based continuous assessments and exam marks"
+    },
+    "/terminal_reports/{reportId}": {
+      "schema": "TerminalReport",
+      "description": "Collection of compiled terminal report cards"
+    },
+    "/teacher_allocations/{allocationId}": {
+      "schema": "TeacherAllocation",
+      "description": "Collection of teacher subject and class allocations"
     },
     "/terms/{termId}": {
       "schema": "Term",

@@ -17,6 +17,7 @@ const TermPayersTab = React.lazy(() => import('./components/TermPayersTab').then
 const BudgetPlanTab = React.lazy(() => import('./components/BudgetPlanTab').then(module => ({ default: module.BudgetPlanTab })));
 const ExamsDashboardTab = React.lazy(() => import('./components/ExamsDashboardTab').then(module => ({ default: module.ExamsDashboardTab })));
 const TermsSummaryTab = React.lazy(() => import('./components/TermsSummaryTab').then(module => ({ default: module.TermsSummaryTab })));
+const AcademicDashboard = React.lazy(() => import('./components/academic/AcademicDashboard').then(module => ({ default: module.AcademicDashboard })));
 import { PayslipVerificationModal } from './components/PayslipVerificationModal';
 import { db } from './lib/firebase';
 import { StudentClass } from './types';
@@ -56,7 +57,8 @@ import {
   Target,
   Smartphone,
   History,
-  KeyRound
+  KeyRound,
+  BookOpen
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -106,7 +108,7 @@ function NavigationWrapper() {
   const totalAdminAlerts = unassignedCount + missingRegCount;
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'register' | 'admin' | 'reports' | 'termPayers' | 'budgetPlan' | 'exams' | 'termsSummary'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'register' | 'admin' | 'reports' | 'termPayers' | 'budgetPlan' | 'exams' | 'termsSummary' | 'academic'>('dashboard');
   const [showSyncConfirm, setShowSyncConfirm] = useState(false);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
   const [syncErrorMessage, setSyncErrorMessage] = useState('');
@@ -542,10 +544,10 @@ function NavigationWrapper() {
     const role = currentUser.role;
     if (role === 'Administrator' || role === 'Headmaster') return true;
     if (role === 'Accountant') {
-      return ['dashboard', 'register', 'reports', 'termPayers', 'budgetPlan', 'exams', 'termsSummary'].includes(tab);
+      return ['dashboard', 'register', 'reports', 'termPayers', 'budgetPlan', 'exams', 'termsSummary', 'academic'].includes(tab);
     }
     if (role === 'Teacher') {
-      return ['register'].includes(tab);
+      return ['register', 'academic'].includes(tab);
     }
     return false;
   };
@@ -553,6 +555,7 @@ function NavigationWrapper() {
   // Adjust default tab based on security access on load
   const tabs = [
     { id: 'register', label: 'Check-In GHC 5', icon: Receipt },
+    { id: 'academic', label: 'NaCCA SBA & Reports', icon: BookOpen },
     { id: 'termPayers', label: 'Term Payers Status', icon: CreditCard },
     { id: 'termsSummary', label: 'Terms Summary Dashboard', icon: BarChart3 },
     { id: 'dashboard', label: 'Cash Flow Trends & Stats', icon: LayoutDashboard },
@@ -571,6 +574,8 @@ function NavigationWrapper() {
         return <Dashboard />;
       case 'register':
         return <ClassRegister />;
+      case 'academic':
+        return <AcademicDashboard />;
       case 'termPayers':
         return <TermPayersTab />;
       case 'termsSummary':
@@ -1017,6 +1022,8 @@ function NavigationWrapper() {
                     <span className="uppercase">
                       {tab.id === 'register' 
                         ? 'Daily Check-In' 
+                        : tab.id === 'academic'
+                        ? 'NaCCA SBA & Reports'
                         : tab.id === 'termPayers' 
                         ? 'Term Payers Status' 
                         : tab.id === 'termsSummary'
@@ -1120,7 +1127,9 @@ function NavigationWrapper() {
                   const activeOverflowTab = overflowTabs.find(tab => tab.id === activeTab);
                   const isOverflowActive = !!activeOverflowTab;
                   const labelToUse = isOverflowActive 
-                    ? (activeTab === 'termsSummary'
+                    ? (activeTab === 'academic'
+                        ? 'SBA & Reports'
+                        : activeTab === 'termsSummary'
                         ? 'Terms'
                         : activeTab === 'dashboard' 
                         ? 'Trends' 

@@ -4,7 +4,7 @@
  */
 
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
-import { Student, PaymentRecord, UserAccount, UserRole, StudentClass, SchoolCategory, Term, PendingEdit, BackupRecord, Expense, ExpenseCategory, PaymentMethod, WorkerSalary, SystemSettings, BudgetTarget, ExamsPayment, ExamsExpense, ExamsSettings, AuditLog, TeacherEvaluation, JournalEntry, TeacherEthicsEvaluation, AdministrativePurgeOptions, AdministrativePurgeResult, StaffPermissions, TrashItem, DuplicatePaymentAuditItem, DuplicatePaymentAuditGroup, DeleteClassFeesOptions, DeleteClassFeesResult } from '../types';
+import { Student, PaymentRecord, UserAccount, UserRole, StudentClass, SchoolCategory, Term, PendingEdit, BackupRecord, Expense, ExpenseCategory, PaymentMethod, WorkerSalary, SystemSettings, BudgetTarget, ExamsPayment, ExamsExpense, ExamsSettings, AuditLog, TeacherEvaluation, JournalEntry, TeacherEthicsEvaluation, AdministrativePurgeOptions, AdministrativePurgeResult, StaffPermissions, TrashItem, DuplicatePaymentAuditItem, DuplicatePaymentAuditGroup, DeleteClassFeesOptions, DeleteClassFeesResult, AcademicAssessment, TerminalReport, TeacherAllocation, AcademicSettings } from '../types';
 import { INITIAL_USERS, INITIAL_STUDENTS, ORIGINAL_DEMO_STUDENT_IDS, generateSeedPayments, getClassCategory } from '../initialData';
 import { db as rawDb, firebaseLogin, firebaseSendPasswordReset, firebaseCreateAccount, firebaseAuth, firebaseSignOut, onAuthStateChanged } from '../lib/firebase';
 import { generateSchoolDays, isDateInTermGap } from '../utils/termUtils';
@@ -255,6 +255,16 @@ interface AppContextType {
   deleteExamsExpense: (expenseId: string) => Promise<void>;
   updateExamsExpense: (expense: ExamsExpense) => Promise<void>;
   updateExamsSettings: (settings: ExamsSettings) => Promise<void>;
+  // Ghana Academic Curriculum & Assessments
+  academicAssessments: AcademicAssessment[];
+  terminalReports: TerminalReport[];
+  teacherAllocations: TeacherAllocation[];
+  academicSettings: AcademicSettings;
+  batchSaveAcademicAssessments: (assessments: AcademicAssessment[]) => Promise<void>;
+  saveTerminalReport: (report: TerminalReport) => Promise<void>;
+  saveTeacherAllocation: (allocation: TeacherAllocation) => Promise<void>;
+  deleteTeacherAllocation: (id: string) => Promise<void>;
+  updateAcademicSettings: (settings: AcademicSettings) => Promise<void>;
 }
 
 export interface DailyStats {
@@ -640,6 +650,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [examsExpenses, setExamsExpenses] = useState<ExamsExpense[]>([]);
   const [examsSettings, setExamsSettings] = useState<ExamsSettings | null>(null);
   const [promotionBackups, setPromotionBackups] = useState<any[]>([]);
+
+  const DEFAULT_ACADEMIC_SETTINGS: AcademicSettings = {
+    sbaWeight: 50,
+    examWeight: 50,
+    academicYear: '2025/2026',
+    activeTermNumber: 1,
+    nextTermReopeningDate: '2026-09-08',
+    vacationDate: '2026-07-24',
+    headteacherName: 'Yakubu Hakeem',
+    headteacherTitle: 'Headmaster',
+    schoolMotto: 'Knowledge is Light & Truth',
+    showPositionOnReport: true,
+    showAttendanceOnReport: true,
+    showConductOnReport: true,
+    showTeacherRemarks: true,
+    showHeadteacherRemarks: true,
+    gradingScale: 'GES_9_POINT'
+  };
+
+  const [academicAssessments, setAcademicAssessments] = useState<AcademicAssessment[]>([]);
+  const [terminalReports, setTerminalReports] = useState<TerminalReport[]>([]);
+  const [teacherAllocations, setTeacherAllocations] = useState<TeacherAllocation[]>([]);
+  const [academicSettings, setAcademicSettings] = useState<AcademicSettings>(DEFAULT_ACADEMIC_SETTINGS);
 
   const DEFAULT_SETTINGS: SystemSettings = {
     schoolName: "SAAKO HOLY CHILD ACADEMY",
@@ -1481,6 +1514,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const localExamsExpenses = await idbEngine.getItem<ExamsExpense[]>('s_exams_expenses');
     const localExamsSettings = await idbEngine.getItem<ExamsSettings>('s_exams_settings');
     const localPromoBackups = await idbEngine.getItem<any[]>('s_promotion_backups');
+    const localAcademicAssessments = await idbEngine.getItem<AcademicAssessment[]>('s_academic_assessments');
+    const localTerminalReports = await idbEngine.getItem<TerminalReport[]>('s_terminal_reports');
+    const localTeacherAllocations = await idbEngine.getItem<TeacherAllocation[]>('s_teacher_allocations');
+    const localAcademicSettings = await idbEngine.getItem<AcademicSettings>('s_academic_settings');
 
     // 1. Session authentication state loading
     try {
@@ -1504,7 +1541,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       
       try {
         // Run lookups in parallel to minimize wait times
-        const [dbUsers, dbStudents, dbPayments, dbTerms, dbExpenses, dbSalaries, dbBudgetTargets, dbExamsPayments, dbExamsExpenses, dbExamsSettings, dbEvaluations, dbJournalEntries, dbTrashItems] = await Promise.all([
+        const [dbUsers, dbStudents, dbPayments, dbTerms, dbExpenses, dbSalaries, dbBudgetTargets, dbExamsPayments, dbExamsExpenses, dbExamsSettings, dbEvaluations, dbJournalEntries, dbTrashItems, dbAcademicAssessments, dbTerminalReports, dbTeacherAllocations, dbAcademicSettings] = await Promise.all([
           db.getUsers().catch(() => null),
           db.getStudents().catch(() => null),
           db.getPayments().catch(() => null),
@@ -1517,13 +1554,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           db.getExamsSettings().catch(() => null),
           db.getTeacherEvaluations().catch(() => null),
           db.getJournalEntries().catch(() => null),
-          db.getTrashItems().catch(() => null)
+          db.getTrashItems().catch(() => null),
+          db.getAcademicAssessments().catch(() => null),
+          db.getTerminalReports().catch(() => null),
+          db.getTeacherAllocations().catch(() => null),
+          db.getAcademicSettings().catch(() => null)
         ]);
 
         if (dbUsers === null && dbStudents === null && dbPayments === null) {
           console.warn('Cloud database collections are offline/misconfigured. Falling back to LocalStorage...');
           setFirebaseConnected(false);
-          loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries, localBudgetTargets, localEvaluations, localJournalEntries, localExamsPayments, localExamsExpenses, localExamsSettings, localPromoBackups);
+          loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries, localBudgetTargets, localEvaluations, localJournalEntries, localExamsPayments, localExamsExpenses, localExamsSettings, localPromoBackups, localAcademicAssessments, localTerminalReports, localTeacherAllocations, localAcademicSettings);
           return;
         }
 
@@ -1764,6 +1805,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setExamsPayments(healedExamsPayments);
         setExamsExpenses(healedExamsExpenses);
 
+        const mergedAssessments = dbAcademicAssessments && dbAcademicAssessments.length > 0 ? dbAcademicAssessments : (localAcademicAssessments || []);
+        setAcademicAssessments(mergedAssessments);
+        idbEngine.setItem('s_academic_assessments', mergedAssessments);
+
+        const mergedReports = dbTerminalReports && dbTerminalReports.length > 0 ? dbTerminalReports : (localTerminalReports || []);
+        setTerminalReports(mergedReports);
+        idbEngine.setItem('s_terminal_reports', mergedReports);
+
+        const mergedAllocations = dbTeacherAllocations && dbTeacherAllocations.length > 0 ? dbTeacherAllocations : (localTeacherAllocations || []);
+        setTeacherAllocations(mergedAllocations);
+        idbEngine.setItem('s_teacher_allocations', mergedAllocations);
+
+        const mergedSettings = dbAcademicSettings || localAcademicSettings || DEFAULT_ACADEMIC_SETTINGS;
+        setAcademicSettings(mergedSettings);
+        idbEngine.setItem('s_academic_settings', mergedSettings);
+
         if (dbExamsSettings) {
           setExamsSettings(dbExamsSettings);
         } else {
@@ -1864,11 +1921,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         
         setFirebaseError(displayError);
-        loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries, localBudgetTargets, localEvaluations, localJournalEntries, localExamsPayments, localExamsExpenses, localExamsSettings, localPromoBackups);
+        loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries, localBudgetTargets, localEvaluations, localJournalEntries, localExamsPayments, localExamsExpenses, localExamsSettings, localPromoBackups, localAcademicAssessments, localTerminalReports, localTeacherAllocations, localAcademicSettings);
       }
     } else {
       console.log('FEETRACK running in standard client-persistence mode (Local Storage).');
-      loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries, localBudgetTargets, localEvaluations, localJournalEntries, localExamsPayments, localExamsExpenses, localExamsSettings, localPromoBackups);
+      loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries, localBudgetTargets, localEvaluations, localJournalEntries, localExamsPayments, localExamsExpenses, localExamsSettings, localPromoBackups, localAcademicAssessments, localTerminalReports, localTeacherAllocations, localAcademicSettings);
     }
   };
 
@@ -1890,7 +1947,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localExamsPayments: any,
       localExamsExpenses: any,
       localExamsSettings: any,
-      localPromoBackups: any
+      localPromoBackups: any,
+      localAssessments?: any,
+      localReports?: any,
+      localAllocations?: any,
+      localSettings?: any
     ) => {
       // Users list healing
       try {
@@ -2156,6 +2217,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       } catch (e) {
         setPromotionBackups([]);
+      }
+
+      // Academic module fallback initialization
+      try {
+        if (localAssessments && Array.isArray(localAssessments)) {
+          setAcademicAssessments(localAssessments);
+        } else {
+          setAcademicAssessments([]);
+          idbEngine.setItem('s_academic_assessments', []);
+        }
+      } catch (e) {
+        setAcademicAssessments([]);
+      }
+
+      try {
+        if (localReports && Array.isArray(localReports)) {
+          setTerminalReports(localReports);
+        } else {
+          setTerminalReports([]);
+          idbEngine.setItem('s_terminal_reports', []);
+        }
+      } catch (e) {
+        setTerminalReports([]);
+      }
+
+      try {
+        if (localAllocations && Array.isArray(localAllocations)) {
+          setTeacherAllocations(localAllocations);
+        } else {
+          setTeacherAllocations([]);
+          idbEngine.setItem('s_teacher_allocations', []);
+        }
+      } catch (e) {
+        setTeacherAllocations([]);
+      }
+
+      try {
+        if (localSettings) {
+          setAcademicSettings(localSettings);
+        } else {
+          setAcademicSettings(DEFAULT_ACADEMIC_SETTINGS);
+          idbEngine.setItem('s_academic_settings', DEFAULT_ACADEMIC_SETTINGS);
+        }
+      } catch (e) {
+        setAcademicSettings(DEFAULT_ACADEMIC_SETTINGS);
       }
     };
 
@@ -5980,6 +6086,89 @@ School Administration Financial Audit System (MFA Secure)
     }
   };
 
+  // Academic Continuous Assessment (SBA) & Terminal Reports Engine Handlers
+  const batchSaveAcademicAssessments = async (newAssessments: AcademicAssessment[]) => {
+    if (!newAssessments || newAssessments.length === 0) return;
+    
+    setAcademicAssessments(prev => {
+      const map = new Map<string, AcademicAssessment>();
+      prev.forEach(a => map.set(a.id, a));
+      newAssessments.forEach(a => map.set(a.id, a));
+      const updated = Array.from(map.values());
+      idbEngine.setItem('s_academic_assessments', updated);
+      return updated;
+    });
+
+    if (db.isActive()) {
+      try {
+        await db.batchSaveAcademicAssessments(newAssessments);
+      } catch (err) {
+        console.error("Failed to batch save academic assessments to cloud:", err);
+      }
+    }
+  };
+
+  const saveTerminalReport = async (report: TerminalReport) => {
+    setTerminalReports(prev => {
+      const updated = [report, ...prev.filter(r => r.id !== report.id)];
+      idbEngine.setItem('s_terminal_reports', updated);
+      return updated;
+    });
+
+    if (db.isActive()) {
+      try {
+        await db.saveTerminalReport(report);
+      } catch (err) {
+        console.error("Failed to save terminal report to cloud:", err);
+      }
+    }
+  };
+
+  const saveTeacherAllocation = async (allocation: TeacherAllocation) => {
+    setTeacherAllocations(prev => {
+      const updated = [allocation, ...prev.filter(a => a.id !== allocation.id)];
+      idbEngine.setItem('s_teacher_allocations', updated);
+      return updated;
+    });
+
+    if (db.isActive()) {
+      try {
+        await db.saveTeacherAllocation(allocation);
+      } catch (err) {
+        console.error("Failed to save teacher allocation to cloud:", err);
+      }
+    }
+  };
+
+  const deleteTeacherAllocation = async (id: string) => {
+    setTeacherAllocations(prev => {
+      const updated = prev.filter(a => a.id !== id);
+      idbEngine.setItem('s_teacher_allocations', updated);
+      return updated;
+    });
+
+    if (db.isActive()) {
+      try {
+        await db.deleteTeacherAllocation(id);
+      } catch (err) {
+        console.error("Failed to delete teacher allocation from cloud:", err);
+      }
+    }
+  };
+
+  const updateAcademicSettings = async (settings: AcademicSettings) => {
+    setAcademicSettings(settings);
+    idbEngine.setItem('s_academic_settings', settings);
+
+    if (db.isActive()) {
+      try {
+        await db.saveAcademicSettings(settings);
+      } catch (err) {
+        console.error("Failed to save academic settings to cloud:", err);
+      }
+    }
+  };
+
   const addSalary = (
     workerName: string,
     role: string,
@@ -6766,7 +6955,16 @@ School Administration Financial Audit System (MFA Secure)
       addExamsExpense,
       deleteExamsExpense,
       updateExamsExpense,
-      updateExamsSettings
+      updateExamsSettings,
+      academicAssessments,
+      terminalReports,
+      teacherAllocations,
+      academicSettings,
+      batchSaveAcademicAssessments,
+      saveTerminalReport,
+      saveTeacherAllocation,
+      deleteTeacherAllocation,
+      updateAcademicSettings
     }}>
       {children}
     </AppContext.Provider>

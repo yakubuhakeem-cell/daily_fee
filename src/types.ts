@@ -467,6 +467,116 @@ export interface DeleteClassFeesResult {
   message: string;
 }
 
+// ==========================================
+// GHANA STANDARD-BASED & COMMON CORE CURRICULUM TYPES
+// ==========================================
+
+export type GESGrade = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+export type NaCCALevel = 'Advanced' | 'Proficient' | 'Developing' | 'Beginning';
+
+export interface CurriculumSubject {
+  id: string;
+  name: string;
+  code: string;
+  level: 'KG' | 'Primary' | 'JHS' | 'All';
+  isCore: boolean;
+  category: 'Core' | 'Elective';
+  description?: string;
+  order: number;
+}
+
+export interface AcademicAssessment {
+  id: string;
+  studentId: string;
+  studentName: string;
+  class: StudentClass;
+  termId: string;
+  academicYear: string;
+  subjectId: string;
+  subjectName: string;
+  classExercisesScore?: number; // Raw class exercises / activities
+  homeworkScore?: number;        // Raw homework / projects
+  projectScore?: number;         // Raw group project / practical
+  classTestScore?: number;       // Raw class test / mid-term
+  sbaRawScore?: number;          // Total raw continuous assessment score
+  sbaMaxScore?: number;          // Max possible raw SBA score (e.g. 50 or 100)
+  sbaScore: number;              // Weighted continuous assessment score (e.g. out of 50 or 30)
+  examRawScore?: number;         // Raw end of term exam score
+  examMaxScore?: number;         // Max raw exam score (e.g. 100 or 50)
+  examScore: number;             // Weighted exam score (e.g. out of 50 or 70)
+  totalScore: number;            // Overall 100% total (sbaScore + examScore)
+  grade: GESGrade;               // 1 = Highest, 9 = Lowest
+  gradeDescription: string;      // e.g. "Advanced", "Proficient", "Credit", "Pass", "Weak"
+  achievementLevel: NaCCALevel;  // "Advanced" | "Proficient" | "Developing" | "Beginning"
+  subjectPosition?: number;      // Rank in subject for that class
+  teacherRemark?: string;        // Specific subject comment
+  enteredBy: string;             // Staff name / ID
+  enteredAt: string;             // Timestamp
+  updatedAt?: string;
+}
+
+export interface TerminalReport {
+  id: string;
+  studentId: string;
+  studentName: string;
+  rollNumber: string;
+  class: StudentClass;
+  termId: string;
+  academicYear: string;
+  termName: string;
+  daysPresent: number;
+  totalDays: number;
+  conduct: string;              // e.g. "Respectful, disciplined and highly cooperative."
+  attitude: string;             // e.g. "Demonstrates exceptional devotion to learning."
+  interest: string;             // e.g. "Science exploration, Creative arts & Debating."
+  classTeacherRemarks: string;  // e.g. "Brilliant academic performance. Keep up the high standard!"
+  headteacherRemarks: string;   // e.g. "Outstanding result. Recommended for academic honors."
+  promotedTo?: string;          // e.g. "Promoted to Basic 4"
+  positionInClass?: number;     // e.g. 1
+  totalClassPupils?: number;    // e.g. 28
+  totalScore: number;           // Total aggregate of marks
+  averageScore: number;         // Percentage mean
+  aggregateGrade: number;       // Best 6 GES grade aggregate (lower is better, e.g. 6 to 54)
+  reopeningDate?: string;       // Next term resumption date
+  vacationDate?: string;        // Current term closure date
+  headteacherSignatureUrl?: string;
+  classTeacherSignatureUrl?: string;
+  verified?: boolean;
+  updatedAt?: string;
+}
+
+export interface TeacherAllocation {
+  id: string;
+  teacherId: string;
+  teacherName: string;
+  subjectId: string;
+  subjectName: string;
+  class: StudentClass;
+  isClassTeacher?: boolean;
+  academicYear: string;
+}
+
+export interface AcademicSettings {
+  sbaWeight: number;            // default 50 (50% SBA + 50% Exam) or 30 (30% SBA + 70% Exam)
+  examWeight: number;           // default 50 or 70
+  academicYear: string;         // e.g. "2025/2026"
+  activeTermNumber: 1 | 2 | 3;
+  nextTermReopeningDate: string;
+  vacationDate: string;
+  headteacherName: string;
+  headteacherTitle: string;     // "Headmaster" | "Headmistress" | "Principal"
+  headteacherSignatureUrl?: string;
+  schoolMotto: string;
+  customSchoolCrestUrl?: string;
+  showPositionOnReport: boolean;
+  showAttendanceOnReport: boolean;
+  showConductOnReport: boolean;
+  showTeacherRemarks: boolean;
+  showHeadteacherRemarks: boolean;
+  gradingScale: 'GES_9_POINT' | 'STANDARD_PERCENT';
+}
+
+
 
 
 

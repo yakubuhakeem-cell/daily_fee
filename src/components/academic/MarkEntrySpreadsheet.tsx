@@ -1,0 +1,801 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { useApp } from '../../context/AppContext';
+import { StudentClass, Student, AcademicAssessment, CurriculumSubject, ALL_CLASSES } from '../../types';
+import { 
+  FileSpreadsheet, Save, Sparkles, Download, Upload, RefreshCw, 
+  CheckCircle2, AlertCircle, ArrowUpDown, ChevronDown, ChevronRight,
+  TrendingUp, Award, HelpCircle, Filter, BookOpen, Users, Check
+} from 'lucide-react';
+import { 
+  getSubjectsForClass, 
+  computeTotalAssessment, 
+  calculateGESGrade, 
+  formatOrdinal,
+  DEFAULT_GHANA_SUBJECTS
+} from '../../utils/ghanaCurriculum';
+import * as XLSX from 'xlsx';
+
+interface MarkEntrySpreadsheetProps {
+  initialClass?: StudentClass;
+  initialSubjectId?: string;
+}
+
+interface LocalRowState {
+  studentId: string;
+  studentName: string;
+  rollNumber: string;
+  classExercises: string; // raw string for smooth editing
+  homework: string;
+  project: string;
+  classTest: string;
+  sbaRaw: string;
+  examRaw: string;
+  teacherRemark: string;
+  isDirty?: boolean;
+}
+
+export const MarkEntrySpreadsheet: React.FC<MarkEntrySpreadsheetProps> = ({
+  initialClass = 'B1',
+  initialSubjectId
+}) => {
+  const { 
+    students = [], 
+    academicAssessments = [], 
+    batchSaveAcademicAssessments, 
+    activeTerm,
+    currentUser,
+    academicSettings,
+    teacherAllocations = [],
+    playFeedbackSound,
+    theme
+  } = useApp();
+
+  const [selectedClass, setSelectedClass] = useState<StudentClass>(initialClass);
+  const classSubjects = useMemo(() => getSubjectsForClass(selectedClass), [selectedClass]);
+  
+  const [selectedSubjectId, setSelectedSubjectId] = useState<string>(() => {
+    if (initialSubjectId && classSubjects.some(s => s.id === initialSubjectId)) {
+      return initialSubjectId;
+    }
+    return classSubjects[0]?.id || 'sub_pri_eng';
+  });
+
+  // Ensure selectedSubjectId is valid when class changes
+  useEffect(() => {
+    if (!classSubjects.some(s => s.id === selectedSubjectId)) {
+      if (classSubjects[0]) {
+        setSelectedSubjectId(classSubjects[0].id);
+      }
+    }
+  }, [selectedClass, classSubjects, selectedSubjectId]);
+
+  const selectedSubject = useMemo(() => {
+    return classSubjects.find(s => s.id === selectedSubjectId) || classSubjects[0];
+  }, [classSubjects, selectedSubjectId]);
+
+  const activeTermId = activeTerm?.id || 'term_1_2026';
+  const academicYear = academicSettings?.academicYear || '2025/2026';
+  const sbaWeight = academicSettings?.sbaWeight ?? 50;
+  const examWeight = academicSettings?.examWeight ?? 50;
+
+  // Filter students in this class
+  const classPupils = useMemo(() => {
+    return students
+      .filter(s => s.active && s.class === selectedClass)
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [students, selectedClass]);
+
+  // Local spreadsheet rows
+  const [gridData, setGridData] = useState<Record<string, LocalRowState>>({});
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
+  const [quickSbaFillValue, setQuickSbaFillValue] = useState<string>('35');
+  const [quickExamFillValue, setQuickExamFillValue] = useState<string>('70');
+  const [showQuickFillModal, setShowQuickFillModal] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Initialize or load grid data from store
+  useEffect(() => {
+    const newGrid: Record<string, LocalRowState> = {};
+
+    classPupils.forEach(pupil => {
+      const existing = academicAssessments.find(
+        a => a.studentId === pupil.id && 
+             a.subjectId === selectedSubjectId && 
+             (a.termId === activeTermId || !a.termId)
+      );
+
+      if (existing) {
+        newGrid[pupil.id] = {
+          studentId: pupil.id,
+          studentName: pupil.name,
+          rollNumber: pupil.rollNumber || '',
+          classExercises: existing.classExercisesScore !== undefined ? String(existing.classExercisesScore) : '',
+          homework: existing.homeworkScore !== undefined ? String(existing.homeworkScore) : '',
+          project: existing.projectScore !== undefined ? String(existing.projectScore) : '',
+          classTest: existing.classTestScore !== undefined ? String(existing.classTestScore) : '',
+          sbaRaw: existing.sbaRawScore !== undefined ? String(existing.sbaRawScore) : String(existing.sbaScore || ''),
+          examRaw: existing.examRawScore !== undefined ? String(existing.examRawScore) : String(existing.examScore || ''),
+          teacherRemark: existing.teacherRemark || '',
+          isDirty: false
+        };
+      } else {
+        newGrid[pupil.id] = {
+          studentId: pupil.id,
+          studentName: pupil.name,
+          rollNumber: pupil.rollNumber || '',
+          classExercises: '',
+          homework: '',
+          project: '',
+          classTest: '',
+          sbaRaw: '',
+          examRaw: '',
+          teacherRemark: '',
+          isDirty: false
+        };
+      }
+    });
+
+    setGridData(newGrid);
+  }, [classPupils, selectedSubjectId, activeTermId, academicAssessments]);
+
+  // Compute live computed scores and ranks for all pupils
+  const computedRows = useMemo(() => {
+    const rawScores = classPupils.map(p => {
+      const row = gridData[p.id] || {
+        studentId: p.id,
+        studentName: p.name,
+        rollNumber: p.rollNumber || '',
+        classExercises: '',
+        homework: '',
+        project: '',
+        classTest: '',
+        sbaRaw: '',
+        examRaw: '',
+        teacherRemark: ''
+      };
+
+      // Determine SBA Raw Score (either user entered sbaRaw or sum of exercise components)
+      let sbaRawNum = parseFloat(row.sbaRaw);
+      if (isNaN(sbaRawNum)) {
+        const ex = parseFloat(row.classExercises) || 0;
+        const hw = parseFloat(row.homework) || 0;
+        const pr = parseFloat(row.project) || 0;
+        const ct = parseFloat(row.classTest) || 0;
+        if (ex || hw || pr || ct) {
+          sbaRawNum = ex + hw + pr + ct;
+        } else {
+          sbaRawNum = 0;
+        }
+      }
+
+      const examRawNum = parseFloat(row.examRaw) || 0;
+      const hasEntries = row.sbaRaw !== '' || row.examRaw !== '' || row.classExercises !== '';
+
+      const computed = computeTotalAssessment(
+        sbaRawNum, 
+        50, // max SBA
+        examRawNum, 
+        100, // max Exam
+        sbaWeight, 
+        examWeight
+      );
+
+      return {
+        studentId: p.id,
+        student: p,
+        row,
+        hasEntries,
+        sbaRawNum,
+        examRawNum,
+        weightedSba: computed.weightedSba,
+        weightedExam: computed.weightedExam,
+        totalScore: hasEntries ? computed.totalScore : 0,
+        grade: computed.grade,
+        description: computed.description,
+        level: computed.level,
+        autoRemark: computed.remark,
+        teacherRemark: row.teacherRemark || computed.remark
+      };
+    });
+
+    // Rank pupils by total score descending
+    const sorted = [...rawScores].sort((a, b) => b.totalScore - a.totalScore);
+    const ranks = new Map<string, number>();
+    sorted.forEach((item, index) => {
+      if (item.hasEntries) {
+        ranks.set(item.studentId, index + 1);
+      }
+    });
+
+    return rawScores.map(r => ({
+      ...r,
+      position: ranks.get(r.studentId) || 0
+    }));
+  }, [classPupils, gridData, sbaWeight, examWeight]);
+
+  // Statistics for active subject
+  const subjectStats = useMemo(() => {
+    const scored = computedRows.filter(r => r.hasEntries);
+    if (scored.length === 0) {
+      return {
+        totalScored: 0,
+        meanAverage: 0,
+        highestScore: 0,
+        lowestScore: 0,
+        passRate: 0,
+        grade1Count: 0
+      };
+    }
+
+    const totalSum = scored.reduce((acc, r) => acc + r.totalScore, 0);
+    const mean = Math.round((totalSum / scored.length) * 10) / 10;
+    const highest = Math.max(...scored.map(r => r.totalScore));
+    const lowest = Math.min(...scored.map(r => r.totalScore));
+    const passes = scored.filter(r => r.totalScore >= 45).length;
+    const passRate = Math.round((passes / scored.length) * 100);
+    const g1Count = scored.filter(r => r.grade === 1).length;
+
+    return {
+      totalScored: scored.length,
+      meanAverage: mean,
+      highestScore: highest,
+      lowestScore: lowest,
+      passRate,
+      grade1Count: g1Count
+    };
+  }, [computedRows]);
+
+  // Handle cell edits
+  const handleCellChange = (studentId: string, field: keyof LocalRowState, value: string) => {
+    setGridData(prev => {
+      const current = prev[studentId] || {
+        studentId,
+        studentName: '',
+        rollNumber: '',
+        classExercises: '',
+        homework: '',
+        project: '',
+        classTest: '',
+        sbaRaw: '',
+        examRaw: '',
+        teacherRemark: ''
+      };
+
+      return {
+        ...prev,
+        [studentId]: {
+          ...current,
+          [field]: value,
+          isDirty: true
+        }
+      };
+    });
+  };
+
+  // Quick Auto-Fill remarks for all
+  const handleAutoGenerateRemarks = () => {
+    setGridData(prev => {
+      const updated = { ...prev };
+      computedRows.forEach(item => {
+        if (updated[item.studentId]) {
+          updated[item.studentId] = {
+            ...updated[item.studentId],
+            teacherRemark: item.autoRemark,
+            isDirty: true
+          };
+        }
+      });
+      return updated;
+    });
+    if (playFeedbackSound) playFeedbackSound('success');
+    setSaveSuccessMsg('Generated smart remarks for all pupils!');
+    setTimeout(() => setSaveSuccessMsg(null), 3000);
+  };
+
+  // Batch Save all marks to AppContext (Firestore & local cache)
+  const handleSaveSpreadsheet = async () => {
+    setIsSaving(true);
+    try {
+      const assessmentsToSave: AcademicAssessment[] = computedRows
+        .filter(r => r.hasEntries)
+        .map(r => {
+          return {
+            id: `acad_${r.studentId}_${selectedSubject.id}_${activeTermId}`,
+            studentId: r.studentId,
+            studentName: r.student.name,
+            class: selectedClass,
+            termId: activeTermId,
+            academicYear: academicYear,
+            subjectId: selectedSubject.id,
+            subjectName: selectedSubject.name,
+            classExercisesScore: parseFloat(r.row.classExercises) || undefined,
+            homeworkScore: parseFloat(r.row.homework) || undefined,
+            projectScore: parseFloat(r.row.project) || undefined,
+            classTestScore: parseFloat(r.row.classTest) || undefined,
+            sbaRawScore: r.sbaRawNum,
+            sbaMaxScore: 50,
+            sbaScore: r.weightedSba,
+            examRawScore: r.examRawNum,
+            examMaxScore: 100,
+            examScore: r.weightedExam,
+            totalScore: r.totalScore,
+            grade: r.grade,
+            gradeDescription: r.description,
+            achievementLevel: r.level,
+            subjectPosition: r.position,
+            teacherRemark: r.row.teacherRemark || r.autoRemark,
+            enteredBy: currentUser?.name || 'Staff User',
+            enteredAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          };
+        });
+
+      await batchSaveAcademicAssessments(assessmentsToSave);
+      
+      // Mark rows as clean
+      setGridData(prev => {
+        const clean: Record<string, LocalRowState> = {};
+        Object.entries(prev).forEach(([k, v]) => {
+          clean[k] = { ...(v as LocalRowState), isDirty: false };
+        });
+        return clean;
+      });
+
+      if (playFeedbackSound) playFeedbackSound('success');
+      setSaveSuccessMsg(`Successfully saved ${assessmentsToSave.length} mark records!`);
+      setTimeout(() => setSaveSuccessMsg(null), 4000);
+    } catch (err: any) {
+      console.error("Failed to save marks spreadsheet:", err);
+      if (playFeedbackSound) playFeedbackSound('error');
+      alert("Save failed: " + (err.message || 'Unknown database error'));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // Export spreadsheet to Excel (.xlsx)
+  const handleExportToExcel = () => {
+    const exportRows = computedRows.map((r, idx) => ({
+      "No.": idx + 1,
+      "Roll Number": r.student.rollNumber || '-',
+      "Pupil Full Name": r.student.name,
+      "Class": selectedClass,
+      "Subject": selectedSubject.name,
+      "SBA Raw (/50)": r.sbaRawNum || 0,
+      [`SBA Weighted (${sbaWeight}%)`]: r.weightedSba,
+      "Exam Raw (/100)": r.examRawNum || 0,
+      [`Exam Weighted (${examWeight}%)`]: r.weightedExam,
+      "Total Score (100%)": r.totalScore,
+      "GES Grade (1-9)": r.grade,
+      "NaCCA Level": r.level,
+      "Position": r.position ? formatOrdinal(r.position) : '-',
+      "Teacher Remarks": r.teacherRemark
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(exportRows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, `${selectedClass}_${selectedSubject.code}`);
+    XLSX.writeFile(workbook, `SBA_Marks_${selectedClass}_${selectedSubject.code}_${activeTermId}.xlsx`);
+  };
+
+  // Import from Excel/CSV
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const bstr = evt.target?.result;
+        const wb = XLSX.read(bstr, { type: 'binary' });
+        const wsname = wb.SheetNames[0];
+        const ws = wb.Sheets[wsname];
+        const data: any[] = XLSX.utils.sheet_to_json(ws);
+
+        if (!data || data.length === 0) {
+          alert("Imported file contains no recognizable data rows.");
+          return;
+        }
+
+        let importedCount = 0;
+        setGridData(prev => {
+          const updated = { ...prev };
+          data.forEach(row => {
+            // Match pupil by Roll Number or Name
+            const roll = String(row['Roll Number'] || row['rollNumber'] || row['Roll'] || '').trim().toLowerCase();
+            const name = String(row['Pupil Full Name'] || row['Name'] || row['studentName'] || '').trim().toLowerCase();
+
+            const targetPupil = classPupils.find(p => 
+              (roll && (p.rollNumber || '').toLowerCase() === roll) ||
+              (name && p.name.toLowerCase() === name)
+            );
+
+            if (targetPupil) {
+              const sba = row['SBA Raw (/50)'] ?? row['SBA'] ?? row['sbaRaw'] ?? '';
+              const exam = row['Exam Raw (/100)'] ?? row['Exam'] ?? row['examRaw'] ?? '';
+              const remark = row['Teacher Remarks'] ?? row['Remarks'] ?? '';
+
+              updated[targetPupil.id] = {
+                ...updated[targetPupil.id],
+                sbaRaw: String(sba),
+                examRaw: String(exam),
+                teacherRemark: String(remark),
+                isDirty: true
+              };
+              importedCount++;
+            }
+          });
+          return updated;
+        });
+
+        alert(`Successfully mapped and imported marks for ${importedCount} pupils! Remember to click 'Save All Marks'.`);
+      } catch (err: any) {
+        console.error("Failed to parse import file:", err);
+        alert("Error parsing file: " + err.message);
+      }
+    };
+    reader.readAsBinaryString(file);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const isLight = theme === 'daylight';
+  const hasUnsavedChanges = Object.values(gridData).some((r: LocalRowState) => Boolean(r.isDirty));
+
+  return (
+    <div className="space-y-6">
+      {/* Top Class & Subject Selectors Header */}
+      <div className={`${isLight ? 'bg-neutral-100 border-neutral-300' : 'bg-neutral-900 border-neutral-800'} border p-5 flex flex-col lg:flex-row gap-5 justify-between items-start lg:items-center`}>
+        <div className="space-y-3 w-full lg:w-auto">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-mono font-bold uppercase text-amber-400 mr-2 flex items-center gap-1.5">
+              <Users size={14} /> Class Gate:
+            </span>
+            {ALL_CLASSES.map(cls => (
+              <button
+                key={cls}
+                onClick={() => setSelectedClass(cls)}
+                className={`px-3 py-1 text-xs font-mono font-bold transition-all cursor-pointer ${
+                  selectedClass === cls
+                    ? 'bg-amber-400 text-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]'
+                    : isLight ? 'bg-white text-neutral-700 hover:bg-neutral-200' : 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700'
+                }`}
+              >
+                {cls}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-neutral-800">
+            <span className="text-xs font-mono font-bold uppercase text-blue-400 mr-2 flex items-center gap-1.5">
+              <BookOpen size={14} /> Subject:
+            </span>
+            <div className="flex flex-wrap gap-1.5">
+              {classSubjects.map(sub => (
+                <button
+                  key={sub.id}
+                  onClick={() => setSelectedSubjectId(sub.id)}
+                  className={`px-2.5 py-1 text-xs font-mono transition-all cursor-pointer flex items-center gap-1 ${
+                    selectedSubjectId === sub.id
+                      ? 'bg-blue-500 text-white font-bold shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]'
+                      : isLight ? 'bg-white text-neutral-700 hover:bg-neutral-200' : 'bg-neutral-800 text-neutral-400 hover:text-white hover:bg-neutral-700'
+                  }`}
+                  title={sub.name}
+                >
+                  <span>{sub.code}</span>
+                  <span className="hidden sm:inline text-[10px] opacity-80">({sub.name.split(' ')[0]})</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Action Buttons */}
+        <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto justify-end">
+          <button
+            onClick={handleAutoGenerateRemarks}
+            className="bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-700 px-3 py-2 text-xs font-mono font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+            title="Auto generate remarks based on standard GES grade scale"
+          >
+            <Sparkles size={14} className="text-amber-400" />
+            <span>Auto Remarks</span>
+          </button>
+
+          <button
+            onClick={handleExportToExcel}
+            className="bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-700 px-3 py-2 text-xs font-mono font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+            title="Download formatted spreadsheet for this subject"
+          >
+            <Download size={14} className="text-emerald-400" />
+            <span>Excel Export</span>
+          </button>
+
+          <label className="bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-700 px-3 py-2 text-xs font-mono font-bold flex items-center gap-1.5 transition-colors cursor-pointer">
+            <Upload size={14} className="text-blue-400" />
+            <span>Import</span>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".xlsx, .xls, .csv"
+              onChange={handleFileUpload}
+              className="hidden"
+            />
+          </label>
+
+          <button
+            onClick={handleSaveSpreadsheet}
+            disabled={isSaving}
+            className={`px-5 py-2 text-xs font-mono font-black uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] ${
+              hasUnsavedChanges
+                ? 'bg-amber-400 hover:bg-amber-300 text-black animate-pulse'
+                : 'bg-emerald-500 hover:bg-emerald-400 text-black'
+            }`}
+          >
+            <Save size={15} />
+            <span>{isSaving ? 'Saving Cloud...' : hasUnsavedChanges ? 'Save Changes *' : 'Save All Marks'}</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Real-time Subject Analytics Pill Strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div className={`${isLight ? 'bg-neutral-50 border-neutral-200' : 'bg-neutral-900/90 border-neutral-800'} border p-3`}>
+          <span className="text-[10px] font-mono uppercase text-neutral-400 block">Class / Subject</span>
+          <span className="text-sm font-black font-mono text-amber-400 truncate block mt-0.5" title={selectedSubject.name}>
+            {selectedClass} • {selectedSubject.name}
+          </span>
+        </div>
+
+        <div className={`${isLight ? 'bg-neutral-50 border-neutral-200' : 'bg-neutral-900/90 border-neutral-800'} border p-3`}>
+          <span className="text-[10px] font-mono uppercase text-neutral-400 block">Weighted Model</span>
+          <span className="text-sm font-black font-mono text-white mt-0.5 block">
+            {sbaWeight}% SBA + {examWeight}% Exam
+          </span>
+        </div>
+
+        <div className={`${isLight ? 'bg-neutral-50 border-neutral-200' : 'bg-neutral-900/90 border-neutral-800'} border p-3`}>
+          <span className="text-[10px] font-mono uppercase text-neutral-400 block">Subject Mean Average</span>
+          <span className={`text-sm font-black font-mono mt-0.5 block ${
+            subjectStats.meanAverage >= 70 ? 'text-emerald-400' :
+            subjectStats.meanAverage >= 50 ? 'text-blue-400' : 'text-rose-400'
+          }`}>
+            {subjectStats.meanAverage}%
+          </span>
+        </div>
+
+        <div className={`${isLight ? 'bg-neutral-50 border-neutral-200' : 'bg-neutral-900/90 border-neutral-800'} border p-3`}>
+          <span className="text-[10px] font-mono uppercase text-neutral-400 block">High / Low Score</span>
+          <span className="text-sm font-black font-mono text-white mt-0.5 block">
+            {subjectStats.highestScore}% / {subjectStats.lowestScore}%
+          </span>
+        </div>
+
+        <div className={`${isLight ? 'bg-neutral-50 border-neutral-200' : 'bg-neutral-900/90 border-neutral-800'} border p-3`}>
+          <span className="text-[10px] font-mono uppercase text-neutral-400 block">Pass Rate (≥45%)</span>
+          <span className="text-sm font-black font-mono text-emerald-400 mt-0.5 block">
+            {subjectStats.passRate}% ({subjectStats.totalScored} graded)
+          </span>
+        </div>
+
+        <div className={`${isLight ? 'bg-neutral-50 border-neutral-200' : 'bg-neutral-900/90 border-neutral-800'} border p-3`}>
+          <span className="text-[10px] font-mono uppercase text-neutral-400 block">Grade 1 Achievers</span>
+          <span className="text-sm font-black font-mono text-amber-400 mt-0.5 block">
+            {subjectStats.grade1Count} pupils (≥80%)
+          </span>
+        </div>
+      </div>
+
+      {saveSuccessMsg && (
+        <div className="bg-emerald-950/60 border border-emerald-500 text-emerald-300 px-4 py-2.5 text-xs font-mono font-bold flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 size={16} />
+            <span>{saveSuccessMsg}</span>
+          </div>
+          <button onClick={() => setSaveSuccessMsg(null)} className="text-emerald-400 hover:text-white">✕</button>
+        </div>
+      )}
+
+      {/* Spreadsheet Main Grid */}
+      <div className={`${isLight ? 'bg-white border-neutral-300' : 'bg-neutral-900 border-neutral-800'} border overflow-hidden shadow-sm`}>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse text-xs font-mono">
+            <thead>
+              <tr className={`${isLight ? 'bg-neutral-200 text-neutral-800' : 'bg-neutral-950 text-neutral-300'} border-b border-neutral-800`}>
+                <th className="py-3 px-3 w-10 text-center font-black">#</th>
+                <th className="py-3 px-3 min-w-[180px] font-black uppercase">Pupil Name</th>
+                <th className="py-3 px-2 w-24 font-black uppercase">Roll #</th>
+                <th className="py-3 px-2 w-20 text-center font-bold bg-blue-950/30 text-blue-300" title="Class Exercises (out of 20)">Ex (/20)</th>
+                <th className="py-3 px-2 w-20 text-center font-bold bg-blue-950/30 text-blue-300" title="Homework / Project (out of 15)">Hw (/15)</th>
+                <th className="py-3 px-2 w-20 text-center font-bold bg-blue-950/30 text-blue-300" title="Class Test (out of 15)">Test (/15)</th>
+                <th className="py-3 px-2 w-24 text-center font-black bg-blue-900/40 text-blue-200" title="Raw SBA continuous score out of 50">SBA (/50)</th>
+                <th className="py-3 px-2 w-20 text-center font-bold bg-blue-950/50 text-blue-400" title={`Normalized SBA weighted to ${sbaWeight}%`}>SBA {sbaWeight}%</th>
+                <th className="py-3 px-2 w-24 text-center font-black bg-amber-950/40 text-amber-300" title="Raw End of Term Exam score out of 100">Exam (/100)</th>
+                <th className="py-3 px-2 w-20 text-center font-bold bg-amber-950/50 text-amber-400" title={`Normalized Exam weighted to ${examWeight}%`}>Exam {examWeight}%</th>
+                <th className="py-3 px-2 w-24 text-center font-black bg-emerald-950/40 text-emerald-300">Total (100%)</th>
+                <th className="py-3 px-2 w-16 text-center font-black">Grade</th>
+                <th className="py-3 px-2 w-20 text-center font-black">Level</th>
+                <th className="py-3 px-2 w-16 text-center font-black">Rank</th>
+                <th className="py-3 px-3 min-w-[220px] font-black uppercase">Teacher Remark</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-neutral-800">
+              {computedRows.length === 0 ? (
+                <tr>
+                  <td colSpan={15} className="py-12 text-center text-neutral-500 font-mono">
+                    No active pupils enrolled in {selectedClass}. Register pupils in Pupil Enrollment tab.
+                  </td>
+                </tr>
+              ) : (
+                computedRows.map((item, idx) => {
+                  const isGrade1 = item.grade === 1;
+                  const isWeak = item.grade >= 8;
+
+                  return (
+                    <tr 
+                      key={item.studentId}
+                      className={`hover:bg-neutral-800/40 transition-colors ${
+                        item.row.isDirty ? 'bg-amber-950/20' : ''
+                      }`}
+                    >
+                      <td className="py-2.5 px-3 text-center text-neutral-500 font-bold">{idx + 1}</td>
+                      <td className="py-2.5 px-3 font-bold text-white whitespace-nowrap">
+                        <div className="flex items-center gap-2">
+                          <span>{item.student.name}</span>
+                          {isGrade1 && <Award size={13} className="text-amber-400 shrink-0" />}
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-2 text-neutral-400 whitespace-nowrap">
+                        {item.student.rollNumber || '-'}
+                      </td>
+
+                      {/* Class Exercise Breakdown Inputs */}
+                      <td className="py-1 px-1 bg-blue-950/10">
+                        <input
+                          type="number"
+                          min="0"
+                          max="20"
+                          step="0.5"
+                          placeholder="-"
+                          value={item.row.classExercises}
+                          onChange={e => handleCellChange(item.studentId, 'classExercises', e.target.value)}
+                          className={`w-full py-1 px-1.5 text-center text-xs font-mono font-bold border focus:outline-none focus:border-blue-400 ${
+                            isLight ? 'bg-white border-neutral-300 text-black' : 'bg-neutral-950 border-neutral-700 text-white'
+                          }`}
+                        />
+                      </td>
+
+                      <td className="py-1 px-1 bg-blue-950/10">
+                        <input
+                          type="number"
+                          min="0"
+                          max="15"
+                          step="0.5"
+                          placeholder="-"
+                          value={item.row.homework}
+                          onChange={e => handleCellChange(item.studentId, 'homework', e.target.value)}
+                          className={`w-full py-1 px-1.5 text-center text-xs font-mono font-bold border focus:outline-none focus:border-blue-400 ${
+                            isLight ? 'bg-white border-neutral-300 text-black' : 'bg-neutral-950 border-neutral-700 text-white'
+                          }`}
+                        />
+                      </td>
+
+                      <td className="py-1 px-1 bg-blue-950/10">
+                        <input
+                          type="number"
+                          min="0"
+                          max="15"
+                          step="0.5"
+                          placeholder="-"
+                          value={item.row.classTest}
+                          onChange={e => handleCellChange(item.studentId, 'classTest', e.target.value)}
+                          className={`w-full py-1 px-1.5 text-center text-xs font-mono font-bold border focus:outline-none focus:border-blue-400 ${
+                            isLight ? 'bg-white border-neutral-300 text-black' : 'bg-neutral-950 border-neutral-700 text-white'
+                          }`}
+                        />
+                      </td>
+
+                      {/* Raw SBA Total Input or Calculated */}
+                      <td className="py-1 px-1 bg-blue-950/20">
+                        <input
+                          type="number"
+                          min="0"
+                          max="50"
+                          step="0.5"
+                          placeholder="SBA"
+                          value={item.row.sbaRaw}
+                          onChange={e => handleCellChange(item.studentId, 'sbaRaw', e.target.value)}
+                          className={`w-full py-1 px-1.5 text-center text-xs font-mono font-black border focus:outline-none focus:border-blue-400 ${
+                            isLight ? 'bg-blue-50 border-blue-300 text-blue-900' : 'bg-neutral-950 border-blue-900 text-blue-300'
+                          }`}
+                        />
+                      </td>
+
+                      {/* Weighted SBA */}
+                      <td className="py-2.5 px-2 text-center font-bold text-blue-400 bg-blue-950/10">
+                        {item.hasEntries ? `${item.weightedSba}` : '-'}
+                      </td>
+
+                      {/* Exam Raw Score */}
+                      <td className="py-1 px-1 bg-amber-950/20">
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.5"
+                          placeholder="Exam"
+                          value={item.row.examRaw}
+                          onChange={e => handleCellChange(item.studentId, 'examRaw', e.target.value)}
+                          className={`w-full py-1 px-1.5 text-center text-xs font-mono font-black border focus:outline-none focus:border-amber-400 ${
+                            isLight ? 'bg-amber-50 border-amber-300 text-amber-900' : 'bg-neutral-950 border-amber-900 text-amber-300'
+                          }`}
+                        />
+                      </td>
+
+                      {/* Weighted Exam */}
+                      <td className="py-2.5 px-2 text-center font-bold text-amber-400 bg-amber-950/10">
+                        {item.hasEntries ? `${item.weightedExam}` : '-'}
+                      </td>
+
+                      {/* Total Score */}
+                      <td className={`py-2.5 px-2 text-center font-mono font-black text-sm bg-emerald-950/20 ${
+                        item.totalScore >= 80 ? 'text-emerald-400' :
+                        item.totalScore >= 65 ? 'text-teal-400' :
+                        item.totalScore >= 50 ? 'text-amber-400' : 'text-rose-400'
+                      }`}>
+                        {item.hasEntries ? `${item.totalScore}%` : '-'}
+                      </td>
+
+                      {/* GES Grade (1-9) Badge */}
+                      <td className="py-2.5 px-2 text-center">
+                        {item.hasEntries ? (
+                          <span className={`inline-block w-6 h-6 leading-6 text-center rounded-none font-black text-xs border ${
+                            item.grade === 1 ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500' :
+                            item.grade <= 4 ? 'bg-blue-500/20 text-blue-400 border-blue-500' :
+                            item.grade <= 6 ? 'bg-amber-500/20 text-amber-400 border-amber-500' :
+                            'bg-rose-500/20 text-rose-400 border-rose-500'
+                          }`}>
+                            {item.grade}
+                          </span>
+                        ) : '-'}
+                      </td>
+
+                      {/* NaCCA Level */}
+                      <td className="py-2.5 px-2 text-center text-[10px] uppercase font-bold text-neutral-300">
+                        {item.hasEntries ? item.level : '-'}
+                      </td>
+
+                      {/* Position */}
+                      <td className="py-2.5 px-2 text-center font-bold font-mono text-xs text-amber-400">
+                        {item.position ? formatOrdinal(item.position) : '-'}
+                      </td>
+
+                      {/* Teacher Remarks Input */}
+                      <td className="py-1 px-2">
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="text"
+                            placeholder="Teacher's remark..."
+                            value={item.row.teacherRemark}
+                            onChange={e => handleCellChange(item.studentId, 'teacherRemark', e.target.value)}
+                            className={`w-full py-1 px-2 text-xs font-mono border focus:outline-none focus:border-amber-400 ${
+                              isLight ? 'bg-white border-neutral-300 text-black' : 'bg-neutral-950 border-neutral-700 text-white'
+                            }`}
+                          />
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+};
