@@ -13,7 +13,6 @@ import { getStudentPickupCode } from '../utils/pickupCode';
 import { PickupPassesModal } from './PickupPassesModal';
 import { AdmissionFormModal } from './AdmissionFormModal';
 import { ExpendituresTab } from './ExpendituresTab';
-import { LedgerTab } from './LedgerTab';
 import { WhatsAppLogsTab } from './WhatsAppLogsTab';
 import { VoiceSearchButton } from './VoiceSearchButton';
 import { SettingsPanel } from './SettingsPanel';
@@ -3517,18 +3516,6 @@ export const AdminPanel: React.FC = React.memo(() => {
             Expenditures
           </button>
           <button
-            onClick={() => setActiveTab('ledger')}
-            title="General Ledger: Audit double-entry bookkeeping journal entries and balance sheets"
-            className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
-              activeTab === 'ledger'
-                ? 'bg-amber-400 text-black'
-                : 'text-neutral-500 hover:text-white'
-            }`}
-          >
-            <Scale size={13} />
-            General Ledger
-          </button>
-          <button
             onClick={() => setActiveTab('performance')}
             title="Performance: Evaluate staff key performance indicators, reviews, and ratings"
             className={`flex-1 md:flex-none px-5 py-2.5 font-black text-[11px] uppercase tracking-widest transition-all gap-2 flex items-center justify-center ${
@@ -3782,78 +3769,6 @@ export const AdminPanel: React.FC = React.memo(() => {
               </div>
             </div>
           </div>
-
-          {/* Automated Daily Alerts for 3+ Unpaid Days */}
-          {consecutiveUnpaidAlerts.length > 0 ? (
-            <div className="bg-neutral-900 border-4 border-red-500 p-6 space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b-2 border-neutral-800 pb-3">
-                <div className="flex items-center gap-3">
-                  <BellRing className="text-red-500 animate-pulse" size={20} />
-                  <div>
-                    <h3 className="text-sm font-black uppercase tracking-widest text-red-500 font-mono">
-                      Urgent Attendance & Arrears Alerts ({consecutiveUnpaidAlerts.length} Pupils)
-                    </h3>
-                    <p className="text-[10px] text-neutral-400 uppercase font-mono font-bold tracking-wider mt-0.5">
-                      Critical Warning: Pupils with 3+ consecutive unpaid standard school days detected
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsArrearsCollapsed(!isArrearsCollapsed)}
-                  className="bg-neutral-950 hover:bg-neutral-800 text-amber-400 border-2 border-neutral-850 px-4 py-2.5 text-xs font-mono font-black uppercase tracking-widest cursor-pointer select-none transition-all duration-150 shrink-0 self-start sm:self-center"
-                >
-                  {isArrearsCollapsed ? '📂 EXPAND LOG ▾' : '📁 FOLD LOG ▴'}
-                </button>
-              </div>
-              
-              {!isArrearsCollapsed && (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {consecutiveUnpaidAlerts.map(({ student, consecutiveDays, unpaidDates }) => (
-                    <div key={student.id} className="bg-neutral-950 border-2 border-neutral-850 p-4 flex flex-col justify-between gap-3 hover:border-red-500/40 transition-all">
-                      <div>
-                        <div className="flex justify-between items-start gap-2">
-                          <span className="text-xs font-black text-white uppercase tracking-tight">{student.name}</span>
-                          <span className="text-[9px] font-black text-red-500 bg-red-950/40 border border-red-900/60 px-2 py-0.5 font-mono uppercase tracking-widest shrink-0">
-                            {consecutiveDays} days due
-                          </span>
-                        </div>
-                        <div className="mt-2 space-y-1 font-mono text-[9px] text-neutral-450 font-bold uppercase">
-                          <div>Class Group: <span className="text-amber-400 font-extrabold">{student.class}</span></div>
-                          <div>Guardian Contact: <span className="text-neutral-200">{student.guardianPhone || 'No SMS Verified'}</span></div>
-                          <div className="text-red-400/80 leading-normal mt-1.5 normal-case font-medium">
-                            Missed: {unpaidDates.join(', ')}
-                          </div>
-                        </div>
-                      </div>
-                      
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSmsTarget({ student, consecutiveDays, unpaidDates });
-                          setSmsSuccess(false);
-                        }}
-                        className="w-full flex items-center justify-center gap-2 py-2.5 bg-red-950/20 hover:bg-red-600 border-2 border-red-900 hover:border-red-500 hover:text-white hover:scale-[1.01] active:scale-[0.99] transition-all text-red-400 text-[10px] font-black uppercase tracking-widest cursor-pointer font-mono"
-                      >
-                        <BellRing size={12} className="stroke-[2.5]" />
-                        <span>Send Urgent SMS</span>
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="bg-neutral-900 border-4 border-neutral-800 p-5 flex items-center gap-3">
-              <Check className="text-emerald-500 bg-emerald-950/20 p-0.5 border border-emerald-800" size={18} />
-              <div>
-                <span className="text-[10px] font-mono tracking-widest text-emerald-500 uppercase font-black">All Pupil Catalog Secure</span>
-                <p className="text-[9px] text-neutral-400 uppercase font-mono font-bold tracking-wider mt-0.5">
-                  No gate clearance arrears of 3+ consecutive days detected for active term pupils.
-                </p>
-              </div>
-            </div>
-          )}
 
           {/* Collapsible Enrolment Summary details */}
           <div className="mb-2">
@@ -6424,8 +6339,6 @@ export const AdminPanel: React.FC = React.memo(() => {
         <SettingsPanel />
       ) : activeTab === 'idcards' ? (
         <IdCardsGeneratorTab />
-      ) : activeTab === 'ledger' ? (
-        <LedgerTab />
       ) : activeTab === 'ai_assistant' ? (
         <AiAssistantTab />
       ) : (
