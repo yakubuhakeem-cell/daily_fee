@@ -61,16 +61,27 @@ export function sanitizeFirestoreDoc<T>(obj: T): any {
   return obj;
 }
 
-// Support Vite environment variables (Vercel deployments) with fallback to firebase-applet-config.json
+// Default Firebase configuration fallback to ensure 100% continuous connectivity across all platforms and Vercel deployments
+const DEFAULT_FIREBASE_CONFIG = {
+  apiKey: "AIzaSyD7xsAYZbBlTKRvo23QHxwx2nzLeVnJJmM",
+  authDomain: "fleet-coral-scf5x.firebaseapp.com",
+  projectId: "fleet-coral-scf5x",
+  storageBucket: "fleet-coral-scf5x.firebasestorage.app",
+  messagingSenderId: "996050035098",
+  appId: "1:996050035098:web:2db3cceeea860295481a23",
+  firestoreDatabaseId: "ai-studio-6ff73614-855b-4908-bcc8-28a73e1958d7"
+};
+
+// Support Vite environment variables (Vercel deployments) with fallback to firebase-applet-config.json and project defaults
 const firebaseConfig = {
-  apiKey: (import.meta as any).env?.VITE_FIREBASE_API_KEY || rawFirebaseConfig.apiKey,
-  authDomain: (import.meta as any).env?.VITE_FIREBASE_AUTH_DOMAIN || rawFirebaseConfig.authDomain,
-  projectId: (import.meta as any).env?.VITE_FIREBASE_PROJECT_ID || rawFirebaseConfig.projectId,
-  storageBucket: (import.meta as any).env?.VITE_FIREBASE_STORAGE_BUCKET || rawFirebaseConfig.storageBucket,
-  messagingSenderId: (import.meta as any).env?.VITE_FIREBASE_MESSAGING_SENDER_ID || rawFirebaseConfig.messagingSenderId,
-  appId: (import.meta as any).env?.VITE_FIREBASE_APP_ID || rawFirebaseConfig.appId,
-  measurementId: (import.meta as any).env?.VITE_FIREBASE_MEASUREMENT_ID || rawFirebaseConfig.measurementId || '',
-  firestoreDatabaseId: (import.meta as any).env?.VITE_FIREBASE_FIRESTORE_DATABASE_ID || (import.meta as any).env?.VITE_FIREBASE_DATABASE_ID || rawFirebaseConfig.firestoreDatabaseId,
+  apiKey: (import.meta as any).env?.VITE_FIREBASE_API_KEY || rawFirebaseConfig?.apiKey || DEFAULT_FIREBASE_CONFIG.apiKey,
+  authDomain: (import.meta as any).env?.VITE_FIREBASE_AUTH_DOMAIN || rawFirebaseConfig?.authDomain || DEFAULT_FIREBASE_CONFIG.authDomain,
+  projectId: (import.meta as any).env?.VITE_FIREBASE_PROJECT_ID || rawFirebaseConfig?.projectId || DEFAULT_FIREBASE_CONFIG.projectId,
+  storageBucket: (import.meta as any).env?.VITE_FIREBASE_STORAGE_BUCKET || rawFirebaseConfig?.storageBucket || DEFAULT_FIREBASE_CONFIG.storageBucket,
+  messagingSenderId: (import.meta as any).env?.VITE_FIREBASE_MESSAGING_SENDER_ID || rawFirebaseConfig?.messagingSenderId || DEFAULT_FIREBASE_CONFIG.messagingSenderId,
+  appId: (import.meta as any).env?.VITE_FIREBASE_APP_ID || rawFirebaseConfig?.appId || DEFAULT_FIREBASE_CONFIG.appId,
+  measurementId: (import.meta as any).env?.VITE_FIREBASE_MEASUREMENT_ID || (rawFirebaseConfig as any)?.measurementId || '',
+  firestoreDatabaseId: (import.meta as any).env?.VITE_FIREBASE_FIRESTORE_DATABASE_ID || (import.meta as any).env?.VITE_FIREBASE_DATABASE_ID || rawFirebaseConfig?.firestoreDatabaseId || DEFAULT_FIREBASE_CONFIG.firestoreDatabaseId,
 };
 
 const rawDbId = firebaseConfig.firestoreDatabaseId;
@@ -1232,6 +1243,32 @@ export const db = {
       return true;
     } catch (e) {
       console.error("deleteAcademicAssessment error: ", e);
+      return false;
+    }
+  },
+
+  async clearAcademicAssessments(idsToDelete: string[]): Promise<boolean> {
+    try {
+      if (!idsToDelete || idsToDelete.length === 0) return true;
+      const chunks: string[][] = [];
+      for (let i = 0; i < idsToDelete.length; i += 400) {
+        chunks.push(idsToDelete.slice(i, i + 400));
+      }
+      for (const chunk of chunks) {
+        const batch = writeBatch(firestoreDb);
+        chunk.forEach(id => {
+          batch.delete(doc(firestoreDb, "academic_assessments", safeDocId(id)));
+        });
+        await withTimeout(batch.commit(), 10000, "clearAcademicAssessments");
+      }
+      fetch("/api/academic_assessments/clear", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: idsToDelete }),
+      }).catch(() => {});
+      return true;
+    } catch (e) {
+      console.error("clearAcademicAssessments error: ", e);
       return false;
     }
   },

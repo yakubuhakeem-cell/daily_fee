@@ -28,6 +28,10 @@ interface DatabaseSchema {
   teacherEvaluations?: any[];
   journalEntries?: any[];
   trashItems?: any[];
+  academicAssessments?: any[];
+  terminalReports?: any[];
+  teacherAllocations?: any[];
+  academicSettings?: any;
 }
 
 function generateServerSchoolDays(startDateStr: string, daysCount: number): string[] {
@@ -138,6 +142,10 @@ function sanitizeDatabaseSchema(parsed: any): DatabaseSchema {
   if (!parsed.examsSettings) parsed.examsSettings = null;
   if (!parsed.teacherEvaluations) parsed.teacherEvaluations = [];
   if (!parsed.journalEntries) parsed.journalEntries = [];
+  if (!parsed.academicAssessments) parsed.academicAssessments = [];
+  if (!parsed.terminalReports) parsed.terminalReports = [];
+  if (!parsed.teacherAllocations) parsed.teacherAllocations = [];
+  if (!parsed.academicSettings) parsed.academicSettings = null;
   if (!parsed.trashItems) {
     parsed.trashItems = [];
   } else {
@@ -2050,6 +2058,280 @@ INSTRUCTIONS:
         await withTimeout(setDoc(doc(firestoreDb, "systemSettings", "main"), settingsObj), 2500, "saveSystemSettings");
       } catch (e) {
         console.error("Firestore saveSystemSettings failed:", e);
+      }
+    }
+    res.json({ success: true, settings: settingsObj });
+  });
+
+  // GET /api/academic_assessments
+  app.get("/api/academic_assessments", async (req, res) => {
+    if (firestoreDb) {
+      try {
+        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "academic_assessments")), 10000, "getAcademicAssessments");
+        const list = qSnaps.docs.map(d => d.data()) as any[];
+        const dbLocal = loadDatabase();
+        dbLocal.academicAssessments = mergeAndSync(dbLocal.academicAssessments, list, "academic_assessments", dbLocal.trashItems);
+        saveDatabase(dbLocal);
+        return res.json(dbLocal.academicAssessments);
+      } catch (e) {
+        console.error("Firestore getAcademicAssessments failed, falling back to local:", e);
+      }
+    }
+    const dbLocal = loadDatabase();
+    res.json(dbLocal.academicAssessments || []);
+  });
+
+  // POST /api/academic_assessments/batch
+  app.post("/api/academic_assessments/batch", async (req, res) => {
+    const assessments = req.body;
+    if (!Array.isArray(assessments)) {
+      return res.status(400).json({ error: "Assessments must be an array" });
+    }
+    const dbLocal = loadDatabase();
+    if (!dbLocal.academicAssessments) dbLocal.academicAssessments = [];
+
+    assessments.forEach(item => {
+      const idx = dbLocal.academicAssessments.findIndex((a: any) => a.id === item.id);
+      if (idx >= 0) {
+        dbLocal.academicAssessments[idx] = item;
+      } else {
+        dbLocal.academicAssessments.push(item);
+      }
+    });
+    saveDatabase(dbLocal);
+
+    if (firestoreDb) {
+      try {
+        for (let i = 0; i < assessments.length; i += 400) {
+          const chunk = assessments.slice(i, i + 400);
+          const batch = writeBatch(firestoreDb);
+          chunk.forEach(item => {
+            if (item && item.id) {
+              batch.set(doc(firestoreDb, "academic_assessments", safeDocId(item.id)), item, { merge: true });
+            }
+          });
+          await withTimeout(batch.commit(), 8000, "saveAcademicAssessmentsBatch");
+        }
+      } catch (e) {
+        console.error("Firestore saveAcademicAssessmentsBatch failed:", e);
+      }
+    }
+    res.json({ success: true, count: assessments.length });
+  });
+
+  // POST /api/academic_assessments/clear
+  app.post("/api/academic_assessments/clear", async (req, res) => {
+    const { ids } = req.body;
+    const dbLocal = loadDatabase();
+    if (!dbLocal.academicAssessments) dbLocal.academicAssessments = [];
+
+    if (Array.isArray(ids) && ids.length > 0) {
+      const idSet = new Set(ids);
+      dbLocal.academicAssessments = dbLocal.academicAssessments.filter((a: any) => !idSet.has(a.id));
+      saveDatabase(dbLocal);
+
+      if (firestoreDb) {
+        try {
+          for (let i = 0; i < ids.length; i += 400) {
+            const chunk = ids.slice(i, i + 400);
+            const batch = writeBatch(firestoreDb);
+            chunk.forEach(id => batch.delete(doc(firestoreDb, "academic_assessments", safeDocId(id))));
+            await withTimeout(batch.commit(), 8000, "clearAssessmentsChunk");
+          }
+        } catch (e) {
+          console.error("Firestore clearAssessmentsChunk failed:", e);
+        }
+      }
+    } else {
+      // Clear all
+      const allIds = dbLocal.academicAssessments.map((a: any) => a.id);
+      dbLocal.academicAssessments = [];
+      saveDatabase(dbLocal);
+
+      if (firestoreDb) {
+        try {
+          for (let i = 0; i < allIds.length; i += 400) {
+            const chunk = allIds.slice(i, i + 400);
+            const batch = writeBatch(firestoreDb);
+            chunk.forEach(id => batch.delete(doc(firestoreDb, "academic_assessments", safeDocId(id))));
+            await withTimeout(batch.commit(), 8000, "clearAllAssessmentsChunk");
+          }
+        } catch (e) {
+          console.error("Firestore clearAllAssessmentsChunk failed:", e);
+        }
+      }
+    }
+    res.json({ success: true });
+  });
+
+  // DELETE /api/academic_assessments/:id
+  app.delete("/api/academic_assessments/:id", async (req, res) => {
+    const id = req.params.id;
+    const dbLocal = loadDatabase();
+    if (dbLocal.academicAssessments) {
+      dbLocal.academicAssessments = dbLocal.academicAssessments.filter((a: any) => a.id !== id);
+      saveDatabase(dbLocal);
+    }
+    if (firestoreDb) {
+      try {
+        await withTimeout(deleteDoc(doc(firestoreDb, "academic_assessments", safeDocId(id))), 8000, "deleteAcademicAssessment");
+      } catch (e) {
+        console.error("Firestore deleteAcademicAssessment failed:", e);
+      }
+    }
+    res.json({ success: true });
+  });
+
+  // GET /api/terminal_reports
+  app.get("/api/terminal_reports", async (req, res) => {
+    if (firestoreDb) {
+      try {
+        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "terminal_reports")), 10000, "getTerminalReports");
+        const list = qSnaps.docs.map(d => d.data()) as any[];
+        const dbLocal = loadDatabase();
+        dbLocal.terminalReports = mergeAndSync(dbLocal.terminalReports, list, "terminal_reports", dbLocal.trashItems);
+        saveDatabase(dbLocal);
+        return res.json(dbLocal.terminalReports);
+      } catch (e) {
+        console.error("Firestore getTerminalReports failed, falling back to local:", e);
+      }
+    }
+    const dbLocal = loadDatabase();
+    res.json(dbLocal.terminalReports || []);
+  });
+
+  // POST /api/terminal_reports
+  app.post("/api/terminal_reports", async (req, res) => {
+    const report = req.body;
+    const dbLocal = loadDatabase();
+    if (!dbLocal.terminalReports) dbLocal.terminalReports = [];
+    const idx = dbLocal.terminalReports.findIndex((r: any) => r.id === report.id);
+    if (idx >= 0) {
+      dbLocal.terminalReports[idx] = report;
+    } else {
+      dbLocal.terminalReports.push(report);
+    }
+    saveDatabase(dbLocal);
+
+    if (firestoreDb) {
+      try {
+        await withTimeout(setDoc(doc(firestoreDb, "terminal_reports", safeDocId(report.id)), report, { merge: true }), 8000, "saveTerminalReport");
+      } catch (e) {
+        console.error("Firestore saveTerminalReport failed:", e);
+      }
+    }
+    res.json({ success: true });
+  });
+
+  // DELETE /api/terminal_reports/:id
+  app.delete("/api/terminal_reports/:id", async (req, res) => {
+    const id = req.params.id;
+    const dbLocal = loadDatabase();
+    if (dbLocal.terminalReports) {
+      dbLocal.terminalReports = dbLocal.terminalReports.filter((r: any) => r.id !== id);
+      saveDatabase(dbLocal);
+    }
+    if (firestoreDb) {
+      try {
+        await withTimeout(deleteDoc(doc(firestoreDb, "terminal_reports", safeDocId(id))), 8000, "deleteTerminalReport");
+      } catch (e) {
+        console.error("Firestore deleteTerminalReport failed:", e);
+      }
+    }
+    res.json({ success: true });
+  });
+
+  // GET /api/teacher_allocations
+  app.get("/api/teacher_allocations", async (req, res) => {
+    if (firestoreDb) {
+      try {
+        const qSnaps = await withTimeout(getDocs(collection(firestoreDb, "teacher_allocations")), 10000, "getTeacherAllocations");
+        const list = qSnaps.docs.map(d => d.data()) as any[];
+        const dbLocal = loadDatabase();
+        dbLocal.teacherAllocations = mergeAndSync(dbLocal.teacherAllocations, list, "teacher_allocations", dbLocal.trashItems);
+        saveDatabase(dbLocal);
+        return res.json(dbLocal.teacherAllocations);
+      } catch (e) {
+        console.error("Firestore getTeacherAllocations failed, falling back to local:", e);
+      }
+    }
+    const dbLocal = loadDatabase();
+    res.json(dbLocal.teacherAllocations || []);
+  });
+
+  // POST /api/teacher_allocations
+  app.post("/api/teacher_allocations", async (req, res) => {
+    const alloc = req.body;
+    const dbLocal = loadDatabase();
+    if (!dbLocal.teacherAllocations) dbLocal.teacherAllocations = [];
+    const idx = dbLocal.teacherAllocations.findIndex((a: any) => a.id === alloc.id);
+    if (idx >= 0) {
+      dbLocal.teacherAllocations[idx] = alloc;
+    } else {
+      dbLocal.teacherAllocations.push(alloc);
+    }
+    saveDatabase(dbLocal);
+
+    if (firestoreDb) {
+      try {
+        await withTimeout(setDoc(doc(firestoreDb, "teacher_allocations", safeDocId(alloc.id)), alloc, { merge: true }), 8000, "saveTeacherAllocation");
+      } catch (e) {
+        console.error("Firestore saveTeacherAllocation failed:", e);
+      }
+    }
+    res.json({ success: true });
+  });
+
+  // DELETE /api/teacher_allocations/:id
+  app.delete("/api/teacher_allocations/:id", async (req, res) => {
+    const id = req.params.id;
+    const dbLocal = loadDatabase();
+    if (dbLocal.teacherAllocations) {
+      dbLocal.teacherAllocations = dbLocal.teacherAllocations.filter((a: any) => a.id !== id);
+      saveDatabase(dbLocal);
+    }
+    if (firestoreDb) {
+      try {
+        await withTimeout(deleteDoc(doc(firestoreDb, "teacher_allocations", safeDocId(id))), 8000, "deleteTeacherAllocation");
+      } catch (e) {
+        console.error("Firestore deleteTeacherAllocation failed:", e);
+      }
+    }
+    res.json({ success: true });
+  });
+
+  // GET /api/settings/academic
+  app.get("/api/settings/academic", async (req, res) => {
+    if (firestoreDb) {
+      try {
+        const docSnap = await withTimeout(getDoc(doc(firestoreDb, "settings", "academic")), 2500, "getAcademicSettings");
+        if (docSnap.exists()) {
+          const settingsObj = docSnap.data();
+          const dbLocal = loadDatabase();
+          dbLocal.academicSettings = settingsObj;
+          saveDatabase(dbLocal);
+          return res.json(settingsObj);
+        }
+      } catch (e) {
+        console.error("Firestore getAcademicSettings failed, falling back to local:", e);
+      }
+    }
+    const dbLocal = loadDatabase();
+    res.json(dbLocal.academicSettings || null);
+  });
+
+  // POST /api/settings/academic
+  app.post("/api/settings/academic", async (req, res) => {
+    const settingsObj = req.body;
+    const dbLocal = loadDatabase();
+    dbLocal.academicSettings = settingsObj;
+    saveDatabase(dbLocal);
+
+    if (firestoreDb) {
+      try {
+        await withTimeout(setDoc(doc(firestoreDb, "settings", "academic"), settingsObj, { merge: true }), 2500, "saveAcademicSettings");
+      } catch (e) {
+        console.error("Firestore saveAcademicSettings failed:", e);
       }
     }
     res.json({ success: true, settings: settingsObj });

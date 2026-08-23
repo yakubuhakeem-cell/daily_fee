@@ -8,7 +8,7 @@ import { useApp } from '../../context/AppContext';
 import { AcademicSettings } from '../../types';
 import { 
   Sliders, Save, RefreshCw, CheckCircle2, Shield, Sparkles, 
-  HelpCircle, Calendar, User, Award
+  HelpCircle, Calendar, User, Award, Trash2, RotateCcw
 } from 'lucide-react';
 import { generateSeedAcademicRecords } from '../../utils/ghanaCurriculum';
 
@@ -27,6 +27,7 @@ export const AcademicSettingsModal: React.FC<AcademicSettingsModalProps> = ({
     students = [],
     activeTerm,
     batchSaveAcademicAssessments,
+    clearAllAcademicAssessments,
     theme,
     playFeedbackSound 
   } = useApp();
@@ -117,6 +118,26 @@ export const AcademicSettingsModal: React.FC<AcademicSettingsModalProps> = ({
       alert("Seeding error: " + err.message);
     } finally {
       setIsSeeding(false);
+    }
+  };
+
+  // Unpopulate / Clear all marks across the whole school
+  const [isClearingAll, setIsClearingAll] = useState(false);
+  const handleUnpopulateMarks = async () => {
+    if (!confirm("⚠️ CAUTION: This will delete ALL academic assessment and exam marks across the entire school. Are you sure you want to unpopulate all marks?")) {
+      return;
+    }
+    setIsClearingAll(true);
+    try {
+      await clearAllAcademicAssessments();
+      if (playFeedbackSound) playFeedbackSound('success');
+      setSeedSuccessMsg(`Successfully unpopulated all academic marks across the entire school!`);
+      setTimeout(() => setSeedSuccessMsg(null), 5000);
+    } catch (err: any) {
+      console.error("Failed to clear marks:", err);
+      alert("Error unpopulating marks: " + err.message);
+    } finally {
+      setIsClearingAll(false);
     }
   };
 
@@ -358,16 +379,29 @@ export const AcademicSettingsModal: React.FC<AcademicSettingsModalProps> = ({
 
           {/* Action Buttons */}
           <div className="pt-3 border-t border-neutral-800 flex flex-wrap items-center justify-between gap-3">
-            <button
-              type="button"
-              onClick={handleSeedDemoMarks}
-              disabled={isSeeding}
-              className="bg-neutral-800 hover:bg-neutral-700 text-neutral-300 border border-neutral-700 px-3 py-2 text-xs font-mono font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
-              title="Populate test SBA marks for demo purposes"
-            >
-              <Sparkles size={14} className="text-amber-400" />
-              <span>{isSeeding ? 'Generating Marks...' : 'Populate Sample Marks'}</span>
-            </button>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={handleSeedDemoMarks}
+                disabled={isSeeding}
+                className="bg-neutral-800 hover:bg-neutral-700 text-neutral-300 border border-neutral-700 px-3 py-2 text-xs font-mono font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                title="Populate test SBA marks for demo purposes"
+              >
+                <Sparkles size={14} className="text-amber-400" />
+                <span>{isSeeding ? 'Generating Marks...' : 'Populate Sample Marks'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleUnpopulateMarks}
+                disabled={isClearingAll}
+                className="bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-800/80 px-3 py-2 text-xs font-mono font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                title="Unpopulate / Clear all assessment marks across the entire school"
+              >
+                <RotateCcw size={14} className="text-rose-400" />
+                <span>{isClearingAll ? 'Unpopulating...' : 'Unpopulate Sample Marks'}</span>
+              </button>
+            </div>
 
             <div className="flex gap-2">
               <button

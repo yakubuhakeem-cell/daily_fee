@@ -142,10 +142,48 @@ class IDBEngine {
   }
 
   /**
+   * Cleans up bloated legacy keys from synchronous localStorage to prevent QuotaExceededError (5MB quota limit).
+   * High-volume dataset items are preserved inside IndexedDB.
+   */
+  public cleanupLegacyLocalStorageBloat(): void {
+    if (typeof window === 'undefined' || !window.localStorage) return;
+    try {
+      const bloatKeys = [
+        's_students',
+        's_payments',
+        's_backups',
+        's_exams_payments',
+        's_exams_expenses',
+        's_whatsapp_logs',
+        's_audit_logs',
+        's_trash_items',
+        's_promotion_backups',
+        's_expenses',
+        's_salaries',
+        's_budget_targets',
+        's_teacher_evaluations',
+        's_journal_entries',
+        's_academic_assessments',
+        's_terminal_reports'
+      ];
+      for (const key of bloatKeys) {
+        try {
+          if (window.localStorage.getItem(key) !== null) {
+            window.localStorage.removeItem(key);
+          }
+        } catch (_) {}
+      }
+    } catch (e) {
+      console.warn('idbEngine: Non-critical notice during localStorage cleanup:', e);
+    }
+  }
+
+  /**
    * Seamless one-time migration from legacy synchronous localStorage
    */
   public async migrateFromLocalStorage(): Promise<void> {
     try {
+      this.cleanupLegacyLocalStorageBloat();
       const isMigrated = await this.getItem<boolean>('s_idb_migration_done');
       if (isMigrated) {
         return;
@@ -170,23 +208,30 @@ class IDBEngine {
         's_storage_preference',
         's_pending_local_edits',
         's_background_sync_enabled',
-        's_system_settings'
+        's_system_settings',
+        's_academic_assessments',
+        's_terminal_reports',
+        's_teacher_allocations',
+        's_academic_settings'
       ];
 
       for (const key of keys) {
-        const localVal = localStorage.getItem(key);
-        if (localVal !== null) {
-          try {
-            const parsed = JSON.parse(localVal);
-            await this.setItem(key, parsed);
-          } catch {
-            await this.setItem(key, localVal);
+        try {
+          const localVal = localStorage.getItem(key);
+          if (localVal !== null) {
+            try {
+              const parsed = JSON.parse(localVal);
+              await this.setItem(key, parsed);
+            } catch {
+              await this.setItem(key, localVal);
+            }
           }
-        }
+        } catch (_) {}
       }
 
       await this.setItem('s_idb_migration_done', true);
-      console.log('idbEngine: Seamless local migration finalized successfully.');
+      this.cleanupLegacyLocalStorageBloat();
+      console.log('idbEngine: Seamless local migration finalized successfully and legacy localStorage purged.');
     } catch (e) {
       console.error('idbEngine: Error performing local storage migration:', e);
     }

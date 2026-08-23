@@ -10,7 +10,8 @@ import {
   FileSpreadsheet, Save, Sparkles, Download, Upload, RefreshCw, 
   CheckCircle2, AlertCircle, ArrowUpDown, ChevronDown, ChevronRight,
   TrendingUp, Award, HelpCircle, Filter, BookOpen, Users, Check,
-  Sliders, Medal, X, Lock, Unlock, ShieldCheck, ShieldAlert, KeyRound, Shield
+  Sliders, Medal, X, Lock, Unlock, ShieldCheck, ShieldAlert, KeyRound, Shield,
+  Printer, Trash2, RotateCcw, FileText, CheckCircle
 } from 'lucide-react';
 import { 
   getSubjectsForClass, 
@@ -21,6 +22,7 @@ import {
   getRankMedal
 } from '../../utils/ghanaCurriculum';
 import { canUserEditClassMarks, isHeadOrAdmin, getTeacherAssignedClasses } from '../../utils/rbacUtils';
+import { SchoolLogo } from '../SchoolLogo';
 import * as XLSX from 'xlsx';
 
 interface MarkEntrySpreadsheetProps {
@@ -50,9 +52,12 @@ export const MarkEntrySpreadsheet: React.FC<MarkEntrySpreadsheetProps> = ({
     students = [], 
     academicAssessments = [], 
     batchSaveAcademicAssessments, 
+    clearAcademicAssessments,
+    clearAllAcademicAssessments,
     activeTerm,
     currentUser,
     users = [],
+    systemSettings,
     academicSettings,
     updateAcademicSettings,
     teacherAllocations = [],
@@ -176,6 +181,70 @@ export const MarkEntrySpreadsheet: React.FC<MarkEntrySpreadsheetProps> = ({
   const [quickExamFillValue, setQuickExamFillValue] = useState<string>('70');
   const [showQuickFillModal, setShowQuickFillModal] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Hardcopy Print Modal state
+  const [showPrintModal, setShowPrintModal] = useState(false);
+  const [printMode, setPrintMode] = useState<'filled' | 'blank'>('filled');
+
+  // Unpopulate / Clear Sample Marks Modal state
+  const [showClearModal, setShowClearModal] = useState(false);
+  const [clearScope, setClearScope] = useState<'subject' | 'class' | 'all'>('subject');
+  const [clearConfirmationText, setClearConfirmationText] = useState('');
+  const [isClearing, setIsClearing] = useState(false);
+
+  // Clear marks action handler
+  const handleClearMarksConfirm = async () => {
+    setIsClearing(true);
+    try {
+      if (clearScope === 'all') {
+        if (clearConfirmationText.trim().toUpperCase() !== 'UNPOPULATE') {
+          alert('Please type "UNPOPULATE" in the confirmation box to purge school-wide marks.');
+          setIsClearing(false);
+          return;
+        }
+        await clearAllAcademicAssessments();
+        setGridData({});
+        setSaveSuccessMsg('Successfully unpopulated ALL academic sample marks across the entire school!');
+      } else if (clearScope === 'class') {
+        await clearAcademicAssessments(selectedClass);
+        setGridData({});
+        setSaveSuccessMsg(`Successfully cleared all assessment marks for ${selectedClass}!`);
+      } else {
+        await clearAcademicAssessments(selectedClass, selectedSubject.id);
+        setGridData(prev => {
+          const reset: Record<string, LocalRowState> = {};
+          classPupils.forEach(p => {
+            reset[p.id] = {
+              studentId: p.id,
+              studentName: p.name,
+              rollNumber: p.rollNumber || '',
+              classExercises: '',
+              homework: '',
+              project: '',
+              classTest: '',
+              sbaRaw: '',
+              examRaw: '',
+              teacherRemark: '',
+              isDirty: false
+            };
+          });
+          return reset;
+        });
+        setSaveSuccessMsg(`Successfully cleared marks for ${selectedSubject.name} (${selectedClass})!`);
+      }
+
+      setShowClearModal(false);
+      setClearConfirmationText('');
+      if (playFeedbackSound) playFeedbackSound('success');
+      setTimeout(() => setSaveSuccessMsg(null), 4000);
+    } catch (err: any) {
+      console.error('Failed to clear marks:', err);
+      if (playFeedbackSound) playFeedbackSound('error');
+      alert('Failed to clear marks: ' + (err.message || 'Unknown database error'));
+    } finally {
+      setIsClearing(false);
+    }
+  };
 
   // Initialize or load grid data from store
   useEffect(() => {
@@ -589,7 +658,30 @@ export const MarkEntrySpreadsheet: React.FC<MarkEntrySpreadsheetProps> = ({
         </div>
 
         {/* Action Buttons */}
-        <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto justify-end">
+        <div className="flex flex-wrap items-center gap-2.5 w-full lg:w-auto justify-end">
+          <button
+            onClick={() => setShowPrintModal(true)}
+            className="bg-cyan-950/60 hover:bg-cyan-900/80 text-cyan-200 border border-cyan-700/80 px-3 py-2 text-xs font-mono font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
+            title="Print Official Master Mark Entry Sheet or Blank Classroom Template"
+          >
+            <Printer size={14} className="text-cyan-400" />
+            <span>Print Hardcopy</span>
+          </button>
+
+          <button
+            onClick={() => setShowClearModal(true)}
+            disabled={!effectiveAllowed}
+            className={`border px-3 py-2 text-xs font-mono font-bold flex items-center gap-1.5 transition-colors ${
+              !effectiveAllowed 
+                ? 'opacity-40 cursor-not-allowed bg-neutral-900 border-neutral-800 text-neutral-500' 
+                : 'bg-rose-950/40 hover:bg-rose-900/60 text-rose-200 border-rose-800/80 cursor-pointer'
+            }`}
+            title={!effectiveAllowed ? 'Editing locked: Restricted access' : 'Unpopulate / Clear sample marks from database'}
+          >
+            <RotateCcw size={14} className="text-rose-400" />
+            <span>Unpopulate Marks</span>
+          </button>
+
           <button
             onClick={handleAutoGenerateRemarks}
             disabled={!effectiveAllowed}
@@ -610,7 +702,7 @@ export const MarkEntrySpreadsheet: React.FC<MarkEntrySpreadsheetProps> = ({
             title="Download formatted spreadsheet for this subject"
           >
             <Download size={14} className="text-emerald-400" />
-            <span>Excel Export</span>
+            <span>Excel</span>
           </button>
 
           <label className={`border px-3 py-2 text-xs font-mono font-bold flex items-center gap-1.5 transition-colors ${
@@ -1259,6 +1351,369 @@ export const MarkEntrySpreadsheet: React.FC<MarkEntrySpreadsheetProps> = ({
                 className="px-4 py-2 text-xs font-black bg-amber-400 hover:bg-amber-300 text-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] uppercase tracking-wider"
               >
                 Apply Weighting ({tempSba}:{tempExam})
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* HARDCOPY PRINT PREVIEW MODAL */}
+      {showPrintModal && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
+          <div className="bg-neutral-900 border-2 border-neutral-700 max-w-5xl w-full shadow-2xl rounded-sm flex flex-col max-h-[96vh] my-auto">
+            {/* Modal Header & Print Options Toolbar */}
+            <div className="p-4 bg-neutral-950 border-b border-neutral-800 flex flex-wrap items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-2">
+                <Printer className="text-cyan-400" size={20} />
+                <div>
+                  <h3 className="text-sm font-bold text-white font-mono uppercase tracking-wider">
+                    Hardcopy Master Mark Sheet • {selectedClass} - {selectedSubject.name}
+                  </h3>
+                  <p className="text-[11px] text-neutral-400 font-mono">
+                    Ghana National Curriculum Standard Assessment Record
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* Print Mode Selector */}
+                <div className="flex items-center bg-neutral-800 p-1 border border-neutral-700 rounded-xs text-xs font-mono">
+                  <button
+                    onClick={() => setPrintMode('filled')}
+                    className={`px-3 py-1 font-bold rounded-2xs transition-colors ${
+                      printMode === 'filled' ? 'bg-cyan-500 text-black shadow-xs' : 'text-neutral-300 hover:text-white'
+                    }`}
+                  >
+                    Master Sheet (With Marks)
+                  </button>
+                  <button
+                    onClick={() => setPrintMode('blank')}
+                    className={`px-3 py-1 font-bold rounded-2xs transition-colors ${
+                      printMode === 'blank' ? 'bg-amber-400 text-black shadow-xs' : 'text-neutral-300 hover:text-white'
+                    }`}
+                  >
+                    Blank Classroom Form
+                  </button>
+                </div>
+
+                <button
+                  onClick={() => window.print()}
+                  className="px-4 py-1.5 bg-cyan-400 hover:bg-cyan-300 text-black font-black text-xs font-mono uppercase tracking-wider flex items-center gap-1.5 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] cursor-pointer"
+                >
+                  <Printer size={15} />
+                  <span>Print / Save PDF</span>
+                </button>
+
+                <button
+                  onClick={() => setShowPrintModal(false)}
+                  className="p-1.5 text-neutral-400 hover:text-white border border-neutral-700 bg-neutral-800 cursor-pointer"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+
+            {/* Printable Paper Preview Container */}
+            <div className="p-4 sm:p-6 overflow-y-auto bg-neutral-800/80 flex justify-center">
+              <div 
+                id="printable-mark-sheet"
+                className="bg-white text-slate-900 p-6 sm:p-8 border border-slate-400 shadow-xl max-w-4xl w-full text-xs font-sans print:shadow-none print:border-none print:p-0 print:m-0 print:max-w-none print:w-full"
+              >
+                {/* Official School Header */}
+                <div className="border-b-2 border-slate-900 pb-3 flex items-center justify-between gap-4">
+                  <div className="w-18 h-18 border border-slate-800 p-1 flex items-center justify-center bg-amber-50/50 shrink-0">
+                    <SchoolLogo 
+                      size={64}
+                      lightBackground={true}
+                      logoUrl={academicSettings?.schoolLogoUrl || systemSettings?.schoolLogoUrl || '/school_logo.jpg'}
+                    />
+                  </div>
+
+                  <div className="text-center flex-1">
+                    <h1 className="text-xl font-black font-serif uppercase tracking-tight text-slate-950">
+                      {academicSettings?.schoolName || systemSettings?.schoolName || 'SAAKO HOLY CHILD ACADEMY'}
+                    </h1>
+                    <p className="text-[11px] font-bold text-amber-900 italic">
+                      Motto: "{academicSettings?.schoolMotto || systemSettings?.schoolMotto || 'Knowledge is Light'}"
+                    </p>
+                    <h2 className="text-xs font-black font-mono uppercase tracking-wider text-slate-800 mt-1">
+                      {printMode === 'blank' ? 'OFFICIAL CLASSROOM MANUAL MARK ENTRY FORM' : 'CONTINUOUS ASSESSMENT & TERMINAL EXAMINATION MASTER SHEET'}
+                    </h2>
+                  </div>
+
+                  <div className="text-right text-[10px] font-mono shrink-0 text-slate-700 border-l border-slate-300 pl-3">
+                    <div><strong>Year:</strong> {academicYear}</div>
+                    <div><strong>Term:</strong> {activeTerm?.name || 'Term 1'}</div>
+                    <div><strong>Date:</strong> {new Date().toLocaleDateString('en-GB')}</div>
+                  </div>
+                </div>
+
+                {/* Meta Details Bar */}
+                <div className="grid grid-cols-4 gap-2 border-b border-slate-800 py-2 my-2 text-[11px] font-mono bg-slate-50 px-2">
+                  <div>
+                    <span className="text-slate-500 uppercase block text-[9px] font-bold">Class:</span>
+                    <strong className="text-slate-950 text-sm">{selectedClass}</strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 uppercase block text-[9px] font-bold">Subject:</span>
+                    <strong className="text-slate-950">{selectedSubject.name} ({selectedSubject.code})</strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 uppercase block text-[9px] font-bold">Weighting Ratio:</span>
+                    <strong className="text-slate-950">SBA: {sbaWeight}% | Exam: {examWeight}%</strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 uppercase block text-[9px] font-bold">Pupils Enrolled:</span>
+                    <strong className="text-slate-950">{classPupils.length} Pupils</strong>
+                  </div>
+                </div>
+
+                {/* Mark Table */}
+                <table className="w-full border-collapse border border-slate-800 text-[10.5px] mt-2 font-mono">
+                  <thead>
+                    <tr className="bg-slate-200 text-slate-950 border-b border-slate-800 divide-x divide-slate-800 text-[10px]">
+                      <th className="py-1 px-1 text-center w-8">#</th>
+                      <th className="py-1 px-1.5 text-center w-16">Roll No</th>
+                      <th className="py-1 px-2 text-left">Pupil Full Name</th>
+                      {printMode === 'blank' ? (
+                        <>
+                          <th className="py-1 px-1 text-center w-14">Exercises (/15)</th>
+                          <th className="py-1 px-1 text-center w-14">Homework (/10)</th>
+                          <th className="py-1 px-1 text-center w-14">Project (/15)</th>
+                          <th className="py-1 px-1 text-center w-14">Test (/10)</th>
+                          <th className="py-1 px-1 text-center w-16 bg-blue-100 font-bold">SBA Raw (/50)</th>
+                          <th className="py-1 px-1 text-center w-16 bg-amber-100 font-bold">Exam (/100)</th>
+                          <th className="py-1 px-2 text-left w-28">Remarks</th>
+                        </>
+                      ) : (
+                        <>
+                          <th className="py-1 px-1 text-center w-12">SBA Raw (/50)</th>
+                          <th className="py-1 px-1 text-center w-12 bg-blue-50">SBA ({sbaWeight}%)</th>
+                          <th className="py-1 px-1 text-center w-12">Exam (/100)</th>
+                          <th className="py-1 px-1 text-center w-12 bg-amber-50">Exam ({examWeight}%)</th>
+                          <th className="py-1 px-1.5 text-center w-14 font-black bg-slate-300">Total (100%)</th>
+                          <th className="py-1 px-1 text-center w-10">Grade</th>
+                          <th className="py-1 px-1 text-center w-14">Level</th>
+                          <th className="py-1 px-1 text-center w-10">Rank</th>
+                          <th className="py-1 px-2 text-left">Remarks</th>
+                        </>
+                      )}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {classPupils.map((pupil, idx) => {
+                      const rowComp = computedRows.find(r => r.studentId === pupil.id);
+                      const hasMarks = rowComp && rowComp.hasEntries;
+
+                      return (
+                        <tr key={pupil.id} className="border-b border-slate-300 divide-x divide-slate-300 hover:bg-slate-50">
+                          <td className="py-1 px-1 text-center text-slate-500 font-bold">{idx + 1}</td>
+                          <td className="py-1 px-1.5 text-center font-bold">{pupil.rollNumber || '-'}</td>
+                          <td className="py-1 px-2 font-bold text-slate-900">{pupil.name}</td>
+                          
+                          {printMode === 'blank' ? (
+                            <>
+                              <td className="py-1 px-1 text-center h-6"></td>
+                              <td className="py-1 px-1 text-center h-6"></td>
+                              <td className="py-1 px-1 text-center h-6"></td>
+                              <td className="py-1 px-1 text-center h-6"></td>
+                              <td className="py-1 px-1 text-center bg-blue-50/40"></td>
+                              <td className="py-1 px-1 text-center bg-amber-50/40"></td>
+                              <td className="py-1 px-2 text-left"></td>
+                            </>
+                          ) : (
+                            <>
+                              <td className="py-1 px-1 text-center">{hasMarks ? (rowComp.sbaRawNum || '0') : '-'}</td>
+                              <td className="py-1 px-1 text-center font-bold bg-blue-50/40 text-blue-900">{hasMarks ? rowComp.weightedSba : '-'}</td>
+                              <td className="py-1 px-1 text-center">{hasMarks ? (rowComp.examRawNum || '0') : '-'}</td>
+                              <td className="py-1 px-1 text-center font-bold bg-amber-50/40 text-amber-900">{hasMarks ? rowComp.weightedExam : '-'}</td>
+                              <td className="py-1 px-1.5 text-center font-black bg-slate-100 text-slate-950">{hasMarks ? rowComp.totalScore : '-'}</td>
+                              <td className="py-1 px-1 text-center font-black text-slate-900">{hasMarks ? rowComp.grade : '-'}</td>
+                              <td className="py-1 px-1 text-center text-[9.5px]">{hasMarks ? rowComp.level : '-'}</td>
+                              <td className="py-1 px-1 text-center font-bold">{hasMarks && rowComp.position ? formatOrdinal(rowComp.position) : '-'}</td>
+                              <td className="py-1 px-2 text-left text-[9.5px] text-slate-700">{hasMarks ? (rowComp.teacherRemark || rowComp.autoRemark) : '-'}</td>
+                            </>
+                          )}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+
+                {/* Statistics Footer (For filled master sheet) */}
+                {printMode === 'filled' && (
+                  <div className="mt-3 grid grid-cols-5 border border-slate-800 bg-slate-100 p-2 text-center text-[10px] font-mono divide-x divide-slate-800">
+                    <div>
+                      <span className="text-slate-600 block">Total Assessed:</span>
+                      <strong>{subjectStats.totalScored} / {classPupils.length}</strong>
+                    </div>
+                    <div>
+                      <span className="text-slate-600 block">Class Mean:</span>
+                      <strong>{subjectStats.meanAverage}%</strong>
+                    </div>
+                    <div>
+                      <span className="text-slate-600 block">Highest / Lowest:</span>
+                      <strong>{subjectStats.highestScore}% / {subjectStats.lowestScore}%</strong>
+                    </div>
+                    <div>
+                      <span className="text-slate-600 block">Pass Rate (≥45%):</span>
+                      <strong>{subjectStats.passRate}%</strong>
+                    </div>
+                    <div>
+                      <span className="text-slate-600 block">Distinction (Grade 1):</span>
+                      <strong>{subjectStats.grade1Count} Pupils</strong>
+                    </div>
+                  </div>
+                )}
+
+                {/* Signatures & Certification Footer */}
+                <div className="mt-6 pt-4 border-t-2 border-slate-800 grid grid-cols-3 gap-4 text-center font-mono text-[10px]">
+                  <div>
+                    <div className="border-b border-slate-800 pb-1 mb-1 font-bold text-slate-800">
+                      {currentUser?.name || '__________________________'}
+                    </div>
+                    <span className="text-slate-600">Subject Teacher Signature</span>
+                  </div>
+                  <div>
+                    <div className="border-b border-slate-800 pb-1 mb-1 font-bold text-slate-800">
+                      __________________________
+                    </div>
+                    <span className="text-slate-600">Class Teacher Verification</span>
+                  </div>
+                  <div>
+                    <div className="border-b border-slate-800 pb-1 mb-1 font-bold text-slate-800">
+                      __________________________
+                    </div>
+                    <span className="text-slate-600">Headmaster / Academic Officer Seal</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* UNPOPULATE / CLEAR MARKS MODAL */}
+      {showClearModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+          <div className="bg-neutral-900 text-white border-2 border-rose-600/80 p-6 max-w-md w-full shadow-2xl space-y-4 font-mono">
+            <div className="flex items-center justify-between border-b border-neutral-800 pb-3">
+              <div className="flex items-center gap-2 text-rose-400">
+                <RotateCcw size={18} />
+                <h3 className="font-bold uppercase tracking-wider text-sm">Unpopulate / Clear Marks</h3>
+              </div>
+              <button
+                onClick={() => setShowClearModal(false)}
+                className="text-neutral-400 hover:text-white p-1"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <p className="text-xs text-neutral-300 leading-relaxed">
+              Select which assessment marks to clear. This will reset the marks in the local cache and synchronize removal to Cloud Firestore.
+            </p>
+
+            <div className="space-y-2.5">
+              <label className={`flex items-start gap-3 p-3 border cursor-pointer transition-colors ${
+                clearScope === 'subject' ? 'bg-rose-950/40 border-rose-500' : 'bg-neutral-950 border-neutral-800 hover:border-neutral-700'
+              }`}>
+                <input
+                  type="radio"
+                  name="clearScope"
+                  checked={clearScope === 'subject'}
+                  onChange={() => setClearScope('subject')}
+                  className="mt-0.5 accent-rose-500"
+                />
+                <div>
+                  <div className="text-xs font-bold text-white">
+                    Clear Active Subject Only ({selectedSubject.name} - {selectedClass})
+                  </div>
+                  <div className="text-[11px] text-neutral-400">
+                    Resets SBA and Exam marks entered for this subject in class {selectedClass}.
+                  </div>
+                </div>
+              </label>
+
+              <label className={`flex items-start gap-3 p-3 border cursor-pointer transition-colors ${
+                clearScope === 'class' ? 'bg-rose-950/40 border-rose-500' : 'bg-neutral-950 border-neutral-800 hover:border-neutral-700'
+              }`}>
+                <input
+                  type="radio"
+                  name="clearScope"
+                  checked={clearScope === 'class'}
+                  onChange={() => setClearScope('class')}
+                  className="mt-0.5 accent-rose-500"
+                />
+                <div>
+                  <div className="text-xs font-bold text-white">
+                    Clear Entire Class Marks ({selectedClass})
+                  </div>
+                  <div className="text-[11px] text-neutral-400">
+                    Clears assessment marks across ALL subjects for students in {selectedClass}.
+                  </div>
+                </div>
+              </label>
+
+              <label className={`flex items-start gap-3 p-3 border cursor-pointer transition-colors ${
+                clearScope === 'all' ? 'bg-rose-950/40 border-rose-500' : 'bg-neutral-950 border-neutral-800 hover:border-neutral-700'
+              }`}>
+                <input
+                  type="radio"
+                  name="clearScope"
+                  checked={clearScope === 'all'}
+                  onChange={() => setClearScope('all')}
+                  className="mt-0.5 accent-rose-500"
+                />
+                <div>
+                  <div className="text-xs font-bold text-rose-300 flex items-center gap-1">
+                    <span>⚡ School-Wide Clean Slate (Unpopulate All Sample Marks)</span>
+                  </div>
+                  <div className="text-[11px] text-neutral-400">
+                    Purges all demo/sample marks across every class in the school for a clean term start.
+                  </div>
+                </div>
+              </label>
+            </div>
+
+            {clearScope === 'all' && (
+              <div className="bg-rose-950/30 border border-rose-700/80 p-3 space-y-2 text-xs">
+                <span className="text-rose-300 font-bold block">
+                  Confirmation Required:
+                </span>
+                <p className="text-[11px] text-rose-200">
+                  Type <strong>UNPOPULATE</strong> below to confirm purge of all marks across the entire school:
+                </p>
+                <input
+                  type="text"
+                  placeholder="UNPOPULATE"
+                  value={clearConfirmationText}
+                  onChange={(e) => setClearConfirmationText(e.target.value)}
+                  className="w-full p-2 bg-black border border-rose-500 text-white font-mono font-bold text-xs"
+                />
+              </div>
+            )}
+
+            <div className="flex justify-end gap-3 pt-3 border-t border-neutral-800">
+              <button
+                type="button"
+                onClick={() => setShowClearModal(false)}
+                className="px-4 py-2 text-xs font-bold border border-neutral-700 hover:bg-neutral-800 text-neutral-300"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleClearMarksConfirm}
+                disabled={isClearing || (clearScope === 'all' && clearConfirmationText.trim().toUpperCase() !== 'UNPOPULATE')}
+                className={`px-5 py-2 text-xs font-black uppercase tracking-wider flex items-center gap-1.5 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] ${
+                  isClearing || (clearScope === 'all' && clearConfirmationText.trim().toUpperCase() !== 'UNPOPULATE')
+                    ? 'opacity-40 cursor-not-allowed bg-neutral-800 text-neutral-500'
+                    : 'bg-rose-600 hover:bg-rose-500 text-white cursor-pointer'
+                }`}
+              >
+                <Trash2 size={14} />
+                <span>{isClearing ? 'Clearing Marks...' : 'Confirm Clear'}</span>
               </button>
             </div>
           </div>

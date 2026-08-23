@@ -261,6 +261,8 @@ interface AppContextType {
   teacherAllocations: TeacherAllocation[];
   academicSettings: AcademicSettings;
   batchSaveAcademicAssessments: (assessments: AcademicAssessment[]) => Promise<void>;
+  clearAcademicAssessments: (targetClass?: string, targetSubjectId?: string) => Promise<{ success: boolean; clearedCount: number }>;
+  clearAllAcademicAssessments: () => Promise<{ success: boolean; clearedCount: number }>;
   saveTerminalReport: (report: TerminalReport) => Promise<void>;
   saveTeacherAllocation: (allocation: TeacherAllocation) => Promise<void>;
   deleteTeacherAllocation: (id: string) => Promise<void>;
@@ -1077,7 +1079,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     setBackups(prev => {
-      const next = [newBackup, ...prev].slice(0, 10);
+      const next = [newBackup, ...prev].slice(0, 3);
       idbEngine.setItem('s_backups', next);
       return next;
     });
@@ -1906,22 +1908,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const msg = err instanceof Error ? err.message : String(err);
         console.error('Core sync sequence failure:', err);
         setFirebaseConnected(false);
-        
-        // Auto-revert storageMode selection to prevent lagging subsequent state mutations
-        setStorageModeState('local');
-        loadLocalBackup(localUsers, localStudents, localPayments, localTerms, localExpenses, localSalaries, localBudgetTargets, localEvaluations, localJournalEntries, localExamsPayments, localExamsExpenses, localExamsSettings, localPromoBackups);
 
-        let displayError = "Cloud Sync timed out or was rejected. We have safely switched you to the Local Ledger so you can keep work saved locally.";
+        let displayError = "Cloud Sync timed out or was rejected. We have loaded your local data so you can keep working smoothly.";
         try {
           const parsed = JSON.parse(msg);
           if (parsed.error && parsed.error.includes("Timeout")) {
-            displayError = "Connection with Cloud Firestore timed out (12000ms limit reached). We temporarily rolled back to standard Local Ledger mode to prevent UI lag. Try clicking 'Retry Sync Detection' once your Firestore setup completes.";
+            displayError = "Connection with Cloud Firestore timed out (network slow). Loaded cached data. Click 'Retry' anytime to reconnect.";
           } else if (parsed.error) {
-            displayError = `Cloud connection rejected: ${parsed.error}. Reverted to local storage mode for safety.`;
+            displayError = `Cloud connection notice: ${parsed.error}. Using local cached data.`;
           }
         } catch {
           if (msg.includes("Timeout")) {
-            displayError = "Google Cloud Firestore connection timed out. Reverted to offline Local Ledger so you do not lose any work. Please run Firebase setup or retry sync.";
+            displayError = "Google Cloud Firestore connection timed out. Loaded cached data. Click 'Retry' anytime to reconnect.";
           }
         }
         
@@ -5699,7 +5697,7 @@ School Administration Financial Audit System (MFA Secure)
         ? `Custom Reconciliation Promotion (${Object.keys(customActions).length} student overrides)` 
         : "Standard Bulk Cohort Promotion"
     };
-    const updatedBackups = [newBackup, ...promotionBackups].slice(0, 10);
+    const updatedBackups = [newBackup, ...promotionBackups].slice(0, 3);
     setPromotionBackups(updatedBackups);
     idbEngine.setItem('s_promotion_backups', updatedBackups);
 
@@ -6111,6 +6109,66 @@ School Administration Financial Audit System (MFA Secure)
         console.error("Failed to batch save academic assessments to cloud:", err);
       }
     }
+  };
+
+  const clearAcademicAssessments = async (targetClass?: string, targetSubjectId?: string) => {
+    let clearedCount = 0;
+    let idsToDelete: string[] = [];
+
+    setAcademicAssessments(prev => {
+      let filtered: AcademicAssessment[];
+      if (targetClass && targetSubjectId) {
+        filtered = prev.filter(a => {
+          if (a.class === targetClass && a.subjectId === targetSubjectId) {
+            idsToDelete.push(a.id);
+            clearedCount++;
+            return false;
+          }
+          return true;
+        });
+      } else if (targetClass) {
+        filtered = prev.filter(a => {
+          if (a.class === targetClass) {
+            idsToDelete.push(a.id);
+            clearedCount++;
+            return false;
+          }
+          return true;
+        });
+      } else if (targetSubjectId) {
+        filtered = prev.filter(a => {
+          if (a.subjectId === targetSubjectId) {
+            idsToDelete.push(a.id);
+            clearedCount++;
+            return false;
+          }
+          return true;
+        });
+      } else {
+        idsToDelete = prev.map(a => a.id);
+        clearedCount = prev.length;
+        filtered = [];
+      }
+
+      idbEngine.setItem('s_academic_assessments', filtered);
+      return filtered;
+    });
+
+    if (idsToDelete.length > 0) {
+      if (db.isActive()) {
+        try {
+          await db.clearAcademicAssessments(idsToDelete);
+        } catch (err) {
+          console.error("Failed to clear academic assessments from cloud:", err);
+        }
+      }
+    }
+
+    return { success: true, clearedCount };
+  };
+
+  const clearAllAcademicAssessments = async () => {
+    return await clearAcademicAssessments();
   };
 
   const saveTerminalReport = async (report: TerminalReport) => {
@@ -6966,6 +7024,8 @@ School Administration Financial Audit System (MFA Secure)
       teacherAllocations,
       academicSettings,
       batchSaveAcademicAssessments,
+      clearAcademicAssessments,
+      clearAllAcademicAssessments,
       saveTerminalReport,
       saveTeacherAllocation,
       deleteTeacherAllocation,

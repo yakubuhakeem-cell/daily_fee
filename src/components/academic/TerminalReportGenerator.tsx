@@ -18,8 +18,13 @@ import {
   calculateGESGrade,
   generateClassTeacherRemark,
   generateHeadteacherRemark,
-  getRankMedal
+  getRankMedal,
+  isJhsClass,
+  isPreschoolOrPrimary,
+  computeJhsBeceAggregate
 } from '../../utils/ghanaCurriculum';
+import { calculateStudentFeeStatus, isTermPayer } from '../../utils/feeCalculator';
+import { SchoolLogo } from '../SchoolLogo';
 
 interface TerminalReportGeneratorProps {
   initialStudentId?: string;
@@ -105,53 +110,74 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
       const totalScore = pMarks.reduce((acc, m) => acc + (m.totalScore || 0), 0);
       const avg = pMarks.length > 0 ? Math.round((totalScore / pMarks.length) * 10) / 10 : 0;
       
-      const sortedGrades = [...pMarks].map(m => m.grade).sort((a, b) => a - b);
-      const best6 = sortedGrades.slice(0, 6);
-      const aggregate = best6.reduce((a, b) => a + b, 0);
+      const isJhs = isJhsClass(pupil.class);
+      let aggregate: number | null = null;
+      let jhsDetails: any = null;
+
+      if (isJhs) {
+        const jhsRes = computeJhsBeceAggregate(pMarks, pupil.class);
+        aggregate = jhsRes.aggregate;
+        jhsDetails = jhsRes;
+      }
 
       return {
         studentId: pupil.id,
         totalScore,
         averageScore: avg,
         aggregate,
+        jhsDetails,
         marksCount: pMarks.length
       };
     });
 
     rankings.sort((a, b) => b.averageScore - a.averageScore);
 
-    const map = new Map<string, { position: number; totalPupils: number; avg: number; total: number; aggregate: number }>();
+    const map = new Map<string, { 
+      position: number; 
+      totalPupils: number; 
+      avg: number; 
+      total: number; 
+      aggregate: number | null;
+      jhsDetails?: any;
+    }>();
+
     rankings.forEach((item, idx) => {
       map.set(item.studentId, {
         position: idx + 1,
         totalPupils: rankings.length,
         avg: item.averageScore,
         total: item.totalScore,
-        aggregate: item.aggregate
+        aggregate: item.aggregate,
+        jhsDetails: item.jhsDetails
       });
     });
 
     return map;
   }, [classPupils, academicAssessments, activeTermId]);
 
-  // Helper to calculate student fee status
+  // Helper to calculate student fee status (incorporating attendance days for Daily Payers)
   const getPupilFeeStatus = (pupilId: string, pupilClass: StudentClass) => {
-    const pupilPayments = payments.filter(
-      p => p.studentId === pupilId && !p.id.endsWith('_debt') && (p.termId === activeTermId || (activeTerm?.startDate && p.date >= activeTerm.startDate))
-    );
-    const totalPaid = pupilPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
-    
-    let termFee = systemSettings?.baselineTermFee || 350;
-    if (['Nursery', 'KG1', 'KG2'].includes(pupilClass)) {
-      termFee = systemSettings?.baselineTermFeePreSchool || 250;
-    } else if (['B1', 'B2', 'B3', 'B4', 'B5', 'B6'].includes(pupilClass)) {
-      termFee = systemSettings?.baselineTermFeePrimary || 350;
-    } else {
-      termFee = systemSettings?.baselineTermFeeJhs || 450;
+    const pupil = students.find(s => s.id === pupilId);
+    if (!pupil) {
+      return {
+        termFee: 350,
+        totalPaid: 0,
+        balance: 0,
+        isCleared: true,
+        status: 'Cleared' as const,
+        isDailyPayer: false,
+        chargeableDaysCount: 0,
+        dailyRate: 5.0,
+        advanceCredit: 0
+      };
     }
 
-    const balance = Math.max(0, termFee - totalPaid);
-    const isCleared = balance <= 0 || totalPaid >= termFee;
+    const feeSummary = calculateStudentFeeStatus(pupil, payments, activeTerm, systemSettings);
+    const isDaily = !isTermPayer(pupil);
+    const termFee = isDaily ? feeSummary.expectedFee : feeSummary.effectiveTermFee;
+    const totalPaid = feeSummary.totalPaid;
+    const balance = feeSummary.currentArrears;
+    const isCleared = balance <= 0;
     
     let status: 'Cleared' | 'Partially Paid' | 'Arrears Outstanding' = 'Cleared';
     if (!isCleared) {
@@ -163,7 +189,11 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
       totalPaid,
       balance,
       isCleared,
-      status
+      status,
+      isDailyPayer: isDaily,
+      chargeableDaysCount: feeSummary.chargeableDaysCount,
+      dailyRate: feeSummary.dailyRate,
+      advanceCredit: feeSummary.advanceCredit
     };
   };
 
@@ -478,19 +508,12 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
               <div className="border-b-2 border-slate-900 pb-4 text-center relative">
                 <div className="flex items-center justify-between gap-4">
                   {/* Left School Logo */}
-                  <div className="w-24 h-24 sm:w-28 sm:h-28 border-2 border-slate-800 p-1 flex items-center justify-center bg-amber-50/50 shrink-0 shadow-xs rounded-sm">
-                    <img 
-                      src="/school_logo.jpg" 
-                      alt="School Crest" 
-                      referrerPolicy="no-referrer"
-                      className="max-h-full max-w-full object-contain"
-                      onError={(e) => {
-                        // try fee_tracker_logo fallback
-                        const target = e.target as HTMLImageElement;
-                        if (!target.src.includes('fee_tracker_logo.png')) {
-                          target.src = '/fee_tracker_logo.png';
-                        }
-                      }}
+                  <div className="w-24 h-24 sm:w-28 sm:h-28 border-2 border-slate-800 p-1 flex items-center justify-center bg-amber-50/50 shrink-0 shadow-xs rounded-sm overflow-hidden">
+                    <SchoolLogo 
+                      size={96}
+                      lightBackground={true}
+                      logoUrl={academicSettings?.schoolLogoUrl || systemSettings?.schoolLogoUrl || '/school_logo.jpg'}
+                      className="max-h-full max-w-full"
                     />
                   </div>
 
@@ -674,28 +697,48 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
                 </table>
               </div>
 
-              {/* Terminal Summary Metrics Bar (Rank, Average, Aggregate) */}
-              <div className="mt-3 grid grid-cols-4 border-2 border-slate-900 bg-slate-100 text-center text-xs font-mono divide-x-2 divide-slate-900 py-2.5">
-                <div>
-                  <span className="text-[10px] text-slate-600 block uppercase font-bold">Aggregate Total Score</span>
-                  <span className="font-black text-sm text-slate-950">{pupilStats.total} marks</span>
+              {/* Terminal Summary Metrics Bar (Rank, Average, Aggregate for JHS only) */}
+              {isJhsClass(pupil.class) ? (
+                <div className="mt-3 grid grid-cols-4 border-2 border-slate-900 bg-slate-100 text-center text-xs font-mono divide-x-2 divide-slate-900 py-2.5">
+                  <div>
+                    <span className="text-[10px] text-slate-600 block uppercase font-bold">Total Score</span>
+                    <span className="font-black text-sm text-slate-950">{pupilStats.total} marks</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-600 block uppercase font-bold">Terminal Average</span>
+                    <span className="font-black text-sm text-slate-950">{pupilStats.avg}%</span>
+                  </div>
+                  <div className="bg-amber-100/50">
+                    <span className="text-[10px] text-amber-900 block uppercase font-black">Position in Class</span>
+                    <span className="font-black text-sm text-slate-950 flex items-center justify-center gap-1">
+                      {medalInfo && <span>{medalInfo.medal}</span>}
+                      <span>{formatOrdinal(pupilStats.position)} of {pupilStats.totalPupils}</span>
+                    </span>
+                  </div>
+                  <div className="bg-emerald-50">
+                    <span className="text-[10px] text-emerald-900 block uppercase font-black">BECE Aggregate (4 Core + 2 Best Electives)</span>
+                    <span className="font-black text-base text-emerald-950">{pupilStats.aggregate ?? '-'}</span>
+                  </div>
                 </div>
-                <div>
-                  <span className="text-[10px] text-slate-600 block uppercase font-bold">Terminal Overall Average</span>
-                  <span className="font-black text-sm text-slate-950">{pupilStats.avg}%</span>
+              ) : (
+                <div className="mt-3 grid grid-cols-3 border-2 border-slate-900 bg-slate-100 text-center text-xs font-mono divide-x-2 divide-slate-900 py-2.5">
+                  <div>
+                    <span className="text-[10px] text-slate-600 block uppercase font-bold">Total Terminal Score</span>
+                    <span className="font-black text-sm text-slate-950">{pupilStats.total} marks</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-600 block uppercase font-bold">Terminal Overall Average</span>
+                    <span className="font-black text-sm text-slate-950">{pupilStats.avg}%</span>
+                  </div>
+                  <div className="bg-amber-100/50">
+                    <span className="text-[10px] text-amber-900 block uppercase font-black">Position in Class</span>
+                    <span className="font-black text-sm text-slate-950 flex items-center justify-center gap-1">
+                      {medalInfo && <span>{medalInfo.medal}</span>}
+                      <span>{formatOrdinal(pupilStats.position)} of {pupilStats.totalPupils}</span>
+                    </span>
+                  </div>
                 </div>
-                <div className="bg-amber-100/50">
-                  <span className="text-[10px] text-amber-900 block uppercase font-black">Position in Class</span>
-                  <span className="font-black text-sm text-slate-950 flex items-center justify-center gap-1">
-                    {medalInfo && <span>{medalInfo.medal}</span>}
-                    <span>{formatOrdinal(pupilStats.position)} of {pupilStats.totalPupils}</span>
-                  </span>
-                </div>
-                <div>
-                  <span className="text-[10px] text-slate-600 block uppercase font-bold">Best 6 Grade Aggregate</span>
-                  <span className="font-black text-sm text-slate-950">{pupilStats.aggregate}</span>
-                </div>
-              </div>
+              )}
 
               {/* FINANCIAL FEE STATUS & CLEARANCE SECTION (When Option is ON) */}
               {showFeeStatus && (
@@ -704,6 +747,11 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
                     <span className="font-black uppercase tracking-wider text-[11px] text-slate-900 flex items-center gap-1.5">
                       <CreditCard size={14} className="text-amber-700" />
                       Pupil School Fees & Financial Clearance Status:
+                      {feeStatusInfo.isDailyPayer && (
+                        <span className="text-[10px] font-normal text-amber-800 bg-amber-100 px-1.5 py-0.2 border border-amber-300 rounded-xs">
+                          (Daily Rate: GHC {feeStatusInfo.dailyRate.toFixed(2)}/day • {feeStatusInfo.chargeableDaysCount} Present Days)
+                        </span>
+                      )}
                     </span>
                     <span className={`px-2.5 py-0.5 text-[10px] font-black uppercase tracking-wider border ${
                       feeStatusInfo.isCleared
@@ -718,7 +766,9 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
 
                   <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 text-center divide-y sm:divide-y-0 sm:divide-x divide-slate-300 pt-1">
                     <div>
-                      <span className="text-[10px] text-slate-600 block uppercase">Total Term Fee:</span>
+                      <span className="text-[10px] text-slate-600 block uppercase">
+                        {feeStatusInfo.isDailyPayer ? `Expected Attendance Fee (${feeStatusInfo.chargeableDaysCount}d):` : 'Total Term Fee:'}
+                      </span>
                       <span className="font-bold text-slate-900">GHC {feeStatusInfo.termFee.toFixed(2)}</span>
                     </div>
                     <div>

@@ -575,6 +575,167 @@ export function generateHeadteacherRemark(position: number, totalPupils: number,
 }
 
 /**
+ * Checks if a class is a Junior High School (JHS / BS7-BS9) class
+ */
+export function isJhsClass(cls: StudentClass | string | undefined | null): boolean {
+  if (!cls) return false;
+  const upper = String(cls).toUpperCase().trim();
+  return (
+    upper === 'JHS1' || upper === 'JHS2' || upper === 'JHS3' ||
+    upper === 'JHS 1' || upper === 'JHS 2' || upper === 'JHS 3' ||
+    upper === 'B7' || upper === 'B8' || upper === 'B9' ||
+    upper === 'BS7' || upper === 'BS8' || upper === 'BS9' ||
+    upper === 'GRADE 7' || upper === 'GRADE 8' || upper === 'GRADE 9'
+  );
+}
+
+/**
+ * Checks if a class is Nursery, KG, or Primary (BS1-BS6) where aggregate should NOT be shown
+ */
+export function isPreschoolOrPrimary(cls: StudentClass | string | undefined | null): boolean {
+  if (!cls) return true;
+  return !isJhsClass(cls);
+}
+
+export interface JhsAggregateResult {
+  aggregate: number;
+  coreMarks: { subjectName: string; code: string; grade: number; score: number; isMissing?: boolean }[];
+  electiveMarks: { subjectName: string; code: string; grade: number; score: number }[];
+  best2Electives: { subjectName: string; code: string; grade: number; score: number }[];
+  coreSum: number;
+  electiveSum: number;
+  isJhs: boolean;
+}
+
+/**
+ * Calculates BECE Aggregate Grade for JHS students according to standard WAEC/GES format:
+ * 4 Core Subjects (English Language, Mathematics, Integrated Science, Social Studies) +
+ * 2 Best Elective Subjects (from Computing, Career Technology, Creative Arts, Ghanaian Language, RME, French, PHE).
+ *
+ * Lower aggregate number = better performance (e.g., 6 is best possible: 1+1+1+1 + 1+1).
+ * If a core subject has not been entered yet, it counts as Grade 9.
+ */
+export function computeJhsBeceAggregate(
+  assessments: AcademicAssessment[],
+  studentClass?: StudentClass | string
+): JhsAggregateResult {
+  const isEnglish = (a: AcademicAssessment) => {
+    const id = (a.subjectId || '').toLowerCase();
+    const name = (a.subjectName || '').toLowerCase();
+    return id.includes('eng') || name.includes('english');
+  };
+  
+  const isMath = (a: AcademicAssessment) => {
+    const id = (a.subjectId || '').toLowerCase();
+    const name = (a.subjectName || '').toLowerCase();
+    return id.includes('math') || name.includes('mathematics') || name.includes('math') || name.includes('arithmetic');
+  };
+  
+  const isScience = (a: AcademicAssessment) => {
+    const id = (a.subjectId || '').toLowerCase();
+    const name = (a.subjectName || '').toLowerCase();
+    return (id.includes('sci') || name.includes('science')) && !name.includes('social');
+  };
+  
+  const isSocial = (a: AcademicAssessment) => {
+    const id = (a.subjectId || '').toLowerCase();
+    const name = (a.subjectName || '').toLowerCase();
+    return id.includes('soc') || name.includes('social');
+  };
+
+  let engMark: AcademicAssessment | undefined;
+  let mathMark: AcademicAssessment | undefined;
+  let sciMark: AcademicAssessment | undefined;
+  let socMark: AcademicAssessment | undefined;
+
+  const electiveMarksList: AcademicAssessment[] = [];
+
+  assessments.forEach(a => {
+    if (a.grade === undefined || a.grade === null || isNaN(a.grade)) return;
+
+    if (isEnglish(a) && !engMark) {
+      engMark = a;
+    } else if (isMath(a) && !mathMark) {
+      mathMark = a;
+    } else if (isScience(a) && !sciMark) {
+      sciMark = a;
+    } else if (isSocial(a) && !socMark) {
+      socMark = a;
+    } else {
+      electiveMarksList.push(a);
+    }
+  });
+
+  const coreMarks = [
+    { 
+      subjectName: 'English Language', 
+      code: 'ENG', 
+      grade: engMark?.grade ?? 9, 
+      score: engMark?.totalScore ?? 0, 
+      isMissing: !engMark 
+    },
+    { 
+      subjectName: 'Mathematics', 
+      code: 'MATH', 
+      grade: mathMark?.grade ?? 9, 
+      score: mathMark?.totalScore ?? 0, 
+      isMissing: !mathMark 
+    },
+    { 
+      subjectName: 'Integrated Science', 
+      code: 'SCI', 
+      grade: sciMark?.grade ?? 9, 
+      score: sciMark?.totalScore ?? 0, 
+      isMissing: !sciMark 
+    },
+    { 
+      subjectName: 'Social Studies', 
+      code: 'SOC', 
+      grade: socMark?.grade ?? 9, 
+      score: socMark?.totalScore ?? 0, 
+      isMissing: !socMark 
+    },
+  ];
+
+  const coreSum = coreMarks.reduce((acc, c) => acc + c.grade, 0);
+
+  // Sort electives by lowest grade number first (1 is best, 9 is worst)
+  // If grades are tied, higher totalScore is preferred
+  const sortedElectives = [...electiveMarksList].sort((a, b) => {
+    if (a.grade !== b.grade) return a.grade - b.grade;
+    return (b.totalScore || 0) - (a.totalScore || 0);
+  });
+
+  const best2Electives = sortedElectives.slice(0, 2).map(e => ({
+    subjectName: e.subjectName || 'Elective',
+    code: e.subjectId?.replace('sub_jhs_', '').toUpperCase() || 'ELEC',
+    grade: e.grade,
+    score: e.totalScore || 0
+  }));
+
+  // If fewer than 2 electives exist, pad remaining with grade 9
+  const missingElectivesCount = Math.max(0, 2 - best2Electives.length);
+  const electiveSum = best2Electives.reduce((acc, e) => acc + e.grade, 0) + (missingElectivesCount * 9);
+
+  const totalAggregate = Math.min(54, Math.max(6, coreSum + electiveSum));
+
+  return {
+    aggregate: totalAggregate,
+    coreMarks,
+    electiveMarks: electiveMarksList.map(e => ({
+      subjectName: e.subjectName || 'Elective',
+      code: e.subjectId?.replace('sub_jhs_', '').toUpperCase() || 'ELEC',
+      grade: e.grade,
+      score: e.totalScore || 0
+    })),
+    best2Electives,
+    coreSum,
+    electiveSum,
+    isJhs: studentClass ? isJhsClass(studentClass) : true
+  };
+}
+
+/**
  * Generates initial demo assessment data for existing or new students so the dashboard is immediately populated with realistic Ghanaian school records.
  */
 export function generateSeedAcademicRecords(
