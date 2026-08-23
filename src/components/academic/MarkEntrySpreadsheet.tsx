@@ -248,47 +248,56 @@ export const MarkEntrySpreadsheet: React.FC<MarkEntrySpreadsheetProps> = ({
 
   // Initialize or load grid data from store
   useEffect(() => {
-    const newGrid: Record<string, LocalRowState> = {};
+    setGridData(prev => {
+      const newGrid: Record<string, LocalRowState> = {};
 
-    classPupils.forEach(pupil => {
-      const existing = academicAssessments.find(
-        a => a.studentId === pupil.id && 
-             a.subjectId === selectedSubjectId && 
-             (a.termId === activeTermId || !a.termId)
-      );
+      classPupils.forEach(pupil => {
+        const currentLocal = prev[pupil.id];
+        // If teacher is currently typing/editing this row, preserve their local changes
+        if (currentLocal && currentLocal.isDirty) {
+          newGrid[pupil.id] = currentLocal;
+          return;
+        }
 
-      if (existing) {
-        newGrid[pupil.id] = {
-          studentId: pupil.id,
-          studentName: pupil.name,
-          rollNumber: pupil.rollNumber || '',
-          classExercises: existing.classExercisesScore !== undefined ? String(existing.classExercisesScore) : '',
-          homework: existing.homeworkScore !== undefined ? String(existing.homeworkScore) : '',
-          project: existing.projectScore !== undefined ? String(existing.projectScore) : '',
-          classTest: existing.classTestScore !== undefined ? String(existing.classTestScore) : '',
-          sbaRaw: existing.sbaRawScore !== undefined ? String(existing.sbaRawScore) : String(existing.sbaScore || ''),
-          examRaw: existing.examRawScore !== undefined ? String(existing.examRawScore) : String(existing.examScore || ''),
-          teacherRemark: existing.teacherRemark || '',
-          isDirty: false
-        };
-      } else {
-        newGrid[pupil.id] = {
-          studentId: pupil.id,
-          studentName: pupil.name,
-          rollNumber: pupil.rollNumber || '',
-          classExercises: '',
-          homework: '',
-          project: '',
-          classTest: '',
-          sbaRaw: '',
-          examRaw: '',
-          teacherRemark: '',
-          isDirty: false
-        };
-      }
+        const existing = academicAssessments.find(
+          a => a.studentId === pupil.id && 
+               a.subjectId === selectedSubjectId && 
+               (a.termId === activeTermId || !a.termId)
+        );
+
+        if (existing) {
+          newGrid[pupil.id] = {
+            studentId: pupil.id,
+            studentName: pupil.name,
+            rollNumber: pupil.rollNumber || '',
+            classExercises: existing.classExercisesScore !== undefined ? String(existing.classExercisesScore) : '',
+            homework: existing.homeworkScore !== undefined ? String(existing.homeworkScore) : '',
+            project: existing.projectScore !== undefined ? String(existing.projectScore) : '',
+            classTest: existing.classTestScore !== undefined ? String(existing.classTestScore) : '',
+            sbaRaw: existing.sbaRawScore !== undefined ? String(existing.sbaRawScore) : String(existing.sbaScore || ''),
+            examRaw: existing.examRawScore !== undefined ? String(existing.examRawScore) : String(existing.examScore || ''),
+            teacherRemark: existing.teacherRemark || '',
+            isDirty: false
+          };
+        } else {
+          newGrid[pupil.id] = {
+            studentId: pupil.id,
+            studentName: pupil.name,
+            rollNumber: pupil.rollNumber || '',
+            classExercises: '',
+            homework: '',
+            project: '',
+            classTest: '',
+            sbaRaw: '',
+            examRaw: '',
+            teacherRemark: '',
+            isDirty: false
+          };
+        }
+      });
+
+      return newGrid;
     });
-
-    setGridData(newGrid);
   }, [classPupils, selectedSubjectId, activeTermId, academicAssessments]);
 
   // Compute live computed scores and ranks for all pupils

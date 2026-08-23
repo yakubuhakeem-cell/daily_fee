@@ -1214,19 +1214,26 @@ export const db = {
 
   async batchSaveAcademicAssessments(assessments: AcademicAssessment[]): Promise<boolean> {
     try {
-      const batch = writeBatch(firestoreDb);
-      const sanitizedList: any[] = [];
-      assessments.forEach(a => {
-        const id = safeDocId(a.id);
-        const clean = sanitizeFirestoreDoc(a);
-        sanitizedList.push(clean);
-        batch.set(doc(firestoreDb, "academic_assessments", id), clean, { merge: true });
-      });
-      await withTimeout(batch.commit(), 10000, "batchSaveAcademicAssessments");
+      if (!assessments || assessments.length === 0) return true;
+      const chunks: AcademicAssessment[][] = [];
+      for (let i = 0; i < assessments.length; i += 400) {
+        chunks.push(assessments.slice(i, i + 400));
+      }
+      for (const chunk of chunks) {
+        const batch = writeBatch(firestoreDb);
+        chunk.forEach(a => {
+          if (a && a.id) {
+            const id = safeDocId(a.id);
+            const clean = sanitizeFirestoreDoc(a);
+            batch.set(doc(firestoreDb, "academic_assessments", id), clean, { merge: true });
+          }
+        });
+        await withTimeout(batch.commit(), 10000, "batchSaveAcademicAssessments");
+      }
       fetch("/api/academic_assessments/batch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(sanitizedList),
+        body: JSON.stringify(assessments.map(a => sanitizeFirestoreDoc(a))),
       }).catch(() => {});
       return true;
     } catch (e) {

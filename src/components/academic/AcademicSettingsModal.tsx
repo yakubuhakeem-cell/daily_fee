@@ -52,6 +52,26 @@ export const AcademicSettingsModal: React.FC<AcademicSettingsModalProps> = ({
   const [isSeeding, setIsSeeding] = useState(false);
   const [seedSuccessMsg, setSeedSuccessMsg] = useState<string | null>(null);
 
+  React.useEffect(() => {
+    if (isOpen && academicSettings) {
+      setSbaWeight(academicSettings.sbaWeight ?? 50);
+      setExamWeight(academicSettings.examWeight ?? 50);
+      setAcademicYear(academicSettings.academicYear || '2025/2026');
+      setNextTermReopeningDate(academicSettings.nextTermReopeningDate || '2026-09-08');
+      setVacationDate(academicSettings.vacationDate || '2026-07-24');
+      setHeadName(academicSettings.headteacherName || 'Yakubu Hakeem');
+      setHeadTitle(academicSettings.headteacherTitle || 'Headmaster');
+      setSchoolMotto(academicSettings.schoolMotto || 'Holiness is our Key');
+      setSchoolAddress(academicSettings.schoolAddress || 'P. O. Box LS 15, Sawla-Savannah Region, Ghana.');
+      setSchoolPhone(academicSettings.schoolPhone || '0545029200 / 0507274133');
+      setShowPos(academicSettings.showPositionOnReport ?? true);
+      setShowAtt(academicSettings.showAttendanceOnReport ?? true);
+      setShowCond(academicSettings.showConductOnReport ?? true);
+      setShowFeeStatus(academicSettings.showFeeStatusOnReport ?? true);
+      setShowMedals(academicSettings.showMedalsOnReport ?? true);
+    }
+  }, [isOpen, academicSettings]);
+
   if (!isOpen) return null;
 
   const handleSbaWeightChange = (val: number) => {
