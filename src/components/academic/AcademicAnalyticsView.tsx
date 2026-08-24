@@ -73,6 +73,24 @@ export const AcademicAnalyticsView: React.FC<AcademicAnalyticsViewProps> = ({
     });
   }, [academicAssessments, selectedClass, activeTermId]);
 
+  // Fast grouped assessment maps
+  const { assessmentsBySubjectMap, assessmentsByStudentMap } = useMemo(() => {
+    const bySub = new Map<string, AcademicAssessment[]>();
+    const byStu = new Map<string, AcademicAssessment[]>();
+    for (const a of filteredAssessments) {
+      // By Subject
+      const subArr = bySub.get(a.subjectId);
+      if (subArr) subArr.push(a);
+      else bySub.set(a.subjectId, [a]);
+
+      // By Student
+      const stuArr = byStu.get(a.studentId);
+      if (stuArr) stuArr.push(a);
+      else byStu.set(a.studentId, [a]);
+    }
+    return { assessmentsBySubjectMap: bySub, assessmentsByStudentMap: byStu };
+  }, [filteredAssessments]);
+
   // Subject Averages Bar Chart Data
   const subjectAveragesData = useMemo(() => {
     const classSubjects = selectedClass === 'ALL' 
@@ -80,7 +98,7 @@ export const AcademicAnalyticsView: React.FC<AcademicAnalyticsViewProps> = ({
       : getSubjectsForClass(selectedClass);
 
     return classSubjects.map(sub => {
-      const subjectMarks = filteredAssessments.filter(a => a.subjectId === sub.id);
+      const subjectMarks = assessmentsBySubjectMap.get(sub.id) || [];
       const totalScore = subjectMarks.reduce((acc, m) => acc + (m.totalScore || 0), 0);
       const avg = subjectMarks.length > 0 ? Math.round((totalScore / subjectMarks.length) * 10) / 10 : 0;
       const passCount = subjectMarks.filter(m => (m.totalScore || 0) >= 45).length;
@@ -94,7 +112,7 @@ export const AcademicAnalyticsView: React.FC<AcademicAnalyticsViewProps> = ({
         pupilsCount: subjectMarks.length
       };
     }).filter(s => s.pupilsCount > 0 || selectedClass !== 'ALL');
-  }, [filteredAssessments, selectedClass]);
+  }, [assessmentsBySubjectMap, selectedClass]);
 
   // Grade Distribution Data (Grades 1 through 9)
   const gradeDistributionData = useMemo(() => {
@@ -133,7 +151,7 @@ export const AcademicAnalyticsView: React.FC<AcademicAnalyticsViewProps> = ({
   // Top Achievers Leaderboard
   const leaderboard = useMemo(() => {
     return filteredStudents.map(student => {
-      const studentMarks = filteredAssessments.filter(a => a.studentId === student.id);
+      const studentMarks = assessmentsByStudentMap.get(student.id) || [];
       if (studentMarks.length === 0) return null;
 
       const totalSum = studentMarks.reduce((acc, m) => acc + (m.totalScore || 0), 0);
@@ -157,7 +175,7 @@ export const AcademicAnalyticsView: React.FC<AcademicAnalyticsViewProps> = ({
     .filter((s): s is NonNullable<typeof s> => s !== null)
     .sort((a, b) => b.averageScore - a.averageScore)
     .slice(0, 10);
-  }, [filteredStudents, filteredAssessments]);
+  }, [filteredStudents, assessmentsByStudentMap]);
 
   // At-Risk & Remedial Radar List
   const atRiskList = useMemo(() => {
@@ -169,7 +187,7 @@ export const AcademicAnalyticsView: React.FC<AcademicAnalyticsViewProps> = ({
     }> = [];
 
     filteredStudents.forEach(student => {
-      const studentMarks = filteredAssessments.filter(a => a.studentId === student.id);
+      const studentMarks = assessmentsByStudentMap.get(student.id) || [];
       if (studentMarks.length === 0) return;
 
       const weak = studentMarks

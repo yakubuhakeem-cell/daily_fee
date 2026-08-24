@@ -8,6 +8,13 @@ import { initializeFirestore, memoryLocalCache, collection, doc, getDoc, getDocs
 
 dotenv.config();
 
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[Process Unhandled Rejection]', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[Process Uncaught Exception]', err);
+});
+
 const DB_FILE = path.join(process.cwd(), "db.json");
 const CONFIG_FILE = path.join(process.cwd(), "firebase-applet-config.json");
 
@@ -653,7 +660,7 @@ function getGeminiClient() {
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
   // Add JSON parsing middleware with custom limits for batch transactions
   app.use(express.json({ limit: "50mb" }));
@@ -671,8 +678,10 @@ async function startServer() {
     next();
   });
 
-  // Run the seeding and synchronization bootstrap check
-  bootstrapCloudSync();
+  // Run the seeding and synchronization bootstrap check in the background
+  bootstrapCloudSync().catch(err => {
+    console.error("Non-fatal bootstrap sync error on startup:", err);
+  });
 
   // API health check
   app.get("/api/health", (req, res) => {

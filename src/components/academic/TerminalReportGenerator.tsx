@@ -100,12 +100,86 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
     }
   }, [initialStudentId, students]);
 
+  // Fast indexed maps for O(1) mark and terminal report lookups
+  const assessmentsByStudentMap = useMemo(() => {
+    const map = new Map<string, AcademicAssessment[]>();
+    for (const a of academicAssessments) {
+      if (a.termId === activeTermId || !a.termId) {
+        const arr = map.get(a.studentId);
+        if (arr) {
+          arr.push(a);
+        } else {
+          map.set(a.studentId, [a]);
+        }
+      }
+    }
+    return map;
+  }, [academicAssessments, activeTermId]);
+
+  const assessmentByKeyMap = useMemo(() => {
+    const map = new Map<string, AcademicAssessment>();
+    for (const a of academicAssessments) {
+      if (a.termId === activeTermId || !a.termId) {
+        map.set(`${a.studentId}_${a.subjectId}`, a);
+      }
+    }
+    return map;
+  }, [academicAssessments, activeTermId]);
+
+  const terminalReportsMap = useMemo(() => {
+    const map = new Map<string, TerminalReport>();
+    for (const r of terminalReports) {
+      if (r.termId === activeTermId || !r.termId) {
+        map.set(r.studentId, r);
+      }
+    }
+    return map;
+  }, [terminalReports, activeTermId]);
+
+  // Fast precalculated fee summary map
+  const pupilFeeStatusMap = useMemo(() => {
+    const map = new Map<string, {
+      termFee: number;
+      totalPaid: number;
+      balance: number;
+      isCleared: boolean;
+      status: 'Cleared' | 'Partially Paid' | 'Arrears Outstanding';
+      isDailyPayer: boolean;
+      chargeableDaysCount: number;
+      dailyRate: number;
+      advanceCredit: number;
+    }>();
+
+    for (const pupil of classPupils) {
+      const feeSummary = calculateStudentFeeStatus(pupil, payments, activeTerm, systemSettings);
+      const isDaily = !isTermPayer(pupil);
+      const termFee = isDaily ? feeSummary.expectedFee : feeSummary.effectiveTermFee;
+      const totalPaid = feeSummary.totalPaid;
+      const balance = feeSummary.currentArrears;
+      const isCleared = balance <= 0;
+      let status: 'Cleared' | 'Partially Paid' | 'Arrears Outstanding' = 'Cleared';
+      if (!isCleared) {
+        status = totalPaid > 0 ? 'Partially Paid' : 'Arrears Outstanding';
+      }
+      map.set(pupil.id, {
+        termFee,
+        totalPaid,
+        balance,
+        isCleared,
+        status,
+        isDailyPayer: isDaily,
+        chargeableDaysCount: feeSummary.chargeableDaysCount,
+        dailyRate: feeSummary.dailyRate,
+        advanceCredit: feeSummary.advanceCredit
+      });
+    }
+    return map;
+  }, [classPupils, payments, activeTerm, systemSettings]);
+
   // Calculate student ranks and aggregates across class
   const classRankingMap = useMemo(() => {
     const rankings = classPupils.map(pupil => {
-      const pMarks = academicAssessments.filter(
-        a => a.studentId === pupil.id && (a.termId === activeTermId || !a.termId)
-      );
+      const pMarks = assessmentsByStudentMap.get(pupil.id) || [];
 
       const totalScore = pMarks.reduce((acc, m) => acc + (m.totalScore || 0), 0);
       const avg = pMarks.length > 0 ? Math.round((totalScore / pMarks.length) * 10) / 10 : 0;
@@ -153,10 +227,13 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
     });
 
     return map;
-  }, [classPupils, academicAssessments, activeTermId]);
+  }, [classPupils, assessmentsByStudentMap]);
 
   // Helper to calculate student fee status (incorporating attendance days for Daily Payers)
   const getPupilFeeStatus = (pupilId: string, pupilClass: StudentClass) => {
+    const cached = pupilFeeStatusMap.get(pupilId);
+    if (cached) return cached;
+
     const pupil = students.find(s => s.id === pupilId);
     if (!pupil) {
       return {
@@ -203,11 +280,7 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
     const subjects = getSubjectsForClass(activeStudent.class);
     
     return subjects.map(sub => {
-      const mark = academicAssessments.find(
-        a => a.studentId === activeStudent.id && 
-             a.subjectId === sub.id && 
-             (a.termId === activeTermId || !a.termId)
-      );
+      const mark = assessmentByKeyMap.get(`${activeStudent.id}_${sub.id}`);
 
       return {
         subject: sub,
@@ -221,15 +294,13 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
         remark: mark?.teacherRemark ?? '-'
       };
     });
-  }, [activeStudent, academicAssessments, activeTermId]);
+  }, [activeStudent, assessmentByKeyMap]);
 
   // Existing saved report or defaults
   const currentSavedReport = useMemo(() => {
     if (!activeStudent) return null;
-    return terminalReports.find(
-      r => r.studentId === activeStudent.id && (r.termId === activeTermId || !r.termId)
-    ) || null;
-  }, [terminalReports, activeStudent, activeTermId]);
+    return terminalReportsMap.get(activeStudent.id) || null;
+  }, [terminalReportsMap, activeStudent]);
 
   const activeStats = useMemo(() => {
     if (!activeStudent) return { position: 1, totalPupils: 1, avg: 0, total: 0, aggregate: 6 };
@@ -450,9 +521,7 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
         {(isBatchMode ? classPupils : [activeStudent]).map((pupil, pupilIdx) => {
           if (!pupil) return null;
 
-          const savedRep = terminalReports.find(
-            r => r.studentId === pupil.id && (r.termId === activeTermId || !r.termId)
-          );
+          const savedRep = terminalReportsMap.get(pupil.id);
 
           const pupilStats = classRankingMap.get(pupil.id) || {
             position: 1,
@@ -464,11 +533,7 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
 
           const pSubjects = getSubjectsForClass(pupil.class);
           const pMarks = pSubjects.map(sub => {
-            const mark = academicAssessments.find(
-              a => a.studentId === pupil.id && 
-                   a.subjectId === sub.id && 
-                   (a.termId === activeTermId || !a.termId)
-            );
+            const mark = assessmentByKeyMap.get(`${pupil.id}_${sub.id}`);
             return {
               subject: sub,
               mark,

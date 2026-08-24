@@ -5,7 +5,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
-import { StudentClass, SchoolCategory, ALL_CLASSES } from '../../types';
+import { StudentClass, SchoolCategory, ALL_CLASSES, AcademicAssessment } from '../../types';
 import { 
   Users, Search, Filter, GraduationCap, Trophy, AlertTriangle, 
   ArrowRight, FileText, CheckCircle2, Star, Sparkles, BookOpen,
@@ -56,6 +56,19 @@ export const AcademicRosterView: React.FC<AcademicRosterViewProps> = ({
     });
   }, [students, selectedClass, selectedCategory, searchQuery]);
 
+  // Fast indexed map for student marks
+  const assessmentsByStudentMap = useMemo(() => {
+    const map = new Map<string, AcademicAssessment[]>();
+    for (const a of academicAssessments) {
+      if (a.termId === activeTermId || !a.termId) {
+        const arr = map.get(a.studentId);
+        if (arr) arr.push(a);
+        else map.set(a.studentId, [a]);
+      }
+    }
+    return map;
+  }, [academicAssessments, activeTermId]);
+
   // Compute student academic summaries
   const studentSummaries = useMemo(() => {
     const map = new Map<string, {
@@ -70,9 +83,7 @@ export const AcademicRosterView: React.FC<AcademicRosterViewProps> = ({
 
     students.forEach(student => {
       const classSubjects = getSubjectsForClass(student.class);
-      const studentMarks = academicAssessments.filter(
-        a => a.studentId === student.id && (a.termId === activeTermId || !a.termId)
-      );
+      const studentMarks = assessmentsByStudentMap.get(student.id) || [];
 
       const totalSub = classSubjects.length;
       const count = studentMarks.length;
@@ -119,7 +130,7 @@ export const AcademicRosterView: React.FC<AcademicRosterViewProps> = ({
     });
 
     return map;
-  }, [students, academicAssessments, activeTermId]);
+  }, [students, assessmentsByStudentMap]);
 
   // Sort filtered list
   const sortedStudents = useMemo(() => {

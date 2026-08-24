@@ -35,7 +35,20 @@ export const PerformanceTab: React.FC = () => {
 
   // Filter users to get only staff / teachers / workers (Admin, Accountant, Teacher, Headmaster)
   const staffMembers = useMemo(() => {
-    return users.filter(u => u.role === 'Teacher' || u.role === 'Accountant' || u.role === 'Admin' || u.role === 'Administrator' || u.role === 'Headmaster');
+    const list = users.filter(u => {
+      const r = (u.role || '').toLowerCase().trim();
+      return (
+        r === 'teacher' || 
+        r === 'accountant' || 
+        r === 'admin' || 
+        r === 'administrator' || 
+        r === 'headmaster' || 
+        r === 'headmistress' || 
+        r === 'cashier' || 
+        r === 'staff'
+      );
+    });
+    return list.length > 0 ? list : users;
   }, [users]);
 
   // UI state
