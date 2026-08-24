@@ -94,8 +94,8 @@ export const AcademicAnalyticsView: React.FC<AcademicAnalyticsViewProps> = ({
   // Subject Averages Bar Chart Data
   const subjectAveragesData = useMemo(() => {
     const classSubjects = selectedClass === 'ALL' 
-      ? getSubjectsForClass('B1') 
-      : getSubjectsForClass(selectedClass);
+      ? getSubjectsForClass('B1', academicSettings?.customSubjects, academicSettings?.disabledSubjectIds) 
+      : getSubjectsForClass(selectedClass, academicSettings?.customSubjects, academicSettings?.disabledSubjectIds);
 
     return classSubjects.map(sub => {
       const subjectMarks = assessmentsBySubjectMap.get(sub.id) || [];

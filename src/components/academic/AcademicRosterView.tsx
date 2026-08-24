@@ -82,7 +82,11 @@ export const AcademicRosterView: React.FC<AcademicRosterViewProps> = ({
     }>();
 
     students.forEach(student => {
-      const classSubjects = getSubjectsForClass(student.class);
+      const classSubjects = getSubjectsForClass(
+        student.class, 
+        academicSettings?.customSubjects, 
+        academicSettings?.disabledSubjectIds
+      );
       const studentMarks = assessmentsByStudentMap.get(student.id) || [];
 
       const totalSub = classSubjects.length;

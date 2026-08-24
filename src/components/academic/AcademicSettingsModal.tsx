@@ -85,10 +85,11 @@ export const AcademicSettingsModal: React.FC<AcademicSettingsModalProps> = ({
     setIsSaving(true);
     try {
       const updated: AcademicSettings = {
+        ...(academicSettings || {}),
         sbaWeight,
         examWeight,
         academicYear,
-        activeTermNumber: 1,
+        activeTermNumber: academicSettings?.activeTermNumber || 1,
         nextTermReopeningDate,
         vacationDate,
         headteacherName: headName,
@@ -101,9 +102,11 @@ export const AcademicSettingsModal: React.FC<AcademicSettingsModalProps> = ({
         showConductOnReport: showCond,
         showFeeStatusOnReport: showFeeStatus,
         showMedalsOnReport: showMedals,
-        showTeacherRemarks: true,
-        showHeadteacherRemarks: true,
-        gradingScale: 'GES_9_POINT'
+        showTeacherRemarks: academicSettings?.showTeacherRemarks ?? true,
+        showHeadteacherRemarks: academicSettings?.showHeadteacherRemarks ?? true,
+        gradingScale: academicSettings?.gradingScale || 'GES_9_POINT',
+        customSubjects: academicSettings?.customSubjects,
+        disabledSubjectIds: academicSettings?.disabledSubjectIds
       };
 
       await updateAcademicSettings(updated);

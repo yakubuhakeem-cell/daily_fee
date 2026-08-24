@@ -572,6 +572,7 @@ export interface AcademicSettings {
   headteacherName: string;
   headteacherTitle: string;     // "Headmaster" | "Headmistress" | "Principal"
   headteacherSignatureUrl?: string;
+  schoolName?: string;
   schoolMotto: string;
   schoolAddress?: string;
   schoolPhone?: string;
@@ -584,6 +585,11 @@ export interface AcademicSettings {
   showFeeStatusOnReport: boolean;
   showMedalsOnReport?: boolean;
   gradingScale: 'GES_9_POINT' | 'STANDARD_PERCENT';
+  customSubjects?: CurriculumSubject[];
+  disabledSubjectIds?: string[];
+  sbaClassExercisesWeight?: number;
+  sbaHomeworkWeight?: number;
+  sbaProjectWeight?: number;
 }
 
 

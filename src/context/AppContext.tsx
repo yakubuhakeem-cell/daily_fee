@@ -1824,7 +1824,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setTeacherAllocations(mergedAllocations);
         idbEngine.setItem('s_teacher_allocations', mergedAllocations);
 
-        const mergedSettings = dbAcademicSettings || localAcademicSettings || DEFAULT_ACADEMIC_SETTINGS;
+        const mergedSettings = {
+          ...DEFAULT_ACADEMIC_SETTINGS,
+          ...(localAcademicSettings || {}),
+          ...(dbAcademicSettings || {})
+        };
         setAcademicSettings(mergedSettings);
         idbEngine.setItem('s_academic_settings', mergedSettings);
 
@@ -2257,12 +2261,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       try {
-        if (localSettings) {
-          setAcademicSettings(localSettings);
-        } else {
-          setAcademicSettings(DEFAULT_ACADEMIC_SETTINGS);
-          idbEngine.setItem('s_academic_settings', DEFAULT_ACADEMIC_SETTINGS);
-        }
+        const mergedLocal = {
+          ...DEFAULT_ACADEMIC_SETTINGS,
+          ...(localSettings || {})
+        };
+        setAcademicSettings(mergedLocal);
+        idbEngine.setItem('s_academic_settings', mergedLocal);
       } catch (e) {
         setAcademicSettings(DEFAULT_ACADEMIC_SETTINGS);
       }
@@ -4428,9 +4432,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (success) {
         setFirebaseConnected(true);
         clearPendingLocalEdits();
-        return { success: true, message: `Successfully synced ${sToSeed.length} pupils and ${pToSeed.length} payment records to Cloud Firestore!` };
+        return { success: true, message: `Successfully synced ${sToSeed.length} pupils and ${pToSeed.length} payment records!` };
       }
-      return { success: false, message: 'Seeding rejected. Make sure target database is reachable.' };
+      return { success: false, message: 'Database synchronization could not connect to server or Cloud database. Please check connection and retry.' };
     } catch (e) {
       console.warn("Seeding error caught:", e);
       let errorStr = e instanceof Error ? e.message : String(e);
@@ -6220,15 +6224,14 @@ School Administration Financial Audit System (MFA Secure)
   };
 
   const updateAcademicSettings = async (settings: AcademicSettings) => {
-    setAcademicSettings(settings);
-    idbEngine.setItem('s_academic_settings', settings);
+    const merged = { ...DEFAULT_ACADEMIC_SETTINGS, ...settings };
+    setAcademicSettings(merged);
+    await idbEngine.setItem('s_academic_settings', merged);
 
-    if (db.isActive()) {
-      try {
-        await db.saveAcademicSettings(settings);
-      } catch (err) {
-        console.error("Failed to save academic settings to cloud:", err);
-      }
+    try {
+      await db.saveAcademicSettings(merged);
+    } catch (err) {
+      console.error("Failed to save academic settings to cloud:", err);
     }
   };
 

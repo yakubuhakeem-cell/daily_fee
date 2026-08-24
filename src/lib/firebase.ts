@@ -16,6 +16,7 @@ import {
   initializeFirestore, 
   collection, 
   doc, 
+  getDoc,
   getDocs, 
   setDoc, 
   deleteDoc, 
@@ -25,6 +26,7 @@ import {
 } from 'firebase/firestore';
 import rawFirebaseConfig from '../../firebase-applet-config.json';
 import { Student, PaymentRecord, UserAccount, Term, Expense, WorkerSalary, SystemSettings, BudgetTarget, AuditLog, TeacherEvaluation, JournalEntry, TrashItem, ExamsPayment, ExamsExpense, ExamsSettings, AcademicAssessment, TerminalReport, TeacherAllocation, AcademicSettings } from '../types';
+import { DEFAULT_ACADEMIC_SETTINGS } from '../utils/ghanaCurriculum';
 
 export { onAuthStateChanged };
 
@@ -192,37 +194,64 @@ async function writeBatchChunked<T>(
         const itemRef = doc(firestoreDb, collectionName, id);
         batch.set(itemRef, cleanItem, { merge: true });
       }
-      await withTimeout(batch.commit(), 30000, `writeBatchChunked:${collectionName}`);
+      await withTimeout(batch.commit(), 6000, `writeBatchChunked:${collectionName}`);
     }
     return true;
   } catch (err: any) {
-    console.warn(`writeBatchChunked failed for collection ${collectionName}, trying individual setDoc fallback:`, err);
-    // Resilience fallback: set items individually so a single problematic item does not fail the whole seed
+    console.warn(`writeBatchChunked direct Firestore batch failed for ${collectionName} (${err?.message || err}), attempting server bridge fallback:`, err);
+    // Direct server endpoint fallback
     try {
-      for (const item of items) {
-        const id = safeDocId(getId(item));
-        const cleanItem = sanitizeFirestoreDoc(item);
-        await withTimeout(setDoc(doc(firestoreDb, collectionName, id), cleanItem, { merge: true }), 8000, `fallbackSetDoc:${collectionName}`);
-      }
-      return true;
-    } catch (fallbackErr) {
-      console.error(`Individual setDoc fallback failed for ${collectionName}:`, fallbackErr);
-      // Secondary fallback to local express server if available
-      try {
-        const res = await fetch(`/api/${collectionName}/batch`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(items),
-        });
-        return res.ok;
-      } catch {
-        return false;
-      }
-    }
+      const res = await fetch(`/api/${collectionName}/batch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(items),
+      });
+      if (res.ok) return true;
+    } catch (_) {}
+
+    try {
+      const res2 = await fetch(`/api/${collectionName}/bulk`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(items),
+      });
+      if (res2.ok) return true;
+    } catch (_) {}
+
+    return false;
   }
 }
 
+let clientFirestoreQuotaExceededUntil = 0;
+
+export function isClientFirestoreAvailable(): boolean {
+  if (!firebaseConfig.projectId) return false;
+  if (Date.now() < clientFirestoreQuotaExceededUntil) return false;
+  return true;
+}
+
+export function handleClientFirestoreError(context: string, err: any) {
+  const errMsg = err?.message || String(err);
+  if (errMsg.includes("Quota limit exceeded") || errMsg.includes("Quota exceeded") || errMsg.includes("quota metric") || errMsg.includes("RESOURCE_EXHAUSTED")) {
+    const isFirst = Date.now() >= clientFirestoreQuotaExceededUntil;
+    clientFirestoreQuotaExceededUntil = Date.now() + 15 * 60 * 1000;
+    if (isFirst) {
+      console.warn(`[Firestore Client Quota Notice] Free daily read units limit reached on Cloud Firestore. Switching client seamlessly to local and server API cache: ${context}`);
+    }
+    return;
+  }
+  console.warn(`Firestore ${context} failed:`, err);
+}
+
 async function getCollectionDocs<T>(collectionName: string): Promise<T[] | null> {
+  if (!isClientFirestoreAvailable()) {
+    try {
+      const res = await fetch(`/api/${collectionName}`);
+      if (res.ok) return await res.json();
+    } catch (_) {}
+    return null;
+  }
+
   try {
     const qSnapshot = await withTimeout(getDocs(collection(firestoreDb, collectionName)), 15000, `getDocs:${collectionName}`);
     const list: T[] = [];
@@ -231,7 +260,7 @@ async function getCollectionDocs<T>(collectionName: string): Promise<T[] | null>
     });
     return list;
   } catch (err) {
-    console.warn(`Firestore getDocs failed for collection ${collectionName}, trying server fallback:`, err);
+    handleClientFirestoreError(`getDocs:${collectionName}`, err);
     try {
       const res = await fetch(`/api/${collectionName}`);
       if (res.ok) return await res.json();
@@ -502,46 +531,76 @@ export const db = {
     payments?: PaymentRecord[],
     terms?: Term[]
   ): Promise<boolean> {
+    let uList: UserAccount[] = [];
+    let sList: Student[] = [];
+    let pList: PaymentRecord[] = [];
+    let tList: Term[] = [];
+    let expList: any[] = [];
+    let salList: any[] = [];
+    let epList: any[] = [];
+    let eeList: any[] = [];
+    let esSet: any = null;
+    let btList: any[] = [];
+    let wlList: any[] = [];
+    let teList: any[] = [];
+    let jeList: any[] = [];
+    let sysSet: any = null;
+    let acadSet: any = null;
+    let acadAssess: any[] = [];
+    let termReps: any[] = [];
+    let teachAllocs: any[] = [];
+
+    if (usersOrPayload && !Array.isArray(usersOrPayload) && typeof usersOrPayload === 'object') {
+      uList = usersOrPayload.users || [];
+      sList = usersOrPayload.students || [];
+      pList = usersOrPayload.payments || [];
+      tList = usersOrPayload.terms || [];
+      expList = usersOrPayload.expenses || [];
+      salList = usersOrPayload.salaries || [];
+      epList = usersOrPayload.examsPayments || [];
+      eeList = usersOrPayload.examsExpenses || [];
+      esSet = usersOrPayload.examsSettings || null;
+      btList = usersOrPayload.budgetTargets || [];
+      wlList = usersOrPayload.whatsappLogs || [];
+      teList = usersOrPayload.teacherEvaluations || [];
+      jeList = usersOrPayload.journalEntries || [];
+      sysSet = usersOrPayload.systemSettings || null;
+      acadSet = usersOrPayload.academicSettings || null;
+      acadAssess = usersOrPayload.academicAssessments || [];
+      termReps = usersOrPayload.terminalReports || [];
+      teachAllocs = usersOrPayload.teacherAllocations || [];
+    } else {
+      uList = usersOrPayload || [];
+      sList = students || [];
+      pList = payments || [];
+      tList = terms || [];
+    }
+
+    const payload = {
+      users: uList,
+      students: sList,
+      payments: pList,
+      terms: tList,
+      expenses: expList,
+      salaries: salList,
+      examsPayments: epList,
+      examsExpenses: eeList,
+      examsSettings: esSet,
+      budgetTargets: btList,
+      whatsappLogs: wlList,
+      teacherEvaluations: teList,
+      journalEntries: jeList,
+      systemSettings: sysSet,
+      academicSettings: acadSet,
+      academicAssessments: acadAssess,
+      terminalReports: termReps,
+      teacherAllocations: teachAllocs,
+    };
+
+    console.log(`[Database Sync] Synchronizing ${uList.length} users, ${sList.length} pupils, ${pList.length} payments, ${tList.length} terms...`);
+
+    let firestoreSucceeded = false;
     try {
-      let uList: UserAccount[] = [];
-      let sList: Student[] = [];
-      let pList: PaymentRecord[] = [];
-      let tList: Term[] = [];
-      let expList: any[] = [];
-      let salList: any[] = [];
-      let epList: any[] = [];
-      let eeList: any[] = [];
-      let esSet: any = null;
-      let btList: any[] = [];
-      let wlList: any[] = [];
-      let teList: any[] = [];
-      let jeList: any[] = [];
-      let sysSet: any = null;
-
-      if (usersOrPayload && !Array.isArray(usersOrPayload) && typeof usersOrPayload === 'object') {
-        uList = usersOrPayload.users || [];
-        sList = usersOrPayload.students || [];
-        pList = usersOrPayload.payments || [];
-        tList = usersOrPayload.terms || [];
-        expList = usersOrPayload.expenses || [];
-        salList = usersOrPayload.salaries || [];
-        epList = usersOrPayload.examsPayments || [];
-        eeList = usersOrPayload.examsExpenses || [];
-        esSet = usersOrPayload.examsSettings || null;
-        btList = usersOrPayload.budgetTargets || [];
-        wlList = usersOrPayload.whatsappLogs || [];
-        teList = usersOrPayload.teacherEvaluations || [];
-        jeList = usersOrPayload.journalEntries || [];
-        sysSet = usersOrPayload.systemSettings || null;
-      } else {
-        uList = usersOrPayload || [];
-        sList = students || [];
-        pList = payments || [];
-        tList = terms || [];
-      }
-
-      console.log(`[Cloud Seed] Batch seeding Firestore: ${uList.length} users, ${sList.length} students, ${pList.length} payments, ${tList.length} terms, ${epList.length} examsPayments...`);
-
       const tasks: Promise<any>[] = [];
       if (uList.length > 0) tasks.push(writeBatchChunked("users", uList, u => u.id));
       if (sList.length > 0) tasks.push(writeBatchChunked("students", sList, s => s.id));
@@ -555,39 +614,48 @@ export const db = {
       if (wlList.length > 0) tasks.push(writeBatchChunked("whatsappLogs", wlList, w => w.id));
       if (teList.length > 0) tasks.push(writeBatchChunked("evaluations", teList, te => te.id));
       if (jeList.length > 0) tasks.push(writeBatchChunked("journal_entries", jeList, je => je.id));
+      if (acadAssess.length > 0) tasks.push(writeBatchChunked("academic_assessments", acadAssess, a => a.id));
+      if (termReps.length > 0) tasks.push(writeBatchChunked("terminal_reports", termReps, r => r.id));
+      if (teachAllocs.length > 0) tasks.push(writeBatchChunked("teacher_allocations", teachAllocs, ta => ta.id));
 
       if (esSet) {
         const cleanEs = sanitizeFirestoreDoc(esSet);
-        tasks.push(withTimeout(setDoc(doc(firestoreDb, "examsSettings", "main"), cleanEs, { merge: true }), 10000, "examsSettings"));
+        tasks.push(withTimeout(setDoc(doc(firestoreDb, "examsSettings", "main"), cleanEs, { merge: true }), 5000, "examsSettings").catch(() => {}));
       }
       if (sysSet) {
         const cleanSys = sanitizeFirestoreDoc(sysSet);
-        tasks.push(withTimeout(setDoc(doc(firestoreDb, "systemSettings", "main"), cleanSys, { merge: true }), 10000, "systemSettings"));
+        tasks.push(withTimeout(setDoc(doc(firestoreDb, "systemSettings", "main"), cleanSys, { merge: true }), 5000, "systemSettings").catch(() => {}));
+      }
+      if (acadSet) {
+        const cleanAcad = sanitizeFirestoreDoc(acadSet);
+        tasks.push(withTimeout(setDoc(doc(firestoreDb, "settings", "academic"), cleanAcad, { merge: true }), 5000, "academicSettings").catch(() => {}));
       }
 
-      await Promise.all(tasks);
+      const results = await Promise.allSettled(tasks);
+      const someSuccess = results.some(r => r.status === 'fulfilled' && r.value !== false);
+      if (someSuccess || tasks.length === 0) {
+        firestoreSucceeded = true;
+      }
+    } catch (e: any) {
+      console.warn("Direct Firestore batch sync warning:", e?.message || e);
+    }
 
-      // Trigger local backend sync in background if dev server running
-      fetch("/api/seed", {
+    // Always mirror to backend server /api/seed to keep server persistence in sync
+    let serverSucceeded = false;
+    try {
+      const res = await fetch("/api/seed", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ users: uList, students: sList, payments: pList, terms: tList, expenses: expList, salaries: salList, systemSettings: sysSet }),
-      }).catch(() => {});
-
-      return true;
-    } catch (e) {
-      console.error("seedTables direct Firestore error: ", e);
-      try {
-        const res = await fetch("/api/seed", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(usersOrPayload),
-        });
-        return res.ok;
-      } catch {
-        return false;
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        serverSucceeded = true;
       }
+    } catch (serverErr) {
+      console.warn("Backend server /api/seed fetch warning:", serverErr);
     }
+
+    return firestoreSucceeded || serverSucceeded;
   },
 
   async getTerms(): Promise<Term[] | null> {
@@ -1367,19 +1435,25 @@ export const db = {
   async getAcademicSettings(): Promise<AcademicSettings | null> {
     try {
       const snapshot = await withTimeout(
-        getDocFromServer(doc(firestoreDb, "settings", "academic")),
-        5000,
+        getDoc(doc(firestoreDb, "settings", "academic")),
+        3500,
         "getAcademicSettings"
       ).catch(() => null);
       if (snapshot && snapshot.exists()) {
-        return snapshot.data() as AcademicSettings;
+        const data = snapshot.data() as AcademicSettings;
+        return { ...DEFAULT_ACADEMIC_SETTINGS, ...data };
       }
       const res = await fetch("/api/settings/academic").catch(() => null);
-      if (res && res.ok) return await res.json();
-      return null;
+      if (res && res.ok) {
+        const data = await res.json();
+        if (data && typeof data === 'object') {
+          return { ...DEFAULT_ACADEMIC_SETTINGS, ...data };
+        }
+      }
+      return DEFAULT_ACADEMIC_SETTINGS;
     } catch (e) {
-      console.error("getAcademicSettings error: ", e);
-      return null;
+      console.warn("getAcademicSettings error fallback:", e);
+      return DEFAULT_ACADEMIC_SETTINGS;
     }
   },
 

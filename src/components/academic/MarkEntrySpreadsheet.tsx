@@ -66,7 +66,10 @@ export const MarkEntrySpreadsheet: React.FC<MarkEntrySpreadsheetProps> = ({
   } = useApp();
 
   const [selectedClass, setSelectedClass] = useState<StudentClass>(initialClass);
-  const classSubjects = useMemo(() => getSubjectsForClass(selectedClass), [selectedClass]);
+  const classSubjects = useMemo(() => 
+    getSubjectsForClass(selectedClass, academicSettings?.customSubjects, academicSettings?.disabledSubjectIds), 
+    [selectedClass, academicSettings?.customSubjects, academicSettings?.disabledSubjectIds]
+  );
   
   const [selectedSubjectId, setSelectedSubjectId] = useState<string>(() => {
     if (initialSubjectId && classSubjects.some(s => s.id === initialSubjectId)) {

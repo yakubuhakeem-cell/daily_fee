@@ -5,6 +5,20 @@
 
 import { CurriculumSubject, GESGrade, NaCCALevel, StudentClass, AcademicSettings, AcademicAssessment, Student } from '../types';
 
+export type { CurriculumSubject };
+
+export const GES_9_POINT_SCALE = [
+  { grade: 1, minScore: 80, maxScore: 100, description: 'Advanced (Highest)', level: 'Advanced' },
+  { grade: 2, minScore: 75, maxScore: 79, description: 'Proficient (Higher)', level: 'Proficient' },
+  { grade: 3, minScore: 70, maxScore: 74, description: 'Proficient (High)', level: 'Proficient' },
+  { grade: 4, minScore: 65, maxScore: 69, description: 'Proficient (High Average)', level: 'Proficient' },
+  { grade: 5, minScore: 60, maxScore: 64, description: 'Developing (Average)', level: 'Developing' },
+  { grade: 6, minScore: 50, maxScore: 59, description: 'Developing (Low Average)', level: 'Developing' },
+  { grade: 7, minScore: 45, maxScore: 49, description: 'Developing (Low)', level: 'Developing' },
+  { grade: 8, minScore: 35, maxScore: 44, description: 'Beginning (Lower)', level: 'Beginning' },
+  { grade: 9, minScore: 0, maxScore: 34, description: 'Beginning (Lowest)', level: 'Beginning' },
+] as const;
+
 export const DEFAULT_GHANA_SUBJECTS: CurriculumSubject[] = [
   // Kindergarten (KG1 - KG2)
   {
@@ -293,6 +307,7 @@ export const DEFAULT_ACADEMIC_SETTINGS: AcademicSettings = {
   headteacherName: 'Yakubu Hakeem',
   headteacherTitle: 'Headmaster',
   headteacherSignatureUrl: '',
+  schoolName: 'SAAKO HOLY CHILD ACADEMY',
   schoolMotto: 'Holiness is our Key',
   schoolAddress: 'P. O. Box LS 15, Sawla-Savannah Region, Ghana.',
   schoolPhone: '0545029200 / 0507274133',
@@ -304,7 +319,12 @@ export const DEFAULT_ACADEMIC_SETTINGS: AcademicSettings = {
   showHeadteacherRemarks: true,
   showFeeStatusOnReport: true,
   showMedalsOnReport: true,
-  gradingScale: 'GES_9_POINT'
+  gradingScale: 'GES_9_POINT',
+  customSubjects: DEFAULT_GHANA_SUBJECTS,
+  disabledSubjectIds: [],
+  sbaClassExercisesWeight: 20,
+  sbaHomeworkWeight: 15,
+  sbaProjectWeight: 15
 };
 
 export interface RankMedalInfo {
@@ -361,7 +381,11 @@ export function getRankMedal(position: number): RankMedalInfo | null {
   return null;
 }
 
-export function getSubjectsForClass(className: StudentClass, allSubjects: CurriculumSubject[] = DEFAULT_GHANA_SUBJECTS): CurriculumSubject[] {
+export function getSubjectsForClass(
+  className: StudentClass, 
+  allSubjects?: CurriculumSubject[],
+  disabledSubjectIds?: string[]
+): CurriculumSubject[] {
   let level: 'KG' | 'Primary' | 'JHS';
   if (['Nursery', 'KG1', 'KG2'].includes(className)) {
     level = 'KG';
@@ -370,9 +394,14 @@ export function getSubjectsForClass(className: StudentClass, allSubjects: Curric
   } else {
     level = 'JHS';
   }
-  return allSubjects
+  const source = (allSubjects && Array.isArray(allSubjects) && allSubjects.length > 0) 
+    ? allSubjects 
+    : DEFAULT_GHANA_SUBJECTS;
+  const disabledSet = new Set(disabledSubjectIds || []);
+  return source
+    .filter(s => s && s.id && !disabledSet.has(s.id))
     .filter(s => s.level === level || s.level === 'All')
-    .sort((a, b) => a.order - b.order);
+    .sort((a, b) => (a.order || 0) - (b.order || 0));
 }
 
 /**

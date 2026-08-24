@@ -42,7 +42,10 @@ export const TeacherAllocationView: React.FC = () => {
   const [registerError, setRegisterError] = useState<string | null>(null);
 
   const academicYear = academicSettings?.academicYear || '2025/2026';
-  const classSubjects = useMemo(() => getSubjectsForClass(selectedClass), [selectedClass]);
+  const classSubjects = useMemo(() => 
+    getSubjectsForClass(selectedClass, academicSettings?.customSubjects, academicSettings?.disabledSubjectIds), 
+    [selectedClass, academicSettings?.customSubjects, academicSettings?.disabledSubjectIds]
+  );
 
   // Teachers / Staff list - Case-insensitive matching for all staff roles
   const staffMembers = useMemo(() => {

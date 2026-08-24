@@ -277,7 +277,11 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
   // Get marks for active student
   const studentMarks = useMemo(() => {
     if (!activeStudent) return [];
-    const subjects = getSubjectsForClass(activeStudent.class);
+    const subjects = getSubjectsForClass(
+      activeStudent.class, 
+      academicSettings?.customSubjects, 
+      academicSettings?.disabledSubjectIds
+    );
     
     return subjects.map(sub => {
       const mark = assessmentByKeyMap.get(`${activeStudent.id}_${sub.id}`);
@@ -294,7 +298,7 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
         remark: mark?.teacherRemark ?? '-'
       };
     });
-  }, [activeStudent, assessmentByKeyMap]);
+  }, [activeStudent, assessmentByKeyMap, academicSettings?.customSubjects, academicSettings?.disabledSubjectIds]);
 
   // Existing saved report or defaults
   const currentSavedReport = useMemo(() => {
@@ -531,7 +535,11 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
             aggregate: 6
           };
 
-          const pSubjects = getSubjectsForClass(pupil.class);
+          const pSubjects = getSubjectsForClass(
+            pupil.class, 
+            academicSettings?.customSubjects, 
+            academicSettings?.disabledSubjectIds
+          );
           const pMarks = pSubjects.map(sub => {
             const mark = assessmentByKeyMap.get(`${pupil.id}_${sub.id}`);
             return {

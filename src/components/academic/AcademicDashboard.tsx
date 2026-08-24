@@ -17,9 +17,10 @@ import { AcademicAnalyticsView } from './AcademicAnalyticsView';
 import { TerminalReportGenerator } from './TerminalReportGenerator';
 import { TeacherAllocationView } from './TeacherAllocationView';
 import { AcademicSettingsModal } from './AcademicSettingsModal';
+import { CurriculumSettingsView } from './CurriculumSettingsView';
 import { isHeadOrAdmin, getTeacherAssignedClasses } from '../../utils/rbacUtils';
 
-type AcademicSubTab = 'roster' | 'spreadsheet' | 'analytics' | 'reports' | 'allocation';
+type AcademicSubTab = 'roster' | 'spreadsheet' | 'analytics' | 'reports' | 'allocation' | 'curriculum';
 
 export const AcademicDashboard: React.FC = () => {
   const { 
@@ -104,15 +105,17 @@ export const AcademicDashboard: React.FC = () => {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            {hasAdminAuthority && (
-              <button
-                onClick={() => setIsSettingsModalOpen(true)}
-                className="bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-700 px-3.5 py-2 text-xs font-mono font-bold flex items-center gap-2 transition-all cursor-pointer shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
-              >
-                <Sliders size={14} className="text-amber-400" />
-                <span>Curriculum Settings</span>
-              </button>
-            )}
+            <button
+              onClick={() => setActiveSubTab('curriculum')}
+              className={`border px-3.5 py-2 text-xs font-mono font-bold flex items-center gap-2 transition-all cursor-pointer shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] ${
+                activeSubTab === 'curriculum'
+                  ? 'bg-amber-400 text-black border-black'
+                  : 'bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border-neutral-700'
+              }`}
+            >
+              <Sliders size={14} className={activeSubTab === 'curriculum' ? 'text-black' : 'text-amber-400'} />
+              <span>Curriculum & Standards</span>
+            </button>
 
             <button
               onClick={() => setActiveSubTab('reports')}
@@ -174,6 +177,18 @@ export const AcademicDashboard: React.FC = () => {
             <span>4. Terminal Report Cards</span>
           </button>
 
+          <button
+            onClick={() => setActiveSubTab('curriculum')}
+            className={`px-4 py-2 text-xs font-mono font-bold uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
+              activeSubTab === 'curriculum'
+                ? 'bg-amber-400 text-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]'
+                : isLight ? 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200' : 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700'
+            }`}
+          >
+            <Sliders size={14} />
+            <span>5. Curriculum & Standards</span>
+          </button>
+
           {hasAdminAuthority && (
             <button
               onClick={() => setActiveSubTab('allocation')}
@@ -184,7 +199,7 @@ export const AcademicDashboard: React.FC = () => {
               }`}
             >
               <BookOpen size={14} />
-              <span>5. Teacher Allocations</span>
+              <span>6. Teacher Allocations</span>
             </button>
           )}
         </div>
@@ -217,6 +232,10 @@ export const AcademicDashboard: React.FC = () => {
           <TerminalReportGenerator
             initialStudentId={selectedStudentForReport}
           />
+        )}
+
+        {activeSubTab === 'curriculum' && (
+          <CurriculumSettingsView />
         )}
 
         {activeSubTab === 'allocation' && (
