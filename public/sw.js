@@ -1,5 +1,5 @@
-const STATIC_CACHE_NAME = 'holy-child-static-v8';
-const DYNAMIC_CACHE_NAME = 'holy-child-dynamic-v8';
+const STATIC_CACHE_NAME = 'holy-child-static-v9';
+const DYNAMIC_CACHE_NAME = 'holy-child-dynamic-v9';
 
 const ASSETS_TO_CACHE = [
   '/',

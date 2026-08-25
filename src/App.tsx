@@ -401,17 +401,15 @@ function NavigationWrapper() {
   };
 
   React.useEffect(() => {
-    // Intercept default window.print to handle iframe sandboxing constraints
+    // Intercept default window.print to handle iframe sandboxing constraints gracefully
     const originalPrint = window.print;
     window.print = function() {
-      const isIframe = window.self !== window.top;
-      if (isIframe) {
-        window.dispatchEvent(new CustomEvent('show-print-iframe-warning'));
-      } else {
-        try {
-          originalPrint.call(window);
-        } catch (e) {
-          console.warn("Native print interface blocked:", e);
+      try {
+        originalPrint.call(window);
+      } catch (e) {
+        console.warn("Native print interface blocked:", e);
+        const isIframe = window.self !== window.top;
+        if (isIframe) {
           window.dispatchEvent(new CustomEvent('show-print-iframe-warning'));
         }
       }
@@ -836,7 +834,7 @@ function NavigationWrapper() {
       {showInstallBanner && deferredPrompt && (
         <div className="bg-emerald-600 text-white px-8 py-3.5 flex flex-col md:flex-row items-center justify-between gap-4 text-xs font-bold border-b-4 border-emerald-700 animate-fade-in shrink-0 transition-all duration-350 no-print z-50">
           <div className="flex items-center gap-3">
-            <span className="text-sm">📱</span>
+            <SchoolLogo size={34} className="shrink-0 border-2 border-white/50 shadow-sm" lightBackground={true} />
             <span className="leading-relaxed">
               <strong>Save Tracker to Home Screen:</strong> Add the <strong>{(systemSettings?.schoolName || 'SAAKO HOLY CHILD ACADEMY').toUpperCase()}</strong> daily tracker to your phone or desktop for instant full-screen access and optimized offline cache!
             </span>

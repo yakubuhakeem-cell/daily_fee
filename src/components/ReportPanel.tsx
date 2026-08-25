@@ -20,6 +20,7 @@ import { DatabaseTab } from './DatabaseTab';
 import { CanteenBookletModal } from './CanteenBookletModal';
 import { PunctualityAwardsModal } from './PunctualityAwardsModal';
 import { isHolidayOrVacationDate } from '../utils/termUtils';
+import { printElementById } from '../utils/printUtils';
 import * as XLSX from 'xlsx';
 
 export const ReportPanel: React.FC = React.memo(() => {
@@ -825,10 +826,11 @@ export const ReportPanel: React.FC = React.memo(() => {
 
   // Direct print document trigger
   const handlePrintDailyDocument = () => {
-    if (typeof window !== 'undefined') {
-      window.focus();
-      window.print();
-    }
+    printElementById('print-quick-daily-area', {
+      title: `Daily Transactions Audit - ${quickDailyDate || currentDate}`,
+      orientation: 'portrait',
+      pageMargin: '8mm'
+    });
   };
 
   // WhatsApp / Clipboard Share Summary

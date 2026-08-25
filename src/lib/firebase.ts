@@ -176,7 +176,7 @@ async function testConnection() {
 }
 testConnection();
 
-// Helper to perform Firestore batch writes in chunks of <= 300 items with deep sanitization
+// Helper to perform Firestore batch writes in chunks of <= 200 items with deep sanitization
 async function writeBatchChunked<T>(
   collectionName: string, 
   items: T[], 
@@ -184,7 +184,7 @@ async function writeBatchChunked<T>(
 ): Promise<boolean> {
   if (!items || items.length === 0) return true;
   try {
-    const CHUNK_SIZE = 300;
+    const CHUNK_SIZE = 200;
     for (let i = 0; i < items.length; i += CHUNK_SIZE) {
       const chunk = items.slice(i, i + CHUNK_SIZE);
       const batch = writeBatch(firestoreDb);
@@ -194,7 +194,7 @@ async function writeBatchChunked<T>(
         const itemRef = doc(firestoreDb, collectionName, id);
         batch.set(itemRef, cleanItem, { merge: true });
       }
-      await withTimeout(batch.commit(), 6000, `writeBatchChunked:${collectionName}`);
+      await withTimeout(batch.commit(), 15000, `writeBatchChunked:${collectionName}`);
     }
     return true;
   } catch (err: any) {
@@ -601,41 +601,37 @@ export const db = {
 
     let firestoreSucceeded = false;
     try {
-      const tasks: Promise<any>[] = [];
-      if (uList.length > 0) tasks.push(writeBatchChunked("users", uList, u => u.id));
-      if (sList.length > 0) tasks.push(writeBatchChunked("students", sList, s => s.id));
-      if (pList.length > 0) tasks.push(writeBatchChunked("payments", pList, p => p.id || `${p.studentId}_${p.date}`));
-      if (tList.length > 0) tasks.push(writeBatchChunked("terms", tList, t => t.id));
-      if (expList.length > 0) tasks.push(writeBatchChunked("expenses", expList, e => e.id));
-      if (salList.length > 0) tasks.push(writeBatchChunked("salaries", salList, s => s.id));
-      if (epList.length > 0) tasks.push(writeBatchChunked("examsPayments", epList, ep => ep.id));
-      if (eeList.length > 0) tasks.push(writeBatchChunked("examsExpenses", eeList, ee => ee.id));
-      if (btList.length > 0) tasks.push(writeBatchChunked("budgetTargets", btList, b => b.id));
-      if (wlList.length > 0) tasks.push(writeBatchChunked("whatsappLogs", wlList, w => w.id));
-      if (teList.length > 0) tasks.push(writeBatchChunked("evaluations", teList, te => te.id));
-      if (jeList.length > 0) tasks.push(writeBatchChunked("journal_entries", jeList, je => je.id));
-      if (acadAssess.length > 0) tasks.push(writeBatchChunked("academic_assessments", acadAssess, a => a.id));
-      if (termReps.length > 0) tasks.push(writeBatchChunked("terminal_reports", termReps, r => r.id));
-      if (teachAllocs.length > 0) tasks.push(writeBatchChunked("teacher_allocations", teachAllocs, ta => ta.id));
+      // Execute collection batch syncs sequentially to ensure connection stability
+      if (uList.length > 0) await writeBatchChunked("users", uList, u => u.id);
+      if (sList.length > 0) await writeBatchChunked("students", sList, s => s.id);
+      if (pList.length > 0) await writeBatchChunked("payments", pList, p => p.id || `${p.studentId}_${p.date}`);
+      if (tList.length > 0) await writeBatchChunked("terms", tList, t => t.id);
+      if (expList.length > 0) await writeBatchChunked("expenses", expList, e => e.id);
+      if (salList.length > 0) await writeBatchChunked("salaries", salList, s => s.id);
+      if (epList.length > 0) await writeBatchChunked("examsPayments", epList, ep => ep.id);
+      if (eeList.length > 0) await writeBatchChunked("examsExpenses", eeList, ee => ee.id);
+      if (btList.length > 0) await writeBatchChunked("budgetTargets", btList, b => b.id);
+      if (wlList.length > 0) await writeBatchChunked("whatsappLogs", wlList, w => w.id);
+      if (teList.length > 0) await writeBatchChunked("evaluations", teList, te => te.id);
+      if (jeList.length > 0) await writeBatchChunked("journal_entries", jeList, je => je.id);
+      if (acadAssess.length > 0) await writeBatchChunked("academic_assessments", acadAssess, a => a.id);
+      if (termReps.length > 0) await writeBatchChunked("terminal_reports", termReps, r => r.id);
+      if (teachAllocs.length > 0) await writeBatchChunked("teacher_allocations", teachAllocs, ta => ta.id);
 
       if (esSet) {
         const cleanEs = sanitizeFirestoreDoc(esSet);
-        tasks.push(withTimeout(setDoc(doc(firestoreDb, "examsSettings", "main"), cleanEs, { merge: true }), 5000, "examsSettings").catch(() => {}));
+        await withTimeout(setDoc(doc(firestoreDb, "examsSettings", "main"), cleanEs, { merge: true }), 10000, "examsSettings").catch(() => {});
       }
       if (sysSet) {
         const cleanSys = sanitizeFirestoreDoc(sysSet);
-        tasks.push(withTimeout(setDoc(doc(firestoreDb, "systemSettings", "main"), cleanSys, { merge: true }), 5000, "systemSettings").catch(() => {}));
+        await withTimeout(setDoc(doc(firestoreDb, "systemSettings", "main"), cleanSys, { merge: true }), 10000, "systemSettings").catch(() => {});
       }
       if (acadSet) {
         const cleanAcad = sanitizeFirestoreDoc(acadSet);
-        tasks.push(withTimeout(setDoc(doc(firestoreDb, "settings", "academic"), cleanAcad, { merge: true }), 5000, "academicSettings").catch(() => {}));
+        await withTimeout(setDoc(doc(firestoreDb, "settings", "academic"), cleanAcad, { merge: true }), 10000, "academicSettings").catch(() => {});
       }
 
-      const results = await Promise.allSettled(tasks);
-      const someSuccess = results.some(r => r.status === 'fulfilled' && r.value !== false);
-      if (someSuccess || tasks.length === 0) {
-        firestoreSucceeded = true;
-      }
+      firestoreSucceeded = true;
     } catch (e: any) {
       console.warn("Direct Firestore batch sync warning:", e?.message || e);
     }

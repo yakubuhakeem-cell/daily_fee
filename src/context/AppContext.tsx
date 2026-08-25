@@ -1735,11 +1735,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
           if (unsynced.length > 0) {
             console.log(`[Self-Healing] Found ${unsynced.length} offline-created or modified items in "${collectionLabel}". Syncing to cloud...`);
-            unsynced.forEach(item => {
-              saveToCloud(item)
-                .then(() => console.log(`[Self-Healing] Successfully synced item ${item.id} of "${collectionLabel}"`))
-                .catch(err => console.error(`[Self-Healing] Failed to sync item ${item.id} of "${collectionLabel}":`, err));
-            });
+            if (collectionLabel === 'students' && db.saveStudentsBulk) {
+              db.saveStudentsBulk(unsynced as any);
+            } else if (collectionLabel === 'payments' && db.savePayments) {
+              db.savePayments(unsynced as any);
+            } else {
+              unsynced.forEach(item => {
+                saveToCloud(item)
+                  .then(() => console.log(`[Self-Healing] Successfully synced item ${item.id} of "${collectionLabel}"`))
+                  .catch(err => console.error(`[Self-Healing] Failed to sync item ${item.id} of "${collectionLabel}":`, err));
+              });
+            }
           }
 
           // Enforce strict single-record-per-(studentId, date) for payments
@@ -1939,6 +1945,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Load state from Firebase if configured, otherwise fall back to localStorage
   useEffect(() => {
     initializeData();
+  }, [storageMode]);
+
+  // Multi-device and cross-worker real-time synchronization listener
+  useEffect(() => {
+    if (storageMode !== 'cloud' && !db.isActive()) return;
+
+    let isSyncing = false;
+    const triggerSync = async () => {
+      if (isSyncing || document.visibilityState !== 'visible' || !navigator.onLine) return;
+      isSyncing = true;
+      try {
+        await initializeData();
+      } catch (_) {
+      } finally {
+        isSyncing = false;
+      }
+    };
+
+    const handleFocus = () => {
+      triggerSync();
+    };
+
+    const handleOnline = () => {
+      triggerSync();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        triggerSync();
+      }
+    };
+
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('online', handleOnline);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // Periodic sync check every 25 seconds when in cloud mode
+    const interval = setInterval(() => {
+      triggerSync();
+    }, 25000);
+
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('online', handleOnline);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      clearInterval(interval);
+    };
   }, [storageMode]);
 
     const loadLocalBackup = (

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { SchoolLogo } from './SchoolLogo';
 import { 
   X, 
   Smartphone, 
@@ -61,15 +62,13 @@ export const InstallGuideModal: React.FC<InstallGuideModalProps> = ({
       >
         {/* Header */}
         <div className="flex justify-between items-start border-b border-neutral-800 pb-4">
-          <div className="flex items-start gap-3">
-            <div className="p-2.5 bg-amber-400/10 border border-amber-400 text-amber-300 shrink-0">
-              <Download size={22} className="text-amber-400 animate-bounce" />
-            </div>
+          <div className="flex items-center gap-3">
+            <SchoolLogo size={42} className="shrink-0 border-2 border-amber-400/80 shadow-md" />
             <div>
-              <span className="text-[9px] text-amber-400 font-mono tracking-widest font-black uppercase block">PORTABLE APPLICATION</span>
+              <span className="text-[9px] text-amber-400 font-mono tracking-widest font-black uppercase block">PORTABLE APPLICATION (PWA)</span>
               <h3 className="text-lg font-black uppercase tracking-tight text-white font-mono">Install Web App</h3>
               <p className="text-[10px] text-neutral-400 uppercase mt-0.5 font-mono">
-                Add SAAKO HOLY CHILD ACADEMY to your device
+                {schoolName || 'SAAKO HOLY CHILD ACADEMY'} • Offline Ready
               </p>
             </div>
           </div>

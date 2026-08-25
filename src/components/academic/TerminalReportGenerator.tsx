@@ -25,6 +25,7 @@ import {
 } from '../../utils/ghanaCurriculum';
 import { calculateStudentFeeStatus, isTermPayer } from '../../utils/feeCalculator';
 import { SchoolLogo } from '../SchoolLogo';
+import { printElementById } from '../../utils/printUtils';
 
 interface TerminalReportGeneratorProps {
   initialStudentId?: string;
@@ -388,7 +389,14 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
 
   // Print trigger
   const handlePrint = () => {
-    window.print();
+    const reportTitle = isBatchMode
+      ? `Terminal Reports - Class ${selectedClass}`
+      : `Terminal Report - ${activeStudent?.name || 'Pupil'} (${selectedClass})`;
+    printElementById('print-terminal-reports-container', {
+      title: reportTitle,
+      orientation: 'portrait',
+      pageMargin: '6mm'
+    });
   };
 
   // Switch student
@@ -521,7 +529,7 @@ export const TerminalReportGenerator: React.FC<TerminalReportGeneratorProps> = (
       </div>
 
       {/* SINGLE REPORT VIEW / BATCH REPORT CONTAINER */}
-      <div className="space-y-8">
+      <div id="print-terminal-reports-container" className="space-y-8">
         {(isBatchMode ? classPupils : [activeStudent]).map((pupil, pupilIdx) => {
           if (!pupil) return null;
 

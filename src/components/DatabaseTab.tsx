@@ -837,34 +837,64 @@ Esi Baah,B1,Female,Akwasi Baah,0240007788,Primary,0`;
           </div>
 
           <div className="bg-neutral-950 border-2 border-neutral-850 p-6 flex flex-col justify-between gap-4">
-            <span className="text-[10px] font-black tracking-widest uppercase font-mono text-neutral-500">Cloud Seeding Bridge</span>
-            <h4 className="text-sm font-black uppercase text-white leading-tight font-mono">Bootstrap Local Seeds to Firestore</h4>
-            <p className="text-[11px] text-neutral-400 leading-normal font-medium">
-              Push your offline register records, pupil directories, and recorded payment books immediately into your active Cloud Firebase Firestore database.
-            </p>
-            <button
-              type="button"
-              onClick={async () => {
-                try {
-                  showToast('Triggering Firebase firestore sync sequence...');
-                  const response = await seedFirebaseFromLocal();
-                  showToast(response.message);
-                } catch (err) {
-                  const msg = err instanceof Error ? err.message : String(err);
-                  console.error('Firebase seeding failed:', err);
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-black tracking-widest uppercase font-mono text-neutral-500">Multi-Device Cloud Bridge</span>
+                <span className="text-[10px] font-mono px-2 py-0.5 bg-neutral-900 border border-neutral-800 text-emerald-400 font-bold">
+                  {students.length} Pupils | {payments.length} Payments
+                </span>
+              </div>
+              <h4 className="text-sm font-black uppercase text-white leading-tight font-mono">Synchronize All Connected Devices</h4>
+              <p className="text-[11px] text-neutral-400 leading-normal font-medium">
+                Push all records from this device directly into Cloud Firestore so other workers on phone or laptop see the exact same data instantly.
+              </p>
+            </div>
+            
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button
+                type="button"
+                id="btn-publish-to-firestore"
+                onClick={async () => {
                   try {
-                    const parsed = JSON.parse(msg);
-                    showToast(`Failed: ${parsed.error || 'Check database permissions / rules.'}`);
-                  } catch {
-                    showToast(`Failed: ${msg.slice(0, 80)}`);
+                    showToast('Syncing all pupils, payments, and settings to Firestore...');
+                    const response = await seedFirebaseFromLocal();
+                    showToast(response.message);
+                    await retryFirebaseConnection();
+                  } catch (err) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    console.error('Firebase seeding failed:', err);
+                    try {
+                      const parsed = JSON.parse(msg);
+                      showToast(`Failed: ${parsed.error || 'Check database permissions / rules.'}`);
+                    } catch {
+                      showToast(`Failed: ${msg.slice(0, 80)}`);
+                    }
                   }
-                }
-              }}
-              className="w-full py-2.5 text-xs font-black bg-amber-400 hover:bg-amber-350 text-black uppercase tracking-widest cursor-pointer transition-colors flex items-center justify-center gap-2 font-mono"
-            >
-              <RefreshCw size={14} />
-              Publish To Firestore
-            </button>
+                }}
+                className="py-2.5 px-3 text-xs font-black bg-amber-400 hover:bg-amber-350 text-black uppercase tracking-wider cursor-pointer transition-colors flex items-center justify-center gap-1.5 font-mono"
+              >
+                <UploadCloud size={14} />
+                Push to Cloud
+              </button>
+
+              <button
+                type="button"
+                id="btn-pull-from-firestore"
+                onClick={async () => {
+                  try {
+                    showToast('Fetching latest records from Cloud Firestore...');
+                    await retryFirebaseConnection();
+                    showToast('Successfully synchronized latest data from Cloud!');
+                  } catch (err) {
+                    showToast('Cloud pull failed. Check internet connection.');
+                  }
+                }}
+                className="py-2.5 px-3 text-xs font-black bg-neutral-800 hover:bg-neutral-700 text-white uppercase tracking-wider cursor-pointer transition-colors flex items-center justify-center gap-1.5 font-mono border border-neutral-700"
+              >
+                <RefreshCw size={14} />
+                Pull from Cloud
+              </button>
+            </div>
           </div>
         </div>
 

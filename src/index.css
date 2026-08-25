@@ -8,29 +8,24 @@
 
 /* HIGH-FIDELITY ADMINISTRATIVE PRINT MEDIA QUERY */
 @media print {
-  /* Set standard margins and dynamic "Page X of Y" page numbering in bottom-right corner */
+  /* Set standard A4 margins */
   @page {
-    margin: 20mm 15mm 40mm 15mm;
-    @bottom-right {
-      content: "Page " counter(page) " of " counter(pages);
-      font-family: "Space Mono", monospace !important;
-      font-size: 8px !important;
-      font-weight: bold !important;
-      color: #333333 !important;
-      padding-bottom: 5mm;
-    }
+    margin: 8mm 8mm 10mm 8mm;
+    size: auto;
   }
 
-  /* 1. Hide navigations, user alerts, sidebars, interactive controls & floating buttons */
+  /* 1. Hide navigations, sidebars, interactive controls, buttons, toolbars, and alerts */
   header,
   aside,
   footer,
   nav,
-  input,
+  input:not([type="checkbox"]),
   select,
   textarea,
   button,
   .no-print,
+  [data-no-print="true"],
+  .print\:hidden,
   #sync-tutorial-overlay,
   #btn-reopen-sync-tutorial,
   #admin-security-badge-indicator,
@@ -46,24 +41,82 @@
     pointer-events: none !important;
   }
 
-  /* 2. Override container backgrounds, margins and absolute alignments on critical components */
+  /* 2. Unconstrain viewport heights and scrollbars so full documents print across pages */
   html,
-  body,
-  #root,
-  main,
-  div:not([id^="print"]):not([id^="print"] *) {
-    background: transparent !important;
-    background-color: #ffffff !important;
-    color: #000000 !important;
-    box-shadow: none !important;
-    text-shadow: none !important;
-    overflow: visible !important;
+  body {
     margin: 0 !important;
     padding: 0 !important;
-    border-color: transparent !important;
+    background: #ffffff !important;
+    background-color: #ffffff !important;
+    color: #000000 !important;
+    width: 100% !important;
+    min-width: 100% !important;
+    height: auto !important;
+    min-height: auto !important;
+    overflow: visible !important;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Space Grotesk", sans-serif !important;
   }
 
-  /* Bring back visibility specifically for the print friendly area container and children */
+  #root,
+  main,
+  div[class*="overflow-y-auto"],
+  div[class*="overflow-hidden"],
+  div[class*="h-screen"],
+  div[class*="max-h-screen"],
+  div[class*="flex-1"] {
+    overflow: visible !important;
+    height: auto !important;
+    min-height: auto !important;
+    max-height: none !important;
+    display: block !important;
+    position: static !important;
+    float: none !important;
+  }
+
+  /* 3. Handle open modals seamlessly - unroll modal overlay to standard white paper */
+  div.fixed.inset-0,
+  div[class*="fixed inset-0"],
+  div[role="dialog"],
+  .modal-window {
+    position: static !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    height: auto !important;
+    max-height: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    background-color: #ffffff !important;
+    backdrop-filter: none !important;
+    box-shadow: none !important;
+    border: none !important;
+    overflow: visible !important;
+    display: block !important;
+    inset: auto !important;
+  }
+
+  div[class*="max-w-"][class*="bg-neutral-900"],
+  div[class*="max-w-"][class*="bg-neutral-950"] {
+    background: #ffffff !important;
+    background-color: #ffffff !important;
+    color: #000000 !important;
+    border: none !important;
+    box-shadow: none !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  /* 4. Whitelist all official printable documents & areas */
+  #admission-form-printable-content,
+  #admission-form-printable-content *,
+  #print-canteen-booklet-area,
+  #print-canteen-booklet-area *,
+  #print-terminal-report-area,
+  #print-terminal-report-area *,
+  .terminal-report-page,
+  .terminal-report-page *,
   #print-friendly-area,
   #print-friendly-area *,
   #print-quick-daily-area,
@@ -77,19 +130,58 @@
   #print-payslip-area,
   #print-payslip-area *,
   #print-hardcopy-area,
-  #print-hardcopy-area * {
+  #print-hardcopy-area *,
+  #id-cards-print-area,
+  #id-cards-print-area *,
+  .printable-area,
+  .printable-area * {
     visibility: visible !important;
   }
 
-  /* Preserve high-fidelity for on-screen styled payslip and hardcopy worksheets */
+  /* 5. Page breaks and avoiding splitting critical blocks */
+  .page-break-before,
+  .break-before-page {
+    page-break-before: always !important;
+    break-before: page !important;
+  }
+
+  .page-break-after,
+  .break-after-page,
+  .terminal-report-page,
+  .class-booklet-page {
+    page-break-after: always !important;
+    break-after: page !important;
+  }
+
+  .page-break-after:last-child,
+  .terminal-report-page:last-child,
+  .class-booklet-page:last-child {
+    page-break-after: auto !important;
+    break-after: auto !important;
+  }
+
+  .page-break-avoid,
+  .break-inside-avoid,
+  .avoid-break,
+  tr,
+  thead,
+  tfoot,
+  .terminal-report-header,
+  .terminal-report-signatures,
+  .admission-section {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  /* 6. Preserve high-fidelity for on-screen styled payslip, reports and worksheets */
   #print-payslip-area,
   #print-hardcopy-area {
     width: 100% !important;
     max-width: 190mm !important;
     margin: 5mm auto !important;
-    padding: 30px !important;
-    border: 8px solid #cbd5e1 !important;
-    border-radius: 8px !important;
+    padding: 20px !important;
+    border: 3px solid #000000 !important;
+    border-radius: 4px !important;
     background-color: #ffffff !important;
     color: #000000 !important;
     box-shadow: none !important;
@@ -98,128 +190,27 @@
     break-inside: avoid !important;
   }
 
-  /* Specific column-width constraints and roomier padding to prevent table content congestion */
-  .print-col-date,
-  #print-friendly-area .print-col-date,
-  #print-single-invoice-area-upgrade .print-col-date {
-    width: 18% !important;
-    min-width: 100px !important;
-    white-space: nowrap !important;
-    padding: 8px 10px !important;
-    text-align: left !important;
-  }
-
-  .print-col-ref,
-  #print-friendly-area .print-col-ref,
-  #print-single-invoice-area-upgrade .print-col-ref {
-    width: 22% !important;
-    min-width: 115px !important;
-    white-space: nowrap !important;
-    padding: 8px 10px !important;
-    text-align: left !important;
-  }
-
-  .print-col-status,
-  #print-friendly-area .print-col-status,
-  #print-single-invoice-area-upgrade .print-col-status {
-    width: 20% !important;
-    min-width: 110px !important;
-    white-space: nowrap !important;
-    padding: 8px 10px !important;
-    text-align: center !important;
-  }
-
-  .print-col-fee,
-  #print-friendly-area .print-col-fee,
-  #print-single-invoice-area-upgrade .print-col-fee {
-    width: 18% !important;
-    min-width: 90px !important;
-    white-space: nowrap !important;
-    padding: 8px 10px !important;
-    text-align: right !important;
-  }
-
-  .print-col-auditor,
-  #print-friendly-area .print-col-auditor,
-  #print-single-invoice-area-upgrade .print-col-auditor {
-    width: 22% !important;
-    min-width: 125px !important;
-    white-space: nowrap !important;
-    padding: 8px 10px !important;
-    text-align: right !important;
-    text-overflow: ellipsis !important;
-    overflow: hidden !important;
-  }
-
-  /* Apply spacious and clear defaults to all print-ready table rows and headers */
-  #print-friendly-area table,
-  #print-single-invoice-area-upgrade table {
-    width: 100% !important;
-    border-collapse: collapse !important;
-    margin-top: 14px !important;
-    margin-bottom: 14px !important;
-    table-layout: fixed !important; /* Forces fixed columns based on specified percentages to prevent compression */
-  }
-
-  #print-friendly-area th,
-  #print-friendly-area td,
-  #print-single-invoice-area-upgrade th,
-  #print-single-invoice-area-upgrade td {
-    padding: 10px 12px !important; /* Roomier, comfortable padding */
-    font-size: 10px !important; /* Highly readable and clean print text font magnitude */
-    line-height: 1.4 !important;
-    border-bottom: 1px solid #7f7f7f !important;
-    color: #000000 !important;
-  }
-
-  #print-friendly-area th,
-  #print-single-invoice-area-upgrade th {
-    background-color: #f3f4f6 !important;
-    color: #000000 !important;
-    font-weight: 800 !important;
-    border-bottom: 2px solid #000000 !important;
-    font-family: inherit !important;
-  }
-
-  #print-friendly-area {
-    position: relative !important;
-    width: 100% !important;
-    max-width: 100% !important;
-    margin: 0 !important;
-    padding: 15mm !important;
-    border: none !important;
-    box-shadow: none !important;
-    float: none !important;
-    display: block !important;
-  }
-
-  /* Ensure page breaks are handled gracefully with repeating headers */
+  /* Table styling preservation */
   table {
     page-break-inside: auto !important;
     break-inside: auto !important;
+    border-collapse: collapse !important;
+    width: 100% !important;
   }
-  tr {
-    page-break-inside: avoid !important;
-    break-inside: avoid !important;
-  }
+
   thead {
     display: table-header-group !important;
   }
+
   tfoot {
     display: table-footer-group !important;
   }
 
-  /* Ensure signature blocks have a clean, standard spacing without overflowing to a second page */
-  .print-signature-block,
-  .print\:signature-block {
-    margin-top: 12mm !important;
-    page-break-after: always !important;
-  }
-
-  /* Ensure background colors are preserved in color of print configuration */
+  /* Exact Color fidelity */
   * {
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
+    color-adjust: exact !important;
   }
 }
 

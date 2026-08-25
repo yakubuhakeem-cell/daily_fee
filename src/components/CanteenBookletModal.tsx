@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Printer, X, CalendarDays, CheckSquare, Utensils, Info, FileText, Sparkles, AlertCircle } from 'lucide-react';
 import { Student, StudentClass, Term } from '../types';
+import { printElementById } from '../utils/printUtils';
 
 interface CanteenBookletModalProps {
   isOpen: boolean;
@@ -100,103 +101,21 @@ export const CanteenBookletModal: React.FC<CanteenBookletModalProps> = ({
     return classesToRender.reduce((sum, cls) => sum + (filteredStudentsByClass[cls]?.length || 0), 0);
   }, [classesToRender, filteredStudentsByClass]);
 
-  // Robust printing handler that uses a popup window to prevent iframe sandbox print blocking
+  // Robust printing handler that uses universal print utility
   const handlePrintPopup = () => {
-    const printElement = document.getElementById('print-canteen-booklet-area');
-    if (!printElement) {
-      window.print();
-      return;
-    }
-
-    try {
-      const printWin = window.open('', '_blank', 'width=1200,height=900,scrollbars=yes,resizable=yes');
-      if (printWin) {
-        printWin.document.write(`
-          <!DOCTYPE html>
-          <html>
-            <head>
-              <title>Canteen Booklet - Saako Holy Child Academy</title>
-              <meta charset="utf-8" />
-              <style>
-                @page {
-                  size: ${orientation};
-                  margin: 6mm;
-                }
-                body {
-                  font-family: Arial, Helvetica, sans-serif;
-                  margin: 0;
-                  padding: 10px;
-                  background: white;
-                  color: black;
-                  -webkit-print-color-adjust: exact;
-                  print-color-adjust: exact;
-                }
-                .class-booklet-page {
-                  page-break-after: always;
-                  break-after: page;
-                  margin-bottom: 25px;
-                }
-                .class-booklet-page:last-child {
-                  page-break-after: avoid;
-                  break-after: avoid;
-                  margin-bottom: 0;
-                }
-                table {
-                  width: 100%;
-                  border-collapse: collapse;
-                  margin-top: 6px;
-                }
-                th, td {
-                  border: 1px solid #000000;
-                  padding: 2px 3px;
-                  font-size: 8.5px;
-                  color: #000000;
-                  line-height: 1.15;
-                }
-                th {
-                  background-color: #f3f4f6;
-                  font-weight: bold;
-                }
-                .no-print {
-                  display: none !important;
-                }
-                tr {
-                  page-break-inside: avoid;
-                  break-inside: avoid;
-                }
-              </style>
-              <script src="https://cdn.tailwindcss.com"></script>
-            </head>
-            <body class="bg-white text-black p-4">
-              ${printElement.innerHTML}
-              <script>
-                window.onload = function() {
-                  setTimeout(function() {
-                    window.print();
-                  }, 500);
-                };
-              </script>
-            </body>
-          </html>
-        `);
-        printWin.document.close();
-        printWin.focus();
-        return;
-      }
-    } catch (e) {
-      console.warn('Popup print blocked, falling back to direct window.print()', e);
-    }
-
-    // Direct browser print fallback
-    window.print();
+    printElementById('print-canteen-booklet-area', {
+      title: 'Canteen Daily Register Booklet - Saako Holy Child Academy',
+      orientation,
+      pageMargin: '6mm'
+    });
   };
 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-neutral-950/95 backdrop-blur-md flex flex-col p-3 md:p-6 overflow-y-auto no-print">
+    <div className="fixed inset-0 z-50 bg-neutral-950/95 backdrop-blur-md flex flex-col p-3 md:p-6 overflow-y-auto">
       {/* Top Controller Panel */}
-      <div className="w-full max-w-6xl mx-auto bg-neutral-900 border-2 border-neutral-800 p-4 mb-4 rounded-lg flex flex-col gap-4">
+      <div className="no-print w-full max-w-6xl mx-auto bg-neutral-900 border-2 border-neutral-800 p-4 mb-4 rounded-lg flex flex-col gap-4">
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
           <div className="flex items-center gap-2.5">
             <div className="p-2.5 bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded-md">
@@ -337,73 +256,6 @@ export const CanteenBookletModal: React.FC<CanteenBookletModalProps> = ({
             orientation === 'landscape' ? 'max-w-[297mm] min-h-[210mm]' : 'max-w-[210mm] min-h-[297mm]'
           }`}
         >
-          {/* Print CSS isolation */}
-          <style>{`
-            @media print {
-              @page {
-                size: ${orientation};
-                margin: 6mm;
-              }
-              body * {
-                visibility: hidden !important;
-                background: none !important;
-                color: black !important;
-              }
-              #print-canteen-booklet-area, #print-canteen-booklet-area * {
-                visibility: visible !important;
-              }
-              #print-canteen-booklet-area {
-                position: absolute !important;
-                left: 0 !important;
-                top: 0 !important;
-                width: 100% !important;
-                max-width: 100% !important;
-                margin: 0 !important;
-                padding: 4mm !important;
-                background: white !important;
-                color: black !important;
-                font-family: Arial, sans-serif !important;
-                box-shadow: none !important;
-                border: none !important;
-              }
-              .no-print {
-                display: none !important;
-                visibility: hidden !important;
-              }
-              .class-booklet-page {
-                page-break-after: always !important;
-                break-after: page !important;
-              }
-              .class-booklet-page:last-child {
-                page-break-after: avoid !important;
-                break-after: avoid !important;
-              }
-              tr {
-                page-break-inside: avoid !important;
-                break-inside: avoid !important;
-              }
-              thead {
-                display: table-header-group !important;
-              }
-              table {
-                width: 100% !important;
-                border-collapse: collapse !important;
-                margin-top: 6px !important;
-              }
-              th, td {
-                border: 1px solid #000000 !important;
-                padding: 3px 4px !important;
-                font-size: 8.5px !important;
-                color: #000000 !important;
-                line-height: 1.15 !important;
-              }
-              th {
-                background-color: #f3f4f6 !important;
-                font-weight: bold !important;
-              }
-            }
-          `}</style>
-
           {/* Loop through each class in classesToRender */}
           <div className="space-y-8">
             {classesToRender.map((cls, classIdx) => {
@@ -506,29 +358,26 @@ export const CanteenBookletModal: React.FC<CanteenBookletModalProps> = ({
                             <th
                               key={wk.weekNumber}
                               colSpan={5}
-                              className="py-1 px-0.5 text-center font-black uppercase border-t-2 border-b border-black border-l-2 border-r-2 border-l-black border-r-black bg-neutral-300 text-[8.5px] tracking-wider"
+                              className="py-1 px-1 text-center font-black uppercase border-t-2 border-b border-black border-l-2 border-r-2 border-l-black border-r-black bg-neutral-300 text-[9px] tracking-wider"
                             >
                               WEEK {wk.weekNumber}
                             </th>
                           ))}
 
-                          <th className="py-1 px-1 text-center font-black uppercase w-[75px] border border-black bg-emerald-50 text-[8px]" rowSpan={2}>
+                          <th className="py-1 px-1 text-center font-black uppercase w-[80px] border border-black bg-emerald-50 text-[8px]" rowSpan={2}>
                             Term Total Fed / Paid
-                          </th>
-                          <th className="py-1 px-1 text-center font-black uppercase w-[90px] border border-black bg-neutral-50 text-[8px]" rowSpan={2}>
-                            Canteen Rep Remarks
                           </th>
                         </tr>
 
-                        {/* Sub Day Header Row (M, T, W, T, F for each week with deeper week borders) */}
-                        <tr className="bg-neutral-100 text-black border-b-2 border-black font-mono text-[7.5px]">
+                        {/* Sub Day Header Row (M, T, W, Th, F for each week with deeper week borders) */}
+                        <tr className="bg-neutral-100 text-black border-b-2 border-black font-mono text-[8px]">
                           {displayedWeeks.map((wk) => (
                             <React.Fragment key={`sub-header-${wk.weekNumber}`}>
-                              <th className="py-0.5 px-0.5 text-center border border-black border-l-2 border-l-black w-[20px]">M</th>
-                              <th className="py-0.5 px-0.5 text-center border border-black w-[20px]">T</th>
-                              <th className="py-0.5 px-0.5 text-center border border-black w-[20px]">W</th>
-                              <th className="py-0.5 px-0.5 text-center border border-black w-[20px]">Th</th>
-                              <th className="py-0.5 px-0.5 text-center border border-black border-r-2 border-r-black w-[20px]">F</th>
+                              <th className="py-1 px-0.5 text-center border border-black border-l-2 border-l-black font-bold">M</th>
+                              <th className="py-1 px-0.5 text-center border border-black font-bold">T</th>
+                              <th className="py-1 px-0.5 text-center border border-black font-bold">W</th>
+                              <th className="py-1 px-0.5 text-center border border-black font-bold">Th</th>
+                              <th className="py-1 px-0.5 text-center border border-black border-r-2 border-r-black font-bold">F</th>
                             </React.Fragment>
                           ))}
                         </tr>
@@ -538,7 +387,7 @@ export const CanteenBookletModal: React.FC<CanteenBookletModalProps> = ({
                         {classPupils.length === 0 ? (
                           <tr>
                             <td
-                              colSpan={3 + displayedWeeks.length * 5 + 2}
+                              colSpan={3 + displayedWeeks.length * 5 + 1}
                               className="py-6 text-center text-neutral-500 font-mono text-xs border border-black italic"
                             >
                               No enrolled pupils found for {cls}.
@@ -585,19 +434,19 @@ export const CanteenBookletModal: React.FC<CanteenBookletModalProps> = ({
                                   {[0, 1, 2, 3, 4].map((dayIdx) => (
                                     <td
                                       key={`cell-${pupil.id}-wk-${wk.weekNumber}-d-${dayIdx}`}
-                                      className={`py-1 px-0.5 text-center border border-black ${
+                                      className={`py-1 px-1 text-center border border-black ${
                                         dayIdx === 0 ? 'border-l-2 border-l-black' : ''
                                       } ${
                                         dayIdx === 4 ? 'border-r-2 border-r-black' : ''
                                       }`}
                                     >
-                                      <div className="flex flex-col items-center justify-between min-h-[38px] py-0.5 gap-1">
+                                      <div className="flex flex-col items-center justify-between min-h-[42px] py-0.5 gap-1.5">
                                         {/* Printable Check Box Square */}
-                                        <div className="w-3.5 h-3.5 border border-black mx-auto bg-white flex items-center justify-center shrink-0" />
+                                        <div className="w-4 h-4 border border-black mx-auto bg-white flex items-center justify-center shrink-0" />
                                         {/* Clear Hand-writable Amount Line */}
-                                        <div className="w-full flex items-end justify-between border-b border-black text-[6px] font-mono leading-none pb-[1px] px-0.5">
-                                          <span className="text-[5.5px] font-bold text-neutral-500 select-none shrink-0">¢</span>
-                                          <span className="text-[6px] text-transparent select-none">&nbsp;</span>
+                                        <div className="w-full flex items-end justify-between border-b border-black text-[6.5px] font-mono leading-none pb-[1px] px-0.5">
+                                          <span className="text-[6px] font-bold text-neutral-500 select-none shrink-0">¢</span>
+                                          <span className="text-[7px] text-transparent select-none">&nbsp;</span>
                                         </div>
                                       </div>
                                     </td>
@@ -611,11 +460,6 @@ export const CanteenBookletModal: React.FC<CanteenBookletModalProps> = ({
                                   <div className="text-[7px] text-neutral-500">Days: ____</div>
                                   <div className="text-[7.5px] font-bold text-black">GHC ______</div>
                                 </div>
-                              </td>
-
-                              {/* Remarks Cell */}
-                              <td className="py-1 px-1 text-left border border-black text-[7.5px] font-mono text-neutral-400">
-                                &nbsp;
                               </td>
                             </tr>
                           ))

@@ -7,6 +7,7 @@ import React, { useState, useMemo, useRef } from 'react';
 import { Student, StudentClass, ALL_CLASSES } from '../types';
 import { useApp } from '../context/AppContext';
 import { SchoolLogo } from './SchoolLogo';
+import { printElementById } from '../utils/printUtils';
 import { 
   Printer, 
   X, 
@@ -104,118 +105,49 @@ export const AdmissionFormModal: React.FC<AdmissionFormModalProps> = ({
   // Print Form Handler
   const handlePrint = (copies = 1) => {
     setPrintStatus('Preparing document for print...');
+    const docTitle = formMode === 'blank'
+      ? (blankTargetClass !== 'GENERAL' ? `Blank Admission Form - ${blankTargetClass}` : 'Official Blank Admission Form')
+      : `Admission Form - ${currentStudent?.name || 'Pupil'}`;
 
-    let printIframe = document.getElementById('admission-form-print-iframe') as HTMLIFrameElement;
-    if (!printIframe) {
-      printIframe = document.createElement('iframe');
-      printIframe.id = 'admission-form-print-iframe';
-      printIframe.setAttribute('style', 'position:fixed; right:0; bottom:0; width:0; height:0; border:0; pointer-events:none;');
-      document.body.appendChild(printIframe);
+    if (copies > 1) {
+      // Create multi-page wrapper content
+      const targetElement = document.getElementById('admission-form-printable-content');
+      if (targetElement) {
+        let multiHtml = '';
+        for (let i = 0; i < copies; i++) {
+          multiHtml += `<div class="admission-page-wrapper ${i > 0 ? 'break-before-page' : ''}">${targetElement.innerHTML}</div>`;
+        }
+        const tempContainer = document.createElement('div');
+        tempContainer.id = 'temp-multi-admission-container';
+        tempContainer.innerHTML = multiHtml;
+        document.body.appendChild(tempContainer);
+        printElementById('temp-multi-admission-container', {
+          title: docTitle,
+          orientation: 'portrait',
+          pageMargin: '8mm'
+        }).finally(() => {
+          tempContainer.remove();
+          setPrintStatus(null);
+        });
+        return;
+      }
     }
 
-    const iframeDoc = printIframe.contentWindow?.document || printIframe.contentDocument;
-    if (!iframeDoc) {
-      window.print();
-      return;
-    }
-
-    const targetElement = document.getElementById('admission-form-printable-content');
-    if (!targetElement) {
-      window.print();
-      return;
-    }
-
-    let printContent = '';
-    for (let i = 0; i < copies; i++) {
-      printContent += `
-        <div class="admission-page-wrapper ${i > 0 ? 'page-break-before' : ''}">
-          ${targetElement.innerHTML}
-        </div>
-      `;
-    }
-
-    iframeDoc.open();
-    iframeDoc.write(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>${formMode === 'blank' ? 'Blank Admission Application Form' : `Admission Form - ${currentStudent?.name || 'Pupil'}`}</title>
-          <meta charset="utf-8" />
-          <style>
-            @page {
-              size: A4 portrait;
-              margin: 10mm 10mm 10mm 10mm;
-            }
-            * {
-              box-sizing: border-box;
-              -webkit-print-color-adjust: exact !important;
-              print-color-adjust: exact !important;
-            }
-            body {
-              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-              color: #111827;
-              background: #ffffff;
-              margin: 0;
-              padding: 0;
-              font-size: 11px;
-              line-height: 1.4;
-            }
-            .page-break-before {
-              page-break-before: always;
-              break-before: page;
-            }
-            .page-break-after {
-              page-break-after: always;
-              break-after: page;
-            }
-            .avoid-break {
-              page-break-inside: avoid;
-              break-inside: avoid;
-            }
-            /* High clarity borders and typography */
-            .border-black {
-              border-color: #000000 !important;
-            }
-            .border-neutral-300 {
-              border-color: #d1d5db !important;
-            }
-            .bg-neutral-100 {
-              background-color: #f3f4f6 !important;
-            }
-            .bg-neutral-50 {
-              background-color: #f9fafb !important;
-            }
-            .no-print {
-              display: none !important;
-            }
-          </style>
-        </head>
-        <body>
-          ${printContent}
-          <script>
-            window.onload = function() {
-              setTimeout(function() {
-                window.focus();
-                window.print();
-              }, 250);
-            };
-          </script>
-        </body>
-      </html>
-    `);
-    iframeDoc.close();
-
-    setTimeout(() => {
-      setPrintStatus(null);
-    }, 1500);
+    printElementById('admission-form-printable-content', {
+      title: docTitle,
+      orientation: 'portrait',
+      pageMargin: '8mm'
+    }).finally(() => {
+      setTimeout(() => setPrintStatus(null), 1000);
+    });
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 overflow-y-auto no-print">
+    <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
       <div className="bg-neutral-900 border-2 border-neutral-700 w-full max-w-5xl max-h-[96vh] flex flex-col shadow-2xl rounded-none overflow-hidden my-auto text-left font-sans">
         
         {/* Modal Top Action Bar */}
-        <div className="bg-neutral-950 px-5 py-3.5 border-b border-neutral-800 flex flex-wrap items-center justify-between gap-3 shrink-0">
+        <div className="no-print bg-neutral-950 px-5 py-3.5 border-b border-neutral-800 flex flex-wrap items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-3">
             <div className="p-2 bg-amber-400 text-black font-black">
               <FileText size={18} />
@@ -257,7 +189,7 @@ export const AdmissionFormModal: React.FC<AdmissionFormModalProps> = ({
         </div>
 
         {/* Modal Controls Bar */}
-        <div className="bg-neutral-950/70 p-4 border-b border-neutral-800/80 flex flex-wrap items-center justify-between gap-4 shrink-0 font-mono text-xs">
+        <div className="no-print bg-neutral-950/70 p-4 border-b border-neutral-800/80 flex flex-wrap items-center justify-between gap-4 shrink-0 font-mono text-xs">
           
           {/* Mode Switcher */}
           <div className="flex items-center gap-1 bg-neutral-900 p-1 border border-neutral-800">
