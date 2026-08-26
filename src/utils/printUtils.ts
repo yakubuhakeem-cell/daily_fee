@@ -37,11 +37,19 @@ export function printElementNode(element: HTMLElement, options: PrintOptions = {
       customStyles = ''
     } = options;
 
-    // Collect all head stylesheets and style tags
+    // Collect all head stylesheets and style tags, filtering out any destructive body hiding rules
     let stylesHtml = '';
     const styleTags = document.querySelectorAll('style, link[rel="stylesheet"]');
     styleTags.forEach(tag => {
-      stylesHtml += tag.outerHTML + '\n';
+      if (tag.tagName.toLowerCase() === 'link') {
+        stylesHtml += tag.outerHTML + '\n';
+      } else if (tag.tagName.toLowerCase() === 'style') {
+        let cssText = tag.textContent || '';
+        // Sanitize any destructive global hide or position rules
+        cssText = cssText.replace(/body\s*\*\s*\{\s*visibility:\s*hidden[^}]*\}/gi, '');
+        cssText = cssText.replace(/visibility:\s*hidden\s*!important/gi, '');
+        stylesHtml += `<style>${cssText}</style>\n`;
+      }
     });
 
     // Create or reuse hidden printing iframe

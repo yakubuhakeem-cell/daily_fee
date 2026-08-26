@@ -14,7 +14,7 @@
     size: auto;
   }
 
-  /* 1. Hide navigations, sidebars, interactive controls, buttons, toolbars, and alerts */
+  /* 1. Hide navigations, sidebars, interactive controls, buttons, toolbars, and non-print UI */
   header,
   aside,
   footer,
@@ -29,7 +29,8 @@
   #sync-tutorial-overlay,
   #btn-reopen-sync-tutorial,
   #admin-security-badge-indicator,
-  #admin-security-badge-indicator-mobile {
+  #admin-security-badge-indicator-mobile,
+  .scrollbar-thin::-webkit-scrollbar {
     display: none !important;
     visibility: hidden !important;
     opacity: 0 !important;
@@ -41,39 +42,41 @@
     pointer-events: none !important;
   }
 
-  /* 2. Unconstrain viewport heights and scrollbars so full documents print across pages */
+  /* 2. Unconstrain viewport heights and scrollbars so full documents print smoothly across pages */
   html,
   body {
     margin: 0 !important;
     padding: 0 !important;
     background: #ffffff !important;
     background-color: #ffffff !important;
-    color: #000000 !important;
+    color: #0f172a !important;
     width: 100% !important;
     min-width: 100% !important;
     height: auto !important;
     min-height: auto !important;
     overflow: visible !important;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Space Grotesk", sans-serif !important;
+    font-family: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    color-adjust: exact !important;
   }
 
+  /* Reset scroll bounds on ancestor containers WITHOUT breaking flex or grid displays */
   #root,
   main,
   div[class*="overflow-y-auto"],
+  div[class*="overflow-x-auto"],
   div[class*="overflow-hidden"],
   div[class*="h-screen"],
   div[class*="max-h-screen"],
-  div[class*="flex-1"] {
+  div[class*="min-h-screen"] {
     overflow: visible !important;
     height: auto !important;
-    min-height: auto !important;
+    min-height: 0 !important;
     max-height: none !important;
-    display: block !important;
-    position: static !important;
-    float: none !important;
   }
 
-  /* 3. Handle open modals seamlessly - unroll modal overlay to standard white paper */
+  /* 3. Handle modal windows and overlay sheets cleanly */
   div.fixed.inset-0,
   div[class*="fixed inset-0"],
   div[role="dialog"],
@@ -85,60 +88,85 @@
     max-height: none !important;
     margin: 0 !important;
     padding: 0 !important;
-    background: #ffffff !important;
-    background-color: #ffffff !important;
+    background: transparent !important;
+    background-color: transparent !important;
     backdrop-filter: none !important;
     box-shadow: none !important;
     border: none !important;
     overflow: visible !important;
-    display: block !important;
     inset: auto !important;
   }
 
-  div[class*="max-w-"][class*="bg-neutral-900"],
-  div[class*="max-w-"][class*="bg-neutral-950"] {
-    background: #ffffff !important;
-    background-color: #ffffff !important;
-    color: #000000 !important;
-    border: none !important;
-    box-shadow: none !important;
-    max-width: 100% !important;
+  /* 4. Reset zoom and transforms on simulated preview sheets */
+  [style*="scale("],
+  .print-preview-sheet,
+  #app-print-preview-sheet {
+    transform: none !important;
+  }
+
+  /* 5. Whitelist and format all official printable documents & areas */
+  #admission-form-printable-content,
+  #print-canteen-booklet-area,
+  #print-terminal-report-area,
+  #print-terminal-reports-container,
+  .terminal-report-page,
+  #print-friendly-area,
+  #print-quick-daily-area,
+  #print-directors-debt-area,
+  #print-term-summaries-area,
+  #print-bulk-invoices-area,
+  #print-single-invoice-area-upgrade,
+  #print-payslip-area,
+  #print-hardcopy-area,
+  #printable-debt-report-content,
+  #printable-salary-voucher-content,
+  #id-cards-print-area,
+  #pickup-passes-printable-content,
+  .printable-area,
+  .print-report-container {
     width: 100% !important;
-    max-height: none !important;
+    max-width: 100% !important;
+    margin: 0 auto !important;
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+    box-shadow: none !important;
+    border-color: #cbd5e1 !important;
+    visibility: visible !important;
     overflow: visible !important;
   }
 
-  /* 4. Whitelist all official printable documents & areas */
-  #admission-form-printable-content,
-  #admission-form-printable-content *,
-  #print-canteen-booklet-area,
-  #print-canteen-booklet-area *,
-  #print-terminal-report-area,
-  #print-terminal-report-area *,
-  .terminal-report-page,
-  .terminal-report-page *,
-  #print-friendly-area,
-  #print-friendly-area *,
-  #print-quick-daily-area,
-  #print-quick-daily-area *,
-  #print-directors-debt-area,
-  #print-directors-debt-area *,
-  #print-term-summaries-area,
-  #print-term-summaries-area *,
-  #print-single-invoice-area-upgrade,
-  #print-single-invoice-area-upgrade *,
-  #print-payslip-area,
-  #print-payslip-area *,
-  #print-hardcopy-area,
-  #print-hardcopy-area *,
-  #id-cards-print-area,
-  #id-cards-print-area *,
-  .printable-area,
-  .printable-area * {
-    visibility: visible !important;
+  /* 6. Convert dark panels in printable zones to clean high-contrast black on white */
+  .printable-area .bg-neutral-950,
+  .printable-area .bg-neutral-900,
+  .printable-area .bg-neutral-850,
+  .printable-area .bg-neutral-800,
+  #printable-debt-report-content .bg-neutral-950,
+  #printable-debt-report-content .bg-neutral-900,
+  #printable-salary-voucher-content .bg-neutral-950,
+  #printable-salary-voucher-content .bg-neutral-900,
+  #print-friendly-area .bg-neutral-950,
+  #print-friendly-area .bg-neutral-900 {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+    border-color: #cbd5e1 !important;
   }
 
-  /* 5. Page breaks and avoiding splitting critical blocks */
+  .printable-area .text-white,
+  .printable-area .text-neutral-100,
+  .printable-area .text-neutral-200,
+  .printable-area .text-neutral-300,
+  .printable-area .text-neutral-400,
+  #printable-debt-report-content .text-white,
+  #printable-debt-report-content .text-neutral-100,
+  #printable-debt-report-content .text-neutral-200,
+  #printable-debt-report-content .text-neutral-300,
+  #printable-debt-report-content .text-neutral-400,
+  #printable-salary-voucher-content .text-white,
+  #printable-salary-voucher-content .text-neutral-300 {
+    color: #0f172a !important;
+  }
+
+  /* 7. Page breaks and avoiding splitting critical blocks */
   .page-break-before,
   .break-before-page {
     page-break-before: always !important;
@@ -148,14 +176,18 @@
   .page-break-after,
   .break-after-page,
   .terminal-report-page,
-  .class-booklet-page {
+  .class-booklet-page,
+  .print-invoice-page,
+  .print-term-page {
     page-break-after: always !important;
     break-after: page !important;
   }
 
   .page-break-after:last-child,
   .terminal-report-page:last-child,
-  .class-booklet-page:last-child {
+  .class-booklet-page:last-child,
+  .print-invoice-page:last-child,
+  .print-term-page:last-child {
     page-break-after: auto !important;
     break-after: auto !important;
   }
@@ -168,34 +200,24 @@
   tfoot,
   .terminal-report-header,
   .terminal-report-signatures,
-  .admission-section {
+  .admission-section,
+  .invoice-card,
+  .report-signature-block {
     page-break-inside: avoid !important;
     break-inside: avoid !important;
   }
 
-  /* 6. Preserve high-fidelity for on-screen styled payslip, reports and worksheets */
-  #print-payslip-area,
-  #print-hardcopy-area {
-    width: 100% !important;
-    max-width: 190mm !important;
-    margin: 5mm auto !important;
-    padding: 20px !important;
-    border: 3px solid #000000 !important;
-    border-radius: 4px !important;
-    background-color: #ffffff !important;
-    color: #000000 !important;
-    box-shadow: none !important;
-    display: block !important;
-    page-break-inside: avoid !important;
-    break-inside: avoid !important;
-  }
-
-  /* Table styling preservation */
+  /* 8. Table styling & structure preservation */
   table {
     page-break-inside: auto !important;
     break-inside: auto !important;
     border-collapse: collapse !important;
     width: 100% !important;
+  }
+
+  table th,
+  table td {
+    border-color: #cbd5e1 !important;
   }
 
   thead {
@@ -206,7 +228,7 @@
     display: table-footer-group !important;
   }
 
-  /* Exact Color fidelity */
+  /* Exact Color fidelity across all browser print engines */
   * {
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;

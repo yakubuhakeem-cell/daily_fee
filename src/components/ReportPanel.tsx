@@ -3000,58 +3000,6 @@ B7 to B9: GHC [SUM]`}
       {/* BULK PRINT INVOICES MODAL OUTLET */}
       {showPrintModal && (
         <div className="fixed inset-0 z-50 overflow-hidden bg-neutral-950 flex flex-col md:flex-row">
-          {/* STYLESHEET OVERRIDES FOR PRINTER SYSTEM */}
-          <style dangerouslySetInnerHTML={{ __html: `
-            @media print {
-              @page {
-                size: portrait;
-                margin: 15mm;
-                @bottom-right {
-                  content: "Page " counter(page) " of " counter(pages);
-                  font-family: 'JetBrains Mono', monospace !important;
-                  font-size: 8px !important;
-                  font-weight: bold !important;
-                  color: #333333 !important;
-                }
-              }
-              /* Hide app UI */
-              body * {
-                visibility: hidden !important;
-                background: none !important;
-                color: #000 !important;
-                box-shadow: none !important;
-              }
-              /* Show ONLY the printable invoice pages container */
-              #print-bulk-invoices-area, #print-bulk-invoices-area * {
-                visibility: visible !important;
-              }
-              #print-bulk-invoices-area {
-                position: absolute;
-                left: 0;
-                top: 0;
-                width: 100% !important;
-                margin: 0 !important;
-                padding: 0 !important;
-                background: white !important;
-              }
-              /* Force strict page-break after each client card */
-              .print-invoice-page {
-                page-break-after: always !important;
-                break-after: page !important;
-                margin: 0 !important;
-                padding: 15mm !important;
-                border: none !important;
-                box-shadow: none !important;
-                height: auto !important;
-                min-height: 297mm !important;
-                box-sizing: border-box !important;
-              }
-              .no-print {
-                display: none !important;
-              }
-            }
-          `}} />
-
           {/* LEFT COLUMN: Controls Dashboard Panel */}
           <div className="w-full md:w-96 bg-neutral-900 border-r-4 border-neutral-800 flex flex-col h-full overflow-y-auto no-print p-6 space-y-6">
             <div className="border-b border-neutral-800 pb-4">
@@ -3262,10 +3210,11 @@ B7 to B9: GHC [SUM]`}
               <button
                 type="button"
                 onClick={() => {
-                  if (typeof window !== 'undefined') {
-                    window.focus();
-                    window.print();
-                  }
+                  printElementById('print-bulk-invoices-area', {
+                    title: `Saako Holy Child Academy - Fee Invoices (${paymentsByStudent.length} Pupils)`,
+                    orientation: 'portrait',
+                    pageMargin: '10mm'
+                  });
                 }}
                 disabled={paymentsByStudent.length === 0}
                 className="w-full py-4 text-xs font-black uppercase text-black bg-emerald-400 hover:bg-emerald-300 disabled:bg-neutral-800 disabled:text-neutral-500 transition-colors flex items-center justify-center gap-2 cursor-pointer"
@@ -3912,61 +3861,6 @@ B7 to B9: GHC [SUM]`}
       {/* PRINT FRIENDLY MODAL - PDF/PRINTER READY STRUCTURE FOR CURRENT FILTERED DATA */}
       {showPrintFriendlyModal && (
         <div className="fixed inset-0 z-50 overflow-hidden bg-neutral-950 flex flex-col md:flex-row font-sans">
-          {/* CUSTOM STYLE INJECTIONS FOR FLUID AND RELIABLE A4 PORTRAIT PRINTING */}
-          <style dangerouslySetInnerHTML={{ __html: `
-            @media print {
-              @page {
-                size: portrait;
-                margin: 15mm;
-                @bottom-right {
-                  content: "Page " counter(page) " of " counter(pages);
-                  font-family: 'JetBrains Mono', monospace !important;
-                  font-size: 8px !important;
-                  font-weight: bold !important;
-                  color: #333333 !important;
-                }
-              }
-              body * {
-                visibility: hidden !important;
-              }
-              #print-friendly-area, #print-friendly-area * {
-                visibility: visible !important;
-              }
-              #print-friendly-area {
-                position: absolute;
-                left: 0;
-                top: 0;
-                width: 100% !important;
-                margin: 0 !important;
-                padding: 12mm !important;
-                background: white !important;
-                color: black !important;
-                font-family: ui-sans-serif, system-ui, -apple-system, sans-serif !important;
-                -webkit-print-color-adjust: exact !important;
-                print-color-adjust: exact !important;
-              }
-              .no-print {
-                display: none !important;
-              }
-              /* Standard high-fidelity styling rules for printed sheets */
-              table {
-                width: 100% !important;
-                border-collapse: collapse !important;
-              }
-              th, td {
-                border: 1px solid #c0c0c0 !important;
-                padding: 6px 8px !important;
-                font-size: 10px !important;
-              }
-              th {
-                background-color: #f3f4f6 !important;
-                font-weight: bold !important;
-                -webkit-print-color-adjust: exact !important;
-                print-color-adjust: exact !important;
-              }
-            }
-          `}} />
-
           {/* CONTROL PANEL COLUMN (HIDDEN IN PRINTING) */}
           <div className="w-full md:w-96 bg-neutral-900 border-r-4 border-neutral-800 flex flex-col h-full overflow-y-auto no-print p-6 space-y-6 text-white shrink-0">
             <div className="border-b border-neutral-855 pb-4">
@@ -4029,10 +3923,11 @@ B7 to B9: GHC [SUM]`}
               <button
                 type="button"
                 onClick={() => {
-                  if (typeof window !== 'undefined') {
-                    window.focus();
-                    window.print();
-                  }
+                  printElementById('print-friendly-area', {
+                    title: `Saako Holy Child Academy - Ledger Statement (${classFilter === 'ALL' ? 'All Classes' : classFilter})`,
+                    orientation: 'portrait',
+                    pageMargin: printMargins === 'compact' ? '6mm' : printMargins === 'wide' ? '14mm' : '10mm'
+                  });
                 }}
                 disabled={filteredPayments.length === 0}
                 className="w-full py-4 text-xs font-black uppercase text-neutral-950 bg-amber-400 hover:bg-amber-300 disabled:bg-neutral-800 disabled:text-neutral-550 transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg font-mono"
@@ -4481,10 +4376,11 @@ B7 to B9: GHC [SUM]`}
               <button
                 type="button"
                 onClick={() => {
-                  if (typeof window !== 'undefined') {
-                    window.focus();
-                    window.print();
-                  }
+                  printElementById('app-print-preview-sheet', {
+                    title: `Saako Holy Child Academy - Ledger Statement (${paperSize.toUpperCase()})`,
+                    orientation: 'portrait',
+                    pageMargin: printMargins === 'compact' ? '6mm' : printMargins === 'wide' ? '14mm' : '10mm'
+                  });
                 }}
                 className="w-full py-4 text-xs font-black uppercase text-black bg-amber-400 hover:bg-amber-300 hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center justify-center gap-2 cursor-pointer shadow-xl font-mono"
               >
@@ -4533,12 +4429,13 @@ B7 to B9: GHC [SUM]`}
 
             {/* A4 PORTRAIT PREVIEW PAPER SHEET CONTAINER WITH INLINE ROTATION & ZOOM SCALING */}
             <div 
+              id="app-print-preview-sheet"
               style={{ 
                 transform: `scale(${printPreviewZoom / 100})`,
                 transformOrigin: 'top center',
                 transition: 'transform 0.15s cubic-bezier(0.4, 0, 0.2, 1)'
               }}
-              className="bg-white text-black shadow-2xl flex flex-col justify-between border border-neutral-300 font-sans relative overflow-hidden shrink-0"
+              className="bg-white text-black shadow-2xl flex flex-col justify-between border border-neutral-300 font-sans relative overflow-hidden shrink-0 print-preview-sheet"
             >
               
               {/* INTERNALS CLONED PREVIEW SKELETON */}
@@ -4764,49 +4661,6 @@ B7 to B9: GHC [SUM]`}
       {/* TERM SUMMARY PDF REPORT DISPLAY MODAL */}
       {showTermSummaryModal && (
         <div className="fixed inset-0 z-50 overflow-hidden bg-neutral-950 flex flex-col md:flex-row">
-          <style dangerouslySetInnerHTML={{ __html: `
-            @media print {
-              @page {
-                size: portrait;
-                margin: 15mm;
-              }
-              body * {
-                visibility: hidden !important;
-                background: none !important;
-                color: #000 !important;
-                box-shadow: none !important;
-              }
-              #print-term-summaries-area, #print-term-summaries-area * {
-                visibility: visible !important;
-              }
-              #print-term-summaries-area {
-                position: absolute;
-                left: 0;
-                top: 0;
-                width: 100% !important;
-                margin: 0 !important;
-                padding: 0 !important;
-                background: white !important;
-              }
-              .print-term-page {
-                page-break-after: always !important;
-                break-after: page !important;
-                margin: 0 !important;
-                padding: 15mm !important;
-                border: none !important;
-                box-shadow: none !important;
-                height: auto !important;
-                min-height: 297mm !important;
-                box-sizing: border-box !important;
-                background: white !important;
-                color: black !important;
-              }
-              .no-print {
-                display: none !important;
-              }
-            }
-          `}} />
-
           {/* LEFT COLUMN: Controls Dashboard Panel */}
           <div className="w-full md:w-96 bg-neutral-900 border-r-4 border-neutral-800 flex flex-col h-full overflow-y-auto no-print p-6 space-y-6 shrink-0">
             <div className="border-b border-neutral-800 pb-4">
@@ -4945,10 +4799,11 @@ B7 to B9: GHC [SUM]`}
               <button
                 type="button"
                 onClick={() => {
-                  if (typeof window !== 'undefined') {
-                    window.focus();
-                    window.print();
-                  }
+                  printElementById('print-term-summaries-area', {
+                    title: `Saako Holy Child Academy - Student Term Summaries (${termSummaryReportsByStudent.length} Pupils)`,
+                    orientation: 'portrait',
+                    pageMargin: '10mm'
+                  });
                 }}
                 disabled={termSummaryReportsByStudent.length === 0}
                 className="w-full py-4 text-xs font-black uppercase text-black bg-emerald-400 hover:bg-emerald-300 disabled:bg-neutral-800 disabled:text-neutral-500 transition-colors flex items-center justify-center gap-2 cursor-pointer"
@@ -5285,54 +5140,6 @@ B7 to B9: GHC [SUM]`}
       {/* DIRECTORS' SMART DEBT SUMMARY MODAL */}
       {showDirectorsDebtModal && (
         <div className="fixed inset-0 z-50 overflow-hidden bg-neutral-950 flex flex-col md:flex-row">
-          <style dangerouslySetInnerHTML={{ __html: `
-            @media print {
-              @page {
-                size: A4 portrait;
-                margin: 0 !important;
-              }
-              body * {
-                visibility: hidden !important;
-                background: none !important;
-                color: #000 !important;
-                box-shadow: none !important;
-              }
-              #print-directors-debt-area, #print-directors-debt-area * {
-                visibility: visible !important;
-              }
-              #print-directors-debt-area {
-                position: absolute;
-                left: 0;
-                top: 0;
-                width: 210mm !important;
-                margin: 0 !important;
-                padding: 0 !important;
-                background: white !important;
-              }
-              .print-directors-page {
-                page-break-after: always !important;
-                break-after: always !important;
-                margin: 0 !important;
-                padding: 15mm !important;
-                border: none !important;
-                box-shadow: none !important;
-                background: white !important;
-                color: black !important;
-                width: 210mm !important;
-                min-height: 297mm !important;
-                box-sizing: border-box !important;
-                display: block !important;
-              }
-              .print-avoid-break {
-                page-break-inside: avoid !important;
-                break-inside: avoid !important;
-              }
-              .no-print {
-                display: none !important;
-              }
-            }
-          `}} />
-
           {/* LEFT COLUMN: Controls Dashboard Panel */}
           <div className="w-full md:w-96 bg-neutral-900 border-r-4 border-neutral-800 flex flex-col h-full overflow-y-auto no-print p-6 space-y-5 shrink-0">
             <div className="border-b border-neutral-800 pb-3">
@@ -5471,10 +5278,11 @@ B7 to B9: GHC [SUM]`}
               <button
                 type="button"
                 onClick={() => {
-                  if (typeof window !== 'undefined') {
-                    window.focus();
-                    window.print();
-                  }
+                  printElementById('print-directors-debt-area', {
+                    title: `Saako Holy Child Academy - Directors Debt Summary (${filteredDirectorsDebt.length} Accounts)`,
+                    orientation: 'portrait',
+                    pageMargin: '8mm'
+                  });
                 }}
                 className="w-full py-3.5 text-xs font-black uppercase text-black bg-amber-400 hover:bg-amber-300 transition-colors flex items-center justify-center gap-2 cursor-pointer"
               >
